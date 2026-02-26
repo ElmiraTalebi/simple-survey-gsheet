@@ -184,6 +184,6 @@ if user_input:
 # ---------------------------------------------------
 if len(st.session_state.messages) == 0:
     st.session_state.messages.append(
-        {"role":"bot","content":"Hello — I'm your virtual doctor. Let's start your check-in."}
+        {"role":"bot","content":"Just type something to start the chat!"}
     )
     st.rerun()
