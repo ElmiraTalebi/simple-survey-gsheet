@@ -3,51 +3,74 @@ import random
 import time
 
 # ---------------------------------------------------
-# Page Config
+# PAGE CONFIG
 # ---------------------------------------------------
 st.set_page_config(
-    page_title="Virtual Doctor Prototype",
-    layout="centered",
+    page_title="Virtual Doctor Messenger",
+    layout="centered"
 )
 
 # ---------------------------------------------------
-# Custom CSS (Nice Background + Chat Style)
+# TELEGRAM STYLE CSS
 # ---------------------------------------------------
 st.markdown("""
 <style>
-html, body, [data-testid="stAppViewContainer"] {
-    background: linear-gradient(135deg, #f4f7fb, #e6edf5);
+
+[data-testid="stAppViewContainer"] {
+    background: linear-gradient(135deg,#eef2f7,#dde6f1);
 }
 
-.chat-bubble-user {
-    background-color: #007AFF;
-    color: white;
-    padding: 12px;
-    border-radius: 15px;
-    margin: 5px;
-    max-width: 70%;
-    align-self: flex-end;
-}
-
-.chat-bubble-bot {
-    background-color: #ffffff;
-    color: black;
-    padding: 12px;
-    border-radius: 15px;
-    margin: 5px;
-    max-width: 70%;
-    border: 1px solid #e0e0e0;
-}
-
-.chat-container {
+/* CHAT AREA */
+.chat-wrapper {
     display: flex;
     flex-direction: column;
+    gap: 8px;
+    padding-bottom: 80px;
 }
+
+/* LEFT MESSAGE (DOCTOR) */
+.bot-row {
+    display: flex;
+    justify-content: flex-start;
+}
+
+.bot-bubble {
+    background: white;
+    border-radius: 18px;
+    padding: 12px 16px;
+    max-width: 70%;
+    border: 1px solid #e0e0e0;
+    font-size: 15px;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.05);
+}
+
+/* RIGHT MESSAGE (PATIENT) */
+.user-row {
+    display: flex;
+    justify-content: flex-end;
+}
+
+.user-bubble {
+    background: #0084ff;
+    color: white;
+    border-radius: 18px;
+    padding: 12px 16px;
+    max-width: 70%;
+    font-size: 15px;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+}
+
+.header {
+    font-size:22px;
+    font-weight:600;
+    margin-bottom:10px;
+}
+
 </style>
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------
-# Initialize Session State
+# SESSION STATE
 # ---------------------------------------------------
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -56,104 +79,115 @@ if "step" not in st.session_state:
     st.session_state.step = 0
 
 # ---------------------------------------------------
-# Fake Doctor Logic (NO API)
+# FAKE VIRTUAL DOCTOR LOGIC (NO API)
 # ---------------------------------------------------
 def virtual_doctor_reply(user_text, step):
 
-    intro_questions = [
-        "Hi, I’m your virtual check-in assistant. How are you feeling today from 0 to 10?",
+    intro = [
+        "Hi — I'm your virtual doctor check-in assistant.",
+        "How are you feeling today from 0 to 10?",
         "Do you have any pain today? (yes/no)",
         "Any new or worsening symptoms?",
-        "Is there anything else you want your care team to know?"
+        "Anything else you'd like your care team to know?"
     ]
 
     followups_yes = [
-        "Can you describe where the pain is located?",
-        "On a scale from 0-10 how severe is it?",
-        "Thanks — I will summarize this for your care team."
+        "Where is the pain located?",
+        "How severe is it from 0 to 10?",
+        "Thanks — I'm recording this for your team."
     ]
 
-    neutral_followups = [
-        "Thanks for sharing. Anything else bothering you today?",
-        "Got it. I’m recording that information.",
-        "Understood. Let’s continue."
+    neutral = [
+        "Understood.",
+        "Thanks for sharing.",
+        "Got it — anything else?"
     ]
 
-    # Structured flow (simulate adaptive logic)
-    if step < len(intro_questions):
-        return intro_questions[step]
+    if step < len(intro):
+        return intro[step]
 
     if "yes" in user_text.lower():
         return random.choice(followups_yes)
 
-    return random.choice(neutral_followups)
+    return random.choice(neutral)
 
 # ---------------------------------------------------
-# Header
+# HEADER
 # ---------------------------------------------------
-st.title("🩺 Virtual Doctor Chat Prototype")
-st.write("This is a UI prototype — simulated responses only.")
+st.markdown('<div class="header">🩺 Virtual Doctor Messenger</div>', unsafe_allow_html=True)
 
 # ---------------------------------------------------
-# Chat Display
+# CHAT DISPLAY
 # ---------------------------------------------------
-chat_container = st.container()
+chat_area = st.container()
 
-with chat_container:
-    st.markdown('<div class="chat-container">', unsafe_allow_html=True)
+with chat_area:
+    st.markdown('<div class="chat-wrapper">', unsafe_allow_html=True)
 
     for msg in st.session_state.messages:
-        if msg["role"] == "user":
+
+        if msg["role"] == "bot":
             st.markdown(
-                f'<div class="chat-bubble-user">{msg["content"]}</div>',
+                f"""
+                <div class="bot-row">
+                    <div class="bot-bubble">
+                        {msg["content"]}
+                    </div>
+                </div>
+                """,
                 unsafe_allow_html=True
             )
+
         else:
             st.markdown(
-                f'<div class="chat-bubble-bot">{msg["content"]}</div>',
+                f"""
+                <div class="user-row">
+                    <div class="user-bubble">
+                        {msg["content"]}
+                    </div>
+                </div>
+                """,
                 unsafe_allow_html=True
             )
 
     st.markdown('</div>', unsafe_allow_html=True)
 
 # ---------------------------------------------------
-# User Input
+# USER INPUT
 # ---------------------------------------------------
 user_input = st.chat_input("Type your message...")
 
 # ---------------------------------------------------
-# Conversation Flow
+# CHAT FLOW
 # ---------------------------------------------------
 if user_input:
 
-    # Add user message
+    # add patient message (RIGHT)
     st.session_state.messages.append(
         {"role": "user", "content": user_input}
     )
 
-    # Simulated delay (feels realistic)
-    time.sleep(0.5)
+    time.sleep(0.4)
 
-    # Generate fake doctor reply
     reply = virtual_doctor_reply(
         user_input,
         st.session_state.step
     )
 
+    # add doctor message (LEFT)
     st.session_state.messages.append(
         {"role": "bot", "content": reply}
     )
 
     st.session_state.step += 1
-
     st.rerun()
 
 # ---------------------------------------------------
-# Initial Bot Message
+# INITIAL MESSAGE
 # ---------------------------------------------------
 if len(st.session_state.messages) == 0:
-    first_msg = "Hello — I’m your virtual check-in assistant. Let’s begin."
     st.session_state.messages.append(
-        {"role": "bot", "content": first_msg}
+        {"role": "bot",
+         "content": "Hello — I'm your virtual doctor. Let's start your check-in."}
     )
     st.rerun()
