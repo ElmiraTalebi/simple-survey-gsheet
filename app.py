@@ -4,7 +4,7 @@ import random
 # ============================================================
 # PAGE CONFIG
 # ============================================================
-st.set_page_config(page_title="Cancer Symptom Check-In Prototype", page_icon="🩺", layout="centered")
+st.set_page_config(page_title="Cancer Symptom Check-In", page_icon="🩺", layout="centered")
 
 # ============================================================
 # CSS — messenger look + soft medical background
@@ -270,7 +270,7 @@ def body_svg(selected: Set[str]) -> str:
 # ============================================================
 # HEADER + ENSURE PROMPT
 # ============================================================
-st.markdown('<div class="chat-shell"><div class="header">🩺 Cancer Symptom Check-In (Research Prototype)</div>', unsafe_allow_html=True)
+st.markdown('<div class="chat-shell"><div class="header">🩺 Cancer Symptom Check-In </div>', unsafe_allow_html=True)
 ensure_stage_prompt()
 
 # ============================================================
