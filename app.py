@@ -5,10 +5,10 @@ import time
 # ---------------------------------------------------
 # PAGE SETUP
 # ---------------------------------------------------
-st.set_page_config(page_title="Virtual Doctor Demo", layout="centered")
+st.set_page_config(page_title="Slobodan Demo", layout="centered")
 
 # ---------------------------------------------------
-# CSS - TELEGRAM STYLE
+# CSS (Messenger UI)
 # ---------------------------------------------------
 st.markdown("""
 <style>
@@ -24,7 +24,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<div class="header">🩺 Slobodan Feature Demo</div>', unsafe_allow_html=True)
+st.markdown('<div class="header">🩺 Virtual Doctor Feature Demo</div>', unsafe_allow_html=True)
 
 # ---------------------------------------------------
 # SESSION STATE
@@ -52,10 +52,8 @@ for msg in st.session_state.messages:
 st.markdown('</div>', unsafe_allow_html=True)
 
 # ---------------------------------------------------
-# STAGE LOGIC (ALL FEATURES)
+# STAGE 0 — INTRO + SLIDER (STRUCTURED SCALE)
 # ---------------------------------------------------
-
-# STAGE 0 - Intro
 if st.session_state.stage == 0:
 
     if not st.session_state.messages:
@@ -72,7 +70,7 @@ if st.session_state.stage == 0:
         st.rerun()
 
 # ---------------------------------------------------
-# STAGE 1 - YES/NO QUICK BUTTONS
+# STAGE 1 — YES/NO QUICK REPLIES
 # ---------------------------------------------------
 elif st.session_state.stage == 1:
 
@@ -91,53 +89,86 @@ elif st.session_state.stage == 1:
         st.rerun()
 
 # ---------------------------------------------------
-# STAGE 2 - HUMAN BODY SELECTOR (SLOBODAN FEATURE)
+# STAGE 2 — CLICKABLE HUMAN BODY (MULTI SELECT)
 # ---------------------------------------------------
 elif st.session_state.stage == 2:
 
-    silhouette_html = """
-    <style>
-    .zone {cursor:pointer;fill:rgba(0,0,255,0.2);}
-    .zone:hover{fill:rgba(255,0,0,0.4);}
-    </style>
+    st.write("### Select Pain Locations")
 
+    query = st.query_params
+
+    # HANDLE CLICK
+    if "part" in query:
+        part = query["part"]
+
+        if part in st.session_state.selected_parts:
+            st.session_state.selected_parts.remove(part)
+        else:
+            st.session_state.selected_parts.append(part)
+
+        st.query_params.clear()
+        st.rerun()
+
+    # COLOR FUNCTION
+    def color(name):
+        if name in st.session_state.selected_parts:
+            return "rgba(255,0,0,0.6)"
+        return "rgba(0,0,255,0.2)"
+
+    silhouette_html = f"""
     <svg width="260" height="500" viewBox="0 0 200 500">
 
-        <circle cx="100" cy="40" r="25" class="zone" onclick="window.location.search='?part=Head'"/>
-        <rect x="60" y="70" width="80" height="70" class="zone" onclick="window.location.search='?part=Chest'"/>
-        <rect x="60" y="140" width="80" height="70" class="zone" onclick="window.location.search='?part=Abdomen'"/>
-        <rect x="20" y="80" width="35" height="120" class="zone" onclick="window.location.search='?part=Left Arm'"/>
-        <rect x="145" y="80" width="35" height="120" class="zone" onclick="window.location.search='?part=Right Arm'"/>
-        <rect x="70" y="210" width="25" height="180" class="zone" onclick="window.location.search='?part=Left Leg'"/>
-        <rect x="105" y="210" width="25" height="180" class="zone" onclick="window.location.search='?part=Right Leg'"/>
+        <circle cx="100" cy="40" r="25"
+        fill="{color('Head')}"
+        onclick="window.location.search='?part=Head'"/>
+
+        <rect x="60" y="70" width="80" height="70"
+        fill="{color('Chest')}"
+        onclick="window.location.search='?part=Chest'"/>
+
+        <rect x="60" y="140" width="80" height="70"
+        fill="{color('Abdomen')}"
+        onclick="window.location.search='?part=Abdomen'"/>
+
+        <rect x="20" y="80" width="35" height="120"
+        fill="{color('Left Arm')}"
+        onclick="window.location.search='?part=Left Arm'"/>
+
+        <rect x="145" y="80" width="35" height="120"
+        fill="{color('Right Arm')}"
+        onclick="window.location.search='?part=Right Arm'"/>
+
+        <rect x="70" y="210" width="25" height="180"
+        fill="{color('Left Leg')}"
+        onclick="window.location.search='?part=Left Leg'"/>
+
+        <rect x="105" y="210" width="25" height="180"
+        fill="{color('Right Leg')}"
+        onclick="window.location.search='?part=Right Leg'"/>
 
     </svg>
     """
 
     html(silhouette_html, height=520)
 
-    query = st.query_params
-
-    if "part" in query:
-        part = query["part"]
-        if part not in st.session_state.selected_parts:
-            st.session_state.selected_parts.append(part)
-        st.query_params.clear()
-        st.rerun()
-
     if st.session_state.selected_parts:
-        st.write("Selected:", ", ".join(st.session_state.selected_parts))
+        st.success("Selected: " + ", ".join(st.session_state.selected_parts))
+    else:
+        st.info("No body parts selected.")
 
     if st.button("Submit Pain Areas"):
+
         chosen = ", ".join(st.session_state.selected_parts)
+
         st.session_state.messages.append({"role":"user","content":f"Pain at {chosen}"})
         st.session_state.messages.append({"role":"bot","content":"Any new symptoms today?"})
+
+        st.session_state.selected_parts = []
         st.session_state.stage = 3
-        st.session_state.selected_parts=[]
         st.rerun()
 
 # ---------------------------------------------------
-# STAGE 3 - MULTI SELECT SYMPTOMS
+# STAGE 3 — MULTI SELECT SYMPTOMS
 # ---------------------------------------------------
 elif st.session_state.stage == 3:
 
@@ -153,7 +184,7 @@ elif st.session_state.stage == 3:
         st.rerun()
 
 # ---------------------------------------------------
-# STAGE 4 - FREE TEXT CHAT (CONVERSATIONAL STYLE)
+# STAGE 4 — FREE TEXT CHAT (CONVERSATIONAL)
 # ---------------------------------------------------
 elif st.session_state.stage == 4:
 
@@ -170,4 +201,4 @@ elif st.session_state.stage == 4:
 # END
 # ---------------------------------------------------
 elif st.session_state.stage == 5:
-    st.success("Demo complete — all Slobodan features shown.")
+    st.success("Have a nice day!")
