@@ -4,101 +4,85 @@ import random
 # ------------------------------------------------
 # Page config
 # ------------------------------------------------
-st.set_page_config(
-    page_title="Virtual Doctor Messenger",
-    page_icon="🩺",
-    layout="centered"
-)
+st.set_page_config(page_title="Virtual Doctor", page_icon="🩺", layout="centered")
 
 # ------------------------------------------------
-# TELEGRAM-LIKE CSS
+# CSS (Telegram-style)
 # ------------------------------------------------
 st.markdown("""
 <style>
-
 html, body, [data-testid="stAppViewContainer"] {
     background: linear-gradient(135deg,#eef4ff,#f9fbff);
     font-family: -apple-system, BlinkMacSystemFont, sans-serif;
 }
-
-/* CHAT WRAPPER */
 .chat-wrapper {
-    max-width: 720px;
-    margin: auto;
+    max-width:720px;
+    margin:auto;
 }
-
-/* MESSAGE ROWS */
-.msg-row-left {
-    display: flex;
-    justify-content: flex-start;
-    margin: 6px 0;
-}
-
-.msg-row-right {
-    display: flex;
-    justify-content: flex-end;
-    margin: 6px 0;
-}
-
-/* DOCTOR BUBBLE (LEFT) */
+.msg-row-left {display:flex; justify-content:flex-start; margin:6px 0;}
+.msg-row-right {display:flex; justify-content:flex-end; margin:6px 0;}
 .bot-bubble {
-    background-color: white;
-    padding: 12px 16px;
-    border-radius: 16px;
-    border: 1px solid #e6e6e6;
-    max-width: 70%;
-    box-shadow: 0px 1px 3px rgba(0,0,0,0.05);
+    background:white;
+    padding:12px 16px;
+    border-radius:16px;
+    border:1px solid #e6e6e6;
+    max-width:70%;
 }
-
-/* PATIENT BUBBLE (RIGHT) */
 .user-bubble {
-    background-color: #4c9aff;
-    color: white;
-    padding: 12px 16px;
-    border-radius: 16px;
-    max-width: 70%;
-    box-shadow: 0px 1px 3px rgba(0,0,0,0.05);
+    background:#4c9aff;
+    color:white;
+    padding:12px 16px;
+    border-radius:16px;
+    max-width:70%;
 }
-
-/* TITLE */
 .title-box {
     text-align:center;
     font-size:26px;
     font-weight:600;
     padding:10px;
 }
-
+.selector-box{
+    background:white;
+    border-radius:12px;
+    padding:15px;
+    border:1px solid #e6e6e6;
+    margin-top:10px;
+}
 </style>
 """, unsafe_allow_html=True)
 
 # ------------------------------------------------
-# Fake Doctor Questions
+# Doctor questions
 # ------------------------------------------------
 doctor_questions = [
     "How are you feeling today on a scale from 1 to 10?",
     "Are you experiencing any pain today?",
     "Do you feel fatigued or low energy?",
     "Have you noticed nausea or difficulty eating?",
-    "Is anything bothering you right now?",
-    "Can you describe your main symptom today?"
 ]
 
 followups = [
     "Thanks for sharing that. Can you tell me more?",
     "Where exactly do you feel it?",
     "How severe would you say it is?",
-    "Did this start recently or earlier this week?",
-    "Anything else you'd like to add?"
 ]
 
 # ------------------------------------------------
-# Session State
+# Session state
 # ------------------------------------------------
 if "messages" not in st.session_state:
-    st.session_state.messages = []
-    st.session_state.messages.append(
+    st.session_state.messages = [
         {"role": "doctor", "text": random.choice(doctor_questions)}
-    )
+    ]
+
+# ------------------------------------------------
+# Helper: detect pain question
+# ------------------------------------------------
+def last_doctor_asked_pain():
+    for msg in reversed(st.session_state.messages):
+        if msg["role"] == "doctor":
+            return "pain" in msg["text"].lower()
+    return False
 
 # ------------------------------------------------
 # Title
@@ -107,53 +91,77 @@ st.markdown('<div class="title-box">🩺 Virtual Doctor Check-In</div>', unsafe_
 st.markdown('<div class="chat-wrapper">', unsafe_allow_html=True)
 
 # ------------------------------------------------
-# Render Chat (LEFT / RIGHT layout)
+# Render chat history
 # ------------------------------------------------
 for msg in st.session_state.messages:
-
     if msg["role"] == "doctor":
-        st.markdown(
-            f"""
-            <div class="msg-row-left">
-                <div class="bot-bubble">{msg["text"]}</div>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-
+        st.markdown(f"""
+        <div class="msg-row-left">
+            <div class="bot-bubble">{msg["text"]}</div>
+        </div>
+        """, unsafe_allow_html=True)
     else:
-        st.markdown(
-            f"""
-            <div class="msg-row-right">
-                <div class="user-bubble">{msg["text"]}</div>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
+        st.markdown(f"""
+        <div class="msg-row-right">
+            <div class="user-bubble">{msg["text"]}</div>
+        </div>
+        """, unsafe_allow_html=True)
 
 # ------------------------------------------------
-# Chat Input
+# BODY SELECTOR UI (appears only when pain asked)
+# ------------------------------------------------
+show_selector = last_doctor_asked_pain()
+
+if show_selector:
+    st.markdown('<div class="selector-box">🧍 Select where you feel pain:</div>', unsafe_allow_html=True)
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        if st.button("🧠 Head"):
+            selected = "Pain in Head"
+    with col2:
+        if st.button("💪 Arm"):
+            selected = "Pain in Arm"
+    with col3:
+        if st.button("🫀 Chest"):
+            selected = "Pain in Chest"
+
+    col4, col5, col6 = st.columns(3)
+    with col4:
+        if st.button("🫁 Back"):
+            selected = "Pain in Back"
+    with col5:
+        if st.button("🦵 Leg"):
+            selected = "Pain in Leg"
+    with col6:
+        if st.button("🦶 Foot"):
+            selected = "Pain in Foot"
+
+    # If any body part selected
+    if "selected" in locals():
+        st.session_state.messages.append({"role":"user","text":selected})
+
+        next_msg = random.choice(followups)
+        st.session_state.messages.append({"role":"doctor","text":next_msg})
+
+        st.rerun()
+
+# ------------------------------------------------
+# Normal text chat input
 # ------------------------------------------------
 user_input = st.chat_input("Type your response...")
 
 if user_input:
+    st.session_state.messages.append({"role":"user","text":user_input})
 
-    # Add patient message (RIGHT)
-    st.session_state.messages.append(
-        {"role": "user", "text": user_input}
-    )
-
-    # Fake continuation logic
+    # fake continuation
     if len(st.session_state.messages) % 3 == 0:
         next_msg = random.choice(doctor_questions)
     else:
         next_msg = random.choice(followups)
 
-    # Add doctor message (LEFT)
-    st.session_state.messages.append(
-        {"role": "doctor", "text": next_msg}
-    )
-
+    st.session_state.messages.append({"role":"doctor","text":next_msg})
     st.rerun()
 
 st.markdown('</div>', unsafe_allow_html=True)
