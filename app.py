@@ -201,4 +201,4 @@ elif st.session_state.stage == 4:
 # END
 # ---------------------------------------------------
 elif st.session_state.stage == 5:
-    st.success("Have a nice day!")
+    st.success("Thanks for letting me know!")
