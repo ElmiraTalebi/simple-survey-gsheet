@@ -1,40 +1,5 @@
-import streamlit as st
-from streamlit.components.v1 import html
-import time
-
-# ---------------------------------------------------
-# PAGE SETUP
-# ---------------------------------------------------
-st.set_page_config(page_title="Virtual Doctor Demo", layout="centered")
-
-# ---------------------------------------------------
-# CSS - TELEGRAM STYLE
-# ---------------------------------------------------
-st.markdown("""
-<style>
-[data-testid="stAppViewContainer"] {
-    background: linear-gradient(135deg,#eef2f7,#dde6f1);
-}
-.chat-wrapper {display:flex;flex-direction:column;gap:8px;padding-bottom:18px;}
-.bot-row{display:flex;justify-content:flex-start;}
-.user-row{display:flex;justify-content:flex-end;}
-.bot-bubble{
-    background:white;border-radius:18px;padding:12px 16px;max-width:72%;
-    border:1px solid #ddd; box-shadow: 0 2px 6px rgba(0,0,0,0.05);
-}
-.user-bubble{
-    background:#0084ff;color:white;border-radius:18px;padding:12px 16px;max-width:72%;
-    box-shadow: 0 2px 6px rgba(0,0,0,0.10);
-}
-.header{font-size:22px;font-weight:600;margin-bottom:10px;}
-.pill {
-    display:inline-block;
-    padding:6px 10px;
-    margin:4px 6px 0 0;
-    border-radius:999px;
-    background:#ffffff;
-    border:1px solid #d9d9d9;
-    font-size:13px;
+pip install streamlit
+streamlit run app.py    font-size:13px;
 }
 .pill-selected {
     background: rgba(0,132,255,0.12);
