@@ -1,167 +1,275 @@
 import streamlit as st
 import random
+import time
 
-# ------------------------------------------------
-# Page config
-# ------------------------------------------------
-st.set_page_config(page_title="Virtual Doctor", page_icon="🩺", layout="centered")
+# ---------------------------------------------------
+# PAGE CONFIG
+# ---------------------------------------------------
+st.set_page_config(page_title="Virtual Doctor Messenger", layout="centered")
 
-# ------------------------------------------------
-# CSS (Telegram-style)
-# ------------------------------------------------
+# ---------------------------------------------------
+# GLASS TELEGRAM STYLE CSS (UPGRADED)
+# ---------------------------------------------------
 st.markdown("""
 <style>
-html, body, [data-testid="stAppViewContainer"] {
-    background: linear-gradient(135deg,#eef4ff,#f9fbff);
-    font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+
+/* Glass hospital dashboard background */
+[data-testid="stAppViewContainer"] {
+    background: linear-gradient(135deg,#e8f0fb,#dde6f1,#f4f8ff);
 }
+
+/* Header */
+.header {
+    font-size:24px;
+    font-weight:600;
+    margin-bottom:10px;
+}
+
+/* Smooth scrolling chat window */
 .chat-wrapper {
-    max-width:720px;
-    margin:auto;
+    display:flex;
+    flex-direction:column;
+    gap:10px;
+    max-height:65vh;
+    overflow-y:auto;
+    padding:20px;
+    border-radius:18px;
+    backdrop-filter: blur(12px);
+    background: rgba(255,255,255,0.45);
+    border:1px solid rgba(255,255,255,0.6);
 }
-.msg-row-left {display:flex; justify-content:flex-start; margin:6px 0;}
-.msg-row-right {display:flex; justify-content:flex-end; margin:6px 0;}
+
+/* Message rows */
+.bot-row { display:flex; align-items:flex-end; justify-content:flex-start; }
+.user-row { display:flex; align-items:flex-end; justify-content:flex-end; }
+
+/* Avatar circles */
+.avatar {
+    width:36px;
+    height:36px;
+    border-radius:50%;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    font-size:18px;
+    margin:0 8px;
+    background:white;
+    box-shadow:0 1px 4px rgba(0,0,0,0.15);
+}
+
+/* Bubbles */
 .bot-bubble {
     background:white;
+    border-radius:18px;
     padding:12px 16px;
-    border-radius:16px;
-    border:1px solid #e6e6e6;
     max-width:70%;
+    border:1px solid #e0e0e0;
 }
+
 .user-bubble {
-    background:#4c9aff;
+    background:#0084ff;
     color:white;
+    border-radius:18px;
     padding:12px 16px;
-    border-radius:16px;
     max-width:70%;
 }
-.title-box {
-    text-align:center;
-    font-size:26px;
-    font-weight:600;
-    padding:10px;
+
+/* Sticky input bar like Telegram */
+[data-testid="stChatInput"] {
+    position:fixed;
+    bottom:0;
+    left:0;
+    right:0;
+    padding:12px;
+    backdrop-filter: blur(12px);
+    background: rgba(255,255,255,0.6);
+    border-top:1px solid #e0e0e0;
 }
-.selector-box{
-    background:white;
-    border-radius:12px;
+
+/* Pain slider box */
+.glass-card {
+    backdrop-filter: blur(10px);
+    background: rgba(255,255,255,0.6);
+    border-radius:16px;
     padding:15px;
-    border:1px solid #e6e6e6;
-    margin-top:10px;
+    border:1px solid rgba(255,255,255,0.7);
 }
+
 </style>
 """, unsafe_allow_html=True)
 
-# ------------------------------------------------
-# Doctor questions
-# ------------------------------------------------
-doctor_questions = [
-    "How are you feeling today on a scale from 1 to 10?",
-    "Are you experiencing any pain today?",
-    "Do you feel fatigued or low energy?",
-    "Have you noticed nausea or difficulty eating?",
-]
-
-followups = [
-    "Thanks for sharing that. Can you tell me more?",
-    "Where exactly do you feel it?",
-    "How severe would you say it is?",
-]
-
-# ------------------------------------------------
-# Session state
-# ------------------------------------------------
+# ---------------------------------------------------
+# SESSION STATE
+# ---------------------------------------------------
 if "messages" not in st.session_state:
-    st.session_state.messages = [
-        {"role": "doctor", "text": random.choice(doctor_questions)}
+    st.session_state.messages = []
+
+if "step" not in st.session_state:
+    st.session_state.step = 0
+
+if "show_body_selector" not in st.session_state:
+    st.session_state.show_body_selector = False
+
+if "show_pain_slider" not in st.session_state:
+    st.session_state.show_pain_slider = False
+
+# ---------------------------------------------------
+# FAKE DOCTOR LOGIC
+# ---------------------------------------------------
+def virtual_doctor_reply(user_text, step):
+
+    intro = [
+        "Hi — I'm your virtual doctor check-in assistant.",
+        "How are you feeling today from 0 to 10?",
+        "Do you have any pain today? (yes/no)"
     ]
 
-# ------------------------------------------------
-# Helper: detect pain question
-# ------------------------------------------------
-def last_doctor_asked_pain():
-    for msg in reversed(st.session_state.messages):
-        if msg["role"] == "doctor":
-            return "pain" in msg["text"].lower()
-    return False
+    neutral = [
+        "Thanks for sharing.",
+        "Got it — anything else?",
+        "Understood."
+    ]
 
-# ------------------------------------------------
-# Title
-# ------------------------------------------------
-st.markdown('<div class="title-box">🩺 Virtual Doctor Check-In</div>', unsafe_allow_html=True)
-st.markdown('<div class="chat-wrapper">', unsafe_allow_html=True)
+    if step < len(intro):
+        return intro[step]
 
-# ------------------------------------------------
-# Render chat history
-# ------------------------------------------------
-for msg in st.session_state.messages:
-    if msg["role"] == "doctor":
-        st.markdown(f"""
-        <div class="msg-row-left">
-            <div class="bot-bubble">{msg["text"]}</div>
-        </div>
-        """, unsafe_allow_html=True)
-    else:
-        st.markdown(f"""
-        <div class="msg-row-right">
-            <div class="user-bubble">{msg["text"]}</div>
-        </div>
-        """, unsafe_allow_html=True)
+    if "pain located" in user_text.lower():
+        st.session_state.show_pain_slider = True
+        return "Thanks — how severe is the pain?"
 
-# ------------------------------------------------
-# BODY SELECTOR UI (appears only when pain asked)
-# ------------------------------------------------
-show_selector = last_doctor_asked_pain()
+    return random.choice(neutral)
 
-if show_selector:
-    st.markdown('<div class="selector-box">🧍 Select where you feel pain:</div>', unsafe_allow_html=True)
+# ---------------------------------------------------
+# HEADER
+# ---------------------------------------------------
+st.markdown('<div class="header">🩺 Virtual Doctor Messenger</div>', unsafe_allow_html=True)
 
-    col1, col2, col3 = st.columns(3)
+# ---------------------------------------------------
+# CHAT DISPLAY
+# ---------------------------------------------------
+chat_area = st.container()
 
-    with col1:
-        if st.button("🧠 Head"):
-            selected = "Pain in Head"
-    with col2:
-        if st.button("💪 Arm"):
-            selected = "Pain in Arm"
-    with col3:
-        if st.button("🫀 Chest"):
-            selected = "Pain in Chest"
+with chat_area:
 
-    col4, col5, col6 = st.columns(3)
-    with col4:
-        if st.button("🫁 Back"):
-            selected = "Pain in Back"
-    with col5:
-        if st.button("🦵 Leg"):
-            selected = "Pain in Leg"
-    with col6:
-        if st.button("🦶 Foot"):
-            selected = "Pain in Foot"
+    st.markdown('<div class="chat-wrapper">', unsafe_allow_html=True)
 
-    # If any body part selected
-    if "selected" in locals():
-        st.session_state.messages.append({"role":"user","text":selected})
+    for msg in st.session_state.messages:
 
-        next_msg = random.choice(followups)
-        st.session_state.messages.append({"role":"doctor","text":next_msg})
+        if msg["role"] == "bot":
+            st.markdown(f"""
+            <div class="bot-row">
+                <div class="avatar">🩺</div>
+                <div class="bot-bubble">{msg["content"]}</div>
+            </div>
+            """, unsafe_allow_html=True)
 
+        else:
+            st.markdown(f"""
+            <div class="user-row">
+                <div class="user-bubble">{msg["content"]}</div>
+                <div class="avatar">🙂</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+# ---------------------------------------------------
+# HUMAN BODY SELECTOR
+# ---------------------------------------------------
+if st.session_state.show_body_selector:
+
+    st.markdown('<div class="glass-card">🧍 Select Body Location</div>', unsafe_allow_html=True)
+
+    body_parts = ["Head","Chest","Abdomen","Left Arm","Right Arm","Left Leg","Right Leg"]
+
+    cols = st.columns(3)
+    selected = None
+
+    for i, part in enumerate(body_parts):
+        if cols[i%3].button(part, key=f"body_{part}"):
+            selected = part
+
+    if selected:
+        st.session_state.messages.append(
+            {"role":"user","content":f"Pain located at: {selected}"}
+        )
+        st.session_state.show_body_selector = False
+        st.session_state.show_pain_slider = True
+        st.session_state.messages.append(
+            {"role":"bot","content":"Doctor is typing..."}
+        )
         st.rerun()
 
-# ------------------------------------------------
-# Normal text chat input
-# ------------------------------------------------
-user_input = st.chat_input("Type your response...")
+# ---------------------------------------------------
+# PAIN SLIDER + SYMPTOM BUTTONS
+# ---------------------------------------------------
+if st.session_state.show_pain_slider:
+
+    st.markdown('<div class="glass-card">Rate your pain severity</div>', unsafe_allow_html=True)
+
+    severity = st.slider("Pain Level",0,10,5)
+
+    colA,colB,colC = st.columns(3)
+
+    symptoms = ["Sharp","Burning","Constant","Intermittent","Radiating","Pressure"]
+
+    chosen = None
+    for i,s in enumerate(symptoms):
+        if [colA,colB,colC][i%3].button(s,key=f"sym_{s}"):
+            chosen = s
+
+    if st.button("Submit Pain Info"):
+        st.session_state.messages.append(
+            {"role":"user","content":f"Pain severity {severity}/10 — {chosen if chosen else 'No descriptor'}"}
+        )
+        st.session_state.show_pain_slider = False
+
+        st.session_state.messages.append(
+            {"role":"bot","content":"Doctor is typing..."}
+        )
+        st.rerun()
+
+# ---------------------------------------------------
+# USER INPUT
+# ---------------------------------------------------
+user_input = st.chat_input("Type your message...")
 
 if user_input:
-    st.session_state.messages.append({"role":"user","text":user_input})
 
-    # fake continuation
-    if len(st.session_state.messages) % 3 == 0:
-        next_msg = random.choice(doctor_questions)
-    else:
-        next_msg = random.choice(followups)
+    st.session_state.messages.append({"role":"user","content":user_input})
 
-    st.session_state.messages.append({"role":"doctor","text":next_msg})
+    # 🔥 Typing animation
+    st.session_state.messages.append({"role":"bot","content":"Doctor is typing..."})
     st.rerun()
 
-st.markdown('</div>', unsafe_allow_html=True)
+# ---------------------------------------------------
+# HANDLE TYPING STATE
+# ---------------------------------------------------
+if len(st.session_state.messages)>0 and st.session_state.messages[-1]["content"]=="Doctor is typing...":
+
+    time.sleep(0.6)
+
+    last_user = ""
+    for m in reversed(st.session_state.messages):
+        if m["role"]=="user":
+            last_user = m["content"]
+            break
+
+    reply = virtual_doctor_reply(last_user, st.session_state.step)
+
+    st.session_state.messages[-1] = {"role":"bot","content":reply}
+
+    if "pain today" in reply.lower():
+        st.session_state.show_body_selector = True
+
+    st.session_state.step += 1
+    st.rerun()
+
+# ---------------------------------------------------
+# INITIAL MESSAGE
+# ---------------------------------------------------
+if len(st.session_state.messages)==0:
+    st.session_state.messages.append(
+        {"role":"bot","content":"Hello — I'm your virtual doctor. Let's start your check-in."}
+    )
+    st.rerun()
