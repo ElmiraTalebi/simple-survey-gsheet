@@ -1,56 +1,49 @@
 import streamlit as st
+from streamlit.components.v1 import html
 import time
 
 # ---------------------------------------------------
 # PAGE SETUP
 # ---------------------------------------------------
-st.set_page_config(page_title="Slobodan Demo", layout="centered")
+st.set_page_config(page_title="Virtual Doctor Demo", layout="centered")
 
 # ---------------------------------------------------
-# CSS (Messenger UI)
+# CSS - TELEGRAM STYLE
 # ---------------------------------------------------
 st.markdown("""
 <style>
 [data-testid="stAppViewContainer"] {
     background: linear-gradient(135deg,#eef2f7,#dde6f1);
 }
-.chat-wrapper {display:flex;flex-direction:column;gap:8px;}
+.chat-wrapper {display:flex;flex-direction:column;gap:8px;padding-bottom:18px;}
 .bot-row{display:flex;justify-content:flex-start;}
 .user-row{display:flex;justify-content:flex-end;}
-.bot-bubble{background:white;border-radius:18px;padding:12px 16px;max-width:70%;border:1px solid #ddd;}
-.user-bubble{background:#0084ff;color:white;border-radius:18px;padding:12px 16px;max-width:70%;}
+.bot-bubble{
+    background:white;border-radius:18px;padding:12px 16px;max-width:72%;
+    border:1px solid #ddd; box-shadow: 0 2px 6px rgba(0,0,0,0.05);
+}
+.user-bubble{
+    background:#0084ff;color:white;border-radius:18px;padding:12px 16px;max-width:72%;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.10);
+}
 .header{font-size:22px;font-weight:600;margin-bottom:10px;}
-.small-note{font-size:12px;color:#666;margin-top:-6px;margin-bottom:8px;}
+.pill {
+    display:inline-block;
+    padding:6px 10px;
+    margin:4px 6px 0 0;
+    border-radius:999px;
+    background:#ffffff;
+    border:1px solid #d9d9d9;
+    font-size:13px;
+}
+.pill-selected {
+    background: rgba(0,132,255,0.12);
+    border: 1px solid rgba(0,132,255,0.55);
+}
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<div class="header">🩺 Virtual Doctor Feature Demo</div>', unsafe_allow_html=True)
-st.markdown('<div class="small-note">Demo prototype (no APIs). Click body regions to select/deselect.</div>', unsafe_allow_html=True)
-
-# ---------------------------------------------------
-# QUERY PARAM HELPERS (works across Streamlit versions)
-# ---------------------------------------------------
-def qp_get() -> dict:
-    """
-    Returns dict of query params. Compatible with both:
-    - st.query_params (newer Streamlit)
-    - st.experimental_get_query_params (older)
-    """
-    if hasattr(st, "query_params"):
-        # st.query_params behaves like a dict-like object
-        return dict(st.query_params)
-    return st.experimental_get_query_params()
-
-def qp_clear():
-    """
-    Clears query params. Compatible with both:
-    - st.query_params.clear() (newer)
-    - st.experimental_set_query_params() (older)
-    """
-    if hasattr(st, "query_params"):
-        st.query_params.clear()
-    else:
-        st.experimental_set_query_params()
+st.markdown('<div class="header">🩺 Slobodan Feature Demo (Fixed Body Selector)</div>', unsafe_allow_html=True)
 
 # ---------------------------------------------------
 # SESSION STATE
@@ -65,10 +58,133 @@ if "selected_parts" not in st.session_state:
     st.session_state.selected_parts = []
 
 # ---------------------------------------------------
+# HELPERS
+# ---------------------------------------------------
+def add_bot(text: str):
+    st.session_state.messages.append({"role": "bot", "content": text})
+
+def add_user(text: str):
+    st.session_state.messages.append({"role": "user", "content": text})
+
+def read_clicked_part_from_query() -> str | None:
+    """
+    Streamlit query params can behave like a dict with values sometimes being str or list-like.
+    This safely extracts a single string if present.
+    """
+    qp = st.query_params
+    if "part" not in qp:
+        return None
+
+    val = qp.get("part")
+    # val might be "Head" or ["Head"]
+    if isinstance(val, (list, tuple)):
+        return val[0] if len(val) > 0 else None
+    return val
+
+def render_silhouette(selected_parts: list[str]) -> str:
+    """
+    Returns an SVG with clickable zones. Selected parts are highlighted.
+    Uses window.location.search to set ?part=... which Streamlit reads.
+    """
+    selected = set(selected_parts)
+
+    def fill(part: str) -> str:
+        # highlight selected zones
+        return "rgba(0,132,255,0.45)" if part in selected else "rgba(0,0,255,0.18)"
+
+    def stroke(part: str) -> str:
+        return "rgba(0,132,255,0.95)" if part in selected else "rgba(0,0,0,0.25)"
+
+    # NOTE: This is a simple silhouette; zones are clickable and highlight on selection.
+    return f"""
+    <style>
+      .zone {{ cursor:pointer; transition: 0.12s ease; }}
+      .zone:hover {{ filter: brightness(1.05); }}
+      .label {{ font: 12px sans-serif; fill: rgba(0,0,0,0.55); }}
+    </style>
+
+    <svg width="290" height="520" viewBox="0 0 220 520">
+      <!-- Body outline (very light) -->
+      <path d="M110 15
+               C90 15, 75 30, 75 50
+               C75 70, 90 85, 110 85
+               C130 85, 145 70, 145 50
+               C145 30, 130 15, 110 15 Z"
+            fill="rgba(0,0,0,0.05)"/>
+
+      <path d="M80 95
+               C70 105, 65 120, 65 140
+               L65 210
+               C65 230, 75 245, 90 255
+               L90 410
+               C90 430, 100 450, 110 450
+               C120 450, 130 430, 130 410
+               L130 255
+               C145 245, 155 230, 155 210
+               L155 140
+               C155 120, 150 105, 140 95
+               C130 85, 90 85, 80 95 Z"
+            fill="rgba(0,0,0,0.05)"/>
+
+      <!-- CLICKABLE ZONES -->
+      <!-- Head -->
+      <circle cx="110" cy="50" r="32"
+        class="zone"
+        fill="{fill('Head')}"
+        stroke="{stroke('Head')}" stroke-width="2"
+        onclick="window.location.search='?part=Head'"/>
+
+      <!-- Chest -->
+      <rect x="75" y="105" width="70" height="65" rx="14"
+        class="zone"
+        fill="{fill('Chest')}"
+        stroke="{stroke('Chest')}" stroke-width="2"
+        onclick="window.location.search='?part=Chest'"/>
+
+      <!-- Abdomen -->
+      <rect x="75" y="175" width="70" height="65" rx="14"
+        class="zone"
+        fill="{fill('Abdomen')}"
+        stroke="{stroke('Abdomen')}" stroke-width="2"
+        onclick="window.location.search='?part=Abdomen'"/>
+
+      <!-- Left Arm -->
+      <rect x="30" y="115" width="38" height="140" rx="14"
+        class="zone"
+        fill="{fill('Left Arm')}"
+        stroke="{stroke('Left Arm')}" stroke-width="2"
+        onclick="window.location.search='?part=Left%20Arm'"/>
+
+      <!-- Right Arm -->
+      <rect x="152" y="115" width="38" height="140" rx="14"
+        class="zone"
+        fill="{fill('Right Arm')}"
+        stroke="{stroke('Right Arm')}" stroke-width="2"
+        onclick="window.location.search='?part=Right%20Arm'"/>
+
+      <!-- Left Leg -->
+      <rect x="85" y="255" width="28" height="210" rx="14"
+        class="zone"
+        fill="{fill('Left Leg')}"
+        stroke="{stroke('Left Leg')}" stroke-width="2"
+        onclick="window.location.search='?part=Left%20Leg'"/>
+
+      <!-- Right Leg -->
+      <rect x="117" y="255" width="28" height="210" rx="14"
+        class="zone"
+        fill="{fill('Right Leg')}"
+        stroke="{stroke('Right Leg')}" stroke-width="2"
+        onclick="window.location.search='?part=Right%20Leg'"/>
+
+      <!-- Optional labels (subtle) -->
+      <text x="110" y="95" text-anchor="middle" class="label">click areas</text>
+    </svg>
+    """
+
+# ---------------------------------------------------
 # CHAT DISPLAY
 # ---------------------------------------------------
 st.markdown('<div class="chat-wrapper">', unsafe_allow_html=True)
-
 for msg in st.session_state.messages:
     if msg["role"] == "bot":
         st.markdown(
@@ -80,189 +196,111 @@ for msg in st.session_state.messages:
             f'<div class="user-row"><div class="user-bubble">{msg["content"]}</div></div>',
             unsafe_allow_html=True
         )
-
 st.markdown('</div>', unsafe_allow_html=True)
 
 # ---------------------------------------------------
-# STAGE 0 — INTRO + SLIDER
+# STAGES
 # ---------------------------------------------------
-if st.session_state.stage == 0:
 
+# Stage 0: intro + slider
+if st.session_state.stage == 0:
     if not st.session_state.messages:
-        st.session_state.messages.append({"role": "bot", "content": "Hello — I'm your virtual doctor assistant."})
-        st.session_state.messages.append({"role": "bot", "content": "How are you feeling today from 0 to 10?"})
+        add_bot("Hello — I'm your virtual doctor assistant.")
+        add_bot("How are you feeling today from 0 to 10?")
         st.rerun()
 
     feeling = st.slider("Feeling scale", 0, 10, 5)
 
     if st.button("Submit feeling"):
-        st.session_state.messages.append({"role": "user", "content": f"Feeling level: {feeling}"})
-        st.session_state.messages.append({"role": "bot", "content": "Do you have any pain today?"})
+        add_user(f"Feeling level: {feeling}")
+        add_bot("Do you have any pain today?")
         st.session_state.stage = 1
         st.rerun()
 
-# ---------------------------------------------------
-# STAGE 1 — YES/NO QUICK REPLIES
-# ---------------------------------------------------
+# Stage 1: yes/no
 elif st.session_state.stage == 1:
-    col1, col2 = st.columns(2)
-
-    if col1.button("Yes"):
-        st.session_state.messages.append({"role": "user", "content": "Yes"})
-        st.session_state.messages.append({"role": "bot", "content": "Select where you feel pain (you can click multiple areas)."})
+    c1, c2 = st.columns(2)
+    if c1.button("Yes"):
+        add_user("Yes")
+        add_bot("Select where you feel pain (click multiple areas).")
         st.session_state.stage = 2
         st.rerun()
-
-    if col2.button("No"):
-        st.session_state.messages.append({"role": "user", "content": "No"})
-        st.session_state.messages.append({"role": "bot", "content": "Any new symptoms today?"})
+    if c2.button("No"):
+        add_user("No")
+        add_bot("Any new symptoms today?")
         st.session_state.stage = 3
         st.rerun()
 
-# ---------------------------------------------------
-# STAGE 2 — CLICKABLE HUMAN BODY (MULTI-SELECT + VISUAL HIGHLIGHT)
-# ---------------------------------------------------
+# Stage 2: body selector with visual highlight + multi-select
 elif st.session_state.stage == 2:
+    st.markdown("### Body map (multi-select)")
 
-    # 1) If a part was clicked (via ?part=...), toggle selection
-    q = qp_get()
-    if "part" in q:
-        # Depending on Streamlit version, value may be list-like or string
-        part_val = q["part"]
-        if isinstance(part_val, (list, tuple)):
-            part = part_val[0]
-        else:
-            part = str(part_val)
-
-        if part in st.session_state.selected_parts:
-            st.session_state.selected_parts.remove(part)
-        else:
-            st.session_state.selected_parts.append(part)
-
-        qp_clear()
+    # 1) If user clicked a zone, record it
+    clicked = read_clicked_part_from_query()
+    if clicked:
+        clicked = clicked.replace("%20", " ")
+        if clicked not in st.session_state.selected_parts:
+            st.session_state.selected_parts.append(clicked)
+        # clear URL params so you can click multiple times
+        st.query_params.clear()
         st.rerun()
 
-    # 2) Color helper
-    def fill(name: str) -> str:
-        return "rgba(255,0,0,0.65)" if name in st.session_state.selected_parts else "rgba(0,0,255,0.18)"
+    # 2) Render silhouette with current selections highlighted
+    html(render_silhouette(st.session_state.selected_parts), height=540)
 
-    # 3) SVG rendered in MAIN DOM (NOT iframe), using <a href="?part=...">
-    silhouette_svg = f"""
-    <style>
-      .zone {{ cursor: pointer; }}
-      .zone:hover {{ filter: brightness(0.92); }}
-      .label {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial; font-size: 12px; fill: #444; }}
-    </style>
-
-    <div style="display:flex; justify-content:center; margin-top:6px;">
-      <svg width="260" height="520" viewBox="0 0 200 520" role="img" aria-label="Human body selector">
-
-        <!-- HEAD -->
-        <a href="?part=Head">
-          <circle class="zone" cx="100" cy="48" r="24" fill="{fill('Head')}" />
-        </a>
-        <text class="label" x="100" y="20" text-anchor="middle">Head</text>
-
-        <!-- CHEST -->
-        <a href="?part=Chest">
-          <rect class="zone" x="60" y="80" width="80" height="70" rx="10" fill="{fill('Chest')}" />
-        </a>
-        <text class="label" x="100" y="75" text-anchor="middle">Chest</text>
-
-        <!-- ABDOMEN -->
-        <a href="?part=Abdomen">
-          <rect class="zone" x="60" y="155" width="80" height="70" rx="10" fill="{fill('Abdomen')}" />
-        </a>
-        <text class="label" x="100" y="150" text-anchor="middle">Abdomen</text>
-
-        <!-- LEFT ARM -->
-        <a href="?part=Left Arm">
-          <rect class="zone" x="18" y="95" width="36" height="145" rx="12" fill="{fill('Left Arm')}" />
-        </a>
-        <text class="label" x="36" y="90" text-anchor="middle">L arm</text>
-
-        <!-- RIGHT ARM -->
-        <a href="?part=Right Arm">
-          <rect class="zone" x="146" y="95" width="36" height="145" rx="12" fill="{fill('Right Arm')}" />
-        </a>
-        <text class="label" x="164" y="90" text-anchor="middle">R arm</text>
-
-        <!-- LEFT LEG -->
-        <a href="?part=Left Leg">
-          <rect class="zone" x="72" y="235" width="26" height="220" rx="10" fill="{fill('Left Leg')}" />
-        </a>
-        <text class="label" x="85" y="470" text-anchor="middle">L leg</text>
-
-        <!-- RIGHT LEG -->
-        <a href="?part=Right Leg">
-          <rect class="zone" x="102" y="235" width="26" height="220" rx="10" fill="{fill('Right Leg')}" />
-        </a>
-        <text class="label" x="115" y="470" text-anchor="middle">R leg</text>
-
-        <!-- optional faint torso outline -->
-        <rect x="55" y="70" width="90" height="395" rx="22" fill="none" stroke="rgba(0,0,0,0.08)" stroke-width="2"/>
-      </svg>
-    </div>
-    """
-
-    st.markdown(silhouette_svg, unsafe_allow_html=True)
-
-    # 4) Show selected parts clearly
+    # 3) Show selections as pills (visual confirmation)
     if st.session_state.selected_parts:
-        st.success("Selected: " + ", ".join(st.session_state.selected_parts))
+        pills = []
+        for p in st.session_state.selected_parts:
+            pills.append(f'<span class="pill pill-selected">{p}</span>')
+        st.markdown("".join(pills), unsafe_allow_html=True)
     else:
-        st.info("No body parts selected yet. Click one or more areas.")
+        st.markdown('<span class="pill">No areas selected yet</span>', unsafe_allow_html=True)
 
+    # 4) Controls: clear / submit
     colA, colB = st.columns(2)
 
-    with colA:
-        if st.button("Clear selections"):
-            st.session_state.selected_parts = []
-            st.rerun()
+    if colA.button("Clear selection"):
+        st.session_state.selected_parts = []
+        st.rerun()
 
-    with colB:
-        if st.button("Submit Pain Areas"):
-            chosen = ", ".join(st.session_state.selected_parts) if st.session_state.selected_parts else "None"
-
-            st.session_state.messages.append({"role": "user", "content": f"Pain at: {chosen}"})
-            st.session_state.messages.append({"role": "bot", "content": "Any new symptoms today?"})
-
+    if colB.button("Submit Pain Areas"):
+        if not st.session_state.selected_parts:
+            st.warning("Please select at least one body area.")
+        else:
+            chosen = ", ".join(st.session_state.selected_parts)
+            add_user(f"Pain at: {chosen}")
+            add_bot("Thanks — how severe is the pain from 0 to 10?")
             st.session_state.selected_parts = []
             st.session_state.stage = 3
             st.rerun()
 
-# ---------------------------------------------------
-# STAGE 3 — MULTI SELECT SYMPTOMS
-# ---------------------------------------------------
+# Stage 3: symptoms + free text wrap-up
 elif st.session_state.stage == 3:
-
     symptoms = st.multiselect(
         "Select symptoms",
         ["Fatigue", "Nausea", "Fever", "Shortness of Breath", "None"]
     )
-
     if st.button("Submit Symptoms"):
-        st.session_state.messages.append({"role": "user", "content": ", ".join(symptoms) if symptoms else "No selection"})
-        st.session_state.messages.append({"role": "bot", "content": "Anything else you'd like your care team to know?"})
+        add_user("Symptoms: " + (", ".join(symptoms) if symptoms else "None selected"))
+        add_bot("Anything else you'd like your care team to know?")
         st.session_state.stage = 4
         st.rerun()
 
-# ---------------------------------------------------
-# STAGE 4 — FREE TEXT CHAT
-# ---------------------------------------------------
 elif st.session_state.stage == 4:
-
     user_text = st.chat_input("Type message...")
-
     if user_text:
-        st.session_state.messages.append({"role": "user", "content": user_text})
+        add_user(user_text)
         time.sleep(0.25)
-        st.session_state.messages.append({"role": "bot", "content": "Thank you. Your check-in is complete."})
+        add_bot("Thank you. Your check-in is complete.")
         st.session_state.stage = 5
         st.rerun()
 
-# ---------------------------------------------------
-# END
-# ---------------------------------------------------
 elif st.session_state.stage == 5:
-    st.success("Demo complete — all features shown.")
+    st.success("Demo complete.")
+    if st.button("Restart demo"):
+        st.session_state.messages = []
+        st.session_state.stage = 0
+        st.session_state.selected_parts = []
+        st.query_params.clear()
+        st.rerun()
