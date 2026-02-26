@@ -1098,7 +1098,7 @@ class ChatReport:
 def main():
     # You can adjust typing speed here:
     # - smaller is faster, larger is slower
-    bot = ChatReport(typing_speed=0.01, wrap_width=76)
+    bot = ChatReport(typing_speed=0, wrap_width=76)
     bot.run()
 
 
