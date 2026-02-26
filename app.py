@@ -1,61 +1,159 @@
 import streamlit as st
-import gspread
-from google.oauth2.service_account import Credentials
-from datetime import datetime
-import pandas as pd
+import random
+import time
 
-st.set_page_config(page_title="Mini Survey", page_icon="📝", layout="centered")
+# ---------------------------------------------------
+# Page Config
+# ---------------------------------------------------
+st.set_page_config(
+    page_title="Virtual Doctor Prototype",
+    layout="centered",
+)
 
-st.title("📝 Mini Survey")
-st.write("Please fill out this short survey. Your responses will be saved to a Google Sheet.")
+# ---------------------------------------------------
+# Custom CSS (Nice Background + Chat Style)
+# ---------------------------------------------------
+st.markdown("""
+<style>
+html, body, [data-testid="stAppViewContainer"] {
+    background: linear-gradient(135deg, #f4f7fb, #e6edf5);
+}
 
-# --- Connect to Google Sheets using Streamlit secrets ---
-# Expecting:
-# st.secrets["gcp_service_account"] -> full service account JSON
-# st.secrets["gsheet_id"] -> the Google Sheet ID string
-SCOPE = ["https://www.googleapis.com/auth/spreadsheets"]
-creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
-client = gspread.authorize(creds)
-sheet = client.open_by_key(st.secrets["gsheet_id"]).worksheet("Form")
+.chat-bubble-user {
+    background-color: #007AFF;
+    color: white;
+    padding: 12px;
+    border-radius: 15px;
+    margin: 5px;
+    max-width: 70%;
+    align-self: flex-end;
+}
 
-# --- Survey form ---
-with st.form("survey_form", clear_on_submit=True):
-    name = st.text_input("Your name (optional)", "")
-    role = st.selectbox("Your role", ["Clinician", "Researcher", "Student", "Other"])
-    rating = st.slider("How useful is this tool for you?", 1, 5, 3)
-    feedback = st.text_area("Any comments or suggestions?")
-    submitted = st.form_submit_button("Submit")
+.chat-bubble-bot {
+    background-color: #ffffff;
+    color: black;
+    padding: 12px;
+    border-radius: 15px;
+    margin: 5px;
+    max-width: 70%;
+    border: 1px solid #e0e0e0;
+}
 
-if submitted:
-    # Attempt basic user agent / IP hints (best-effort; Streamlit Cloud restricts some headers)
-    user_agent = st.experimental_user.get("browser", "unknown") if hasattr(st, "experimental_user") else "unknown"
-    ip_guess = st.experimental_user.get("ip", "unknown") if hasattr(st, "experimental_user") else "unknown"
+.chat-container {
+    display: flex;
+    flex-direction: column;
+}
+</style>
+""", unsafe_allow_html=True)
 
-    row = [
-        datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"),
-        name.strip(),
-        role,
-        int(rating),
-        feedback.strip(),
-        user_agent,
-        ip_guess,
+# ---------------------------------------------------
+# Initialize Session State
+# ---------------------------------------------------
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+if "step" not in st.session_state:
+    st.session_state.step = 0
+
+# ---------------------------------------------------
+# Fake Doctor Logic (NO API)
+# ---------------------------------------------------
+def virtual_doctor_reply(user_text, step):
+
+    intro_questions = [
+        "Hi, I’m your virtual check-in assistant. How are you feeling today from 0 to 10?",
+        "Do you have any pain today? (yes/no)",
+        "Any new or worsening symptoms?",
+        "Is there anything else you want your care team to know?"
     ]
-    try:
-        sheet.append_row(row, value_input_option="USER_ENTERED")
-        st.success("Thanks! Your response has been recorded.")
-    except Exception as e:
-        st.error(f"Failed to save your response: {e}")
 
-st.divider()
+    followups_yes = [
+        "Can you describe where the pain is located?",
+        "On a scale from 0-10 how severe is it?",
+        "Thanks — I will summarize this for your care team."
+    ]
 
-# --- Admin view (optional) ---
-with st.expander("🔐 Admin: view responses"):
-    try:
-        data = sheet.get_all_records()
-        if data:
-            df = pd.DataFrame(data)
-            st.dataframe(df, use_container_width=True)
+    neutral_followups = [
+        "Thanks for sharing. Anything else bothering you today?",
+        "Got it. I’m recording that information.",
+        "Understood. Let’s continue."
+    ]
+
+    # Structured flow (simulate adaptive logic)
+    if step < len(intro_questions):
+        return intro_questions[step]
+
+    if "yes" in user_text.lower():
+        return random.choice(followups_yes)
+
+    return random.choice(neutral_followups)
+
+# ---------------------------------------------------
+# Header
+# ---------------------------------------------------
+st.title("🩺 Virtual Doctor Chat Prototype")
+st.write("This is a UI prototype — simulated responses only.")
+
+# ---------------------------------------------------
+# Chat Display
+# ---------------------------------------------------
+chat_container = st.container()
+
+with chat_container:
+    st.markdown('<div class="chat-container">', unsafe_allow_html=True)
+
+    for msg in st.session_state.messages:
+        if msg["role"] == "user":
+            st.markdown(
+                f'<div class="chat-bubble-user">{msg["content"]}</div>',
+                unsafe_allow_html=True
+            )
         else:
-            st.info("No responses yet.")
-    except Exception as e:
-        st.error(f"Could not read the sheet: {e}")
+            st.markdown(
+                f'<div class="chat-bubble-bot">{msg["content"]}</div>',
+                unsafe_allow_html=True
+            )
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+# ---------------------------------------------------
+# User Input
+# ---------------------------------------------------
+user_input = st.chat_input("Type your message...")
+
+# ---------------------------------------------------
+# Conversation Flow
+# ---------------------------------------------------
+if user_input:
+
+    # Add user message
+    st.session_state.messages.append(
+        {"role": "user", "content": user_input}
+    )
+
+    # Simulated delay (feels realistic)
+    time.sleep(0.5)
+
+    # Generate fake doctor reply
+    reply = virtual_doctor_reply(
+        user_input,
+        st.session_state.step
+    )
+
+    st.session_state.messages.append(
+        {"role": "bot", "content": reply}
+    )
+
+    st.session_state.step += 1
+
+    st.rerun()
+
+# ---------------------------------------------------
+# Initial Bot Message
+# ---------------------------------------------------
+if len(st.session_state.messages) == 0:
+    first_msg = "Hello — I’m your virtual check-in assistant. Let’s begin."
+    st.session_state.messages.append(
+        {"role": "bot", "content": first_msg}
+    )
+    st.rerun()
