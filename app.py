@@ -1,299 +1,386 @@
-import streamlit as st
-from streamlit.components.v1 import html
+import random
 import time
+from datetime import datetime
+from typing import Dict, List, Optional
 
-# ---------------------------------------------------
-# PAGE SETUP
-# ---------------------------------------------------
-st.set_page_config(page_title="Virtual Doctor Demo", layout="centered")
-
-# ---------------------------------------------------
-# CSS - TELEGRAM STYLE
-# ---------------------------------------------------
-st.markdown("""
-<style>
-[data-testid="stAppViewContainer"] {
-    background: linear-gradient(135deg,#eef2f7,#dde6f1);
-}
-.chat-wrapper {display:flex;flex-direction:column;gap:8px;padding-bottom:10px;}
-.bot-row{display:flex;justify-content:flex-start;}
-.user-row{display:flex;justify-content:flex-end;}
-.bot-bubble{
-    background:white;border-radius:18px;padding:12px 16px;max-width:72%;
-    border:1px solid #ddd; box-shadow: 0 2px 6px rgba(0,0,0,0.05);
-}
-.user-bubble{
-    background:#0084ff;color:white;border-radius:18px;padding:12px 16px;max-width:72%;
-    box-shadow: 0 2px 6px rgba(0,0,0,0.10);
-}
-.header{font-size:22px;font-weight:600;margin-bottom:10px;}
-.pill {
-    display:inline-block;
-    padding:6px 10px;
-    margin:4px 6px 0 0;
-    border-radius:999px;
-    background:#ffffff;
-    border:1px solid #d9d9d9;
-    font-size:13px;
-}
-.pill-selected {
-    background: rgba(0,132,255,0.12);
-    border: 1px solid rgba(0,132,255,0.55);
-}
-.smallhint { color: rgba(0,0,0,0.55); font-size: 13px; margin-top: 4px; }
-</style>
-""", unsafe_allow_html=True)
-
-st.markdown('<div class="header">🩺 Slobodan Feature Demo — Clickable Body Map (Works)</div>', unsafe_allow_html=True)
-
-# ---------------------------------------------------
-# SESSION STATE
-# ---------------------------------------------------
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-if "stage" not in st.session_state:
-    st.session_state.stage = 0
-if "selected_parts" not in st.session_state:
-    st.session_state.selected_parts = []
-
-# ---------------------------------------------------
-# HELPERS
-# ---------------------------------------------------
-def add_bot(text: str):
-    st.session_state.messages.append({"role": "bot", "content": text})
-
-def add_user(text: str):
-    st.session_state.messages.append({"role": "user", "content": text})
-
-def toggle_part(part: str):
-    # multi-select toggle
-    if part in st.session_state.selected_parts:
-        st.session_state.selected_parts.remove(part)
-    else:
-        st.session_state.selected_parts.append(part)
-
-def _get_part_from_query():
-    qp = st.query_params
-    if "part" not in qp:
-        return None
-    val = qp.get("part")
-    if isinstance(val, (list, tuple)):
-        return val[0] if val else None
-    return val
-
-def render_clickable_silhouette(selected_parts: list[str]) -> str:
+class ChatReport:
     """
-    IMPORTANT:
-    - Each zone is wrapped in an <a href="/?part=..." target="_top"> ... </a>
-    - target="_top" navigates the main Streamlit page (not the iframe),
-      so Streamlit receives the query param and can record selection.
+    A conversational symptom reporting chatbot for head and neck cancer patients.
+    This prototype simulates natural conversation to collect symptom information.
     """
-    sel = set(selected_parts)
-
-    def fill(part: str) -> str:
-        return "rgba(0,132,255,0.55)" if part in sel else "rgba(0,0,255,0.18)"
-
-    def stroke(part: str) -> str:
-        return "rgba(0,132,255,0.95)" if part in sel else "rgba(0,0,0,0.25)"
-
-    # Use href values without spaces (URL-encoded)
-    return f"""
-    <style>
-      .zone {{ cursor:pointer; transition: 0.12s ease; }}
-      .zone:hover {{ filter: brightness(1.08); }}
-      .hint {{ font: 12px sans-serif; fill: rgba(0,0,0,0.45); }}
-      a {{ text-decoration:none; }}
-    </style>
-
-    <svg width="290" height="520" viewBox="0 0 220 520" xmlns="http://www.w3.org/2000/svg">
-
-      <!-- faint silhouette -->
-      <path d="M110 18
-               C90 18, 74 34, 74 54
-               C74 74, 90 90, 110 90
-               C130 90, 146 74, 146 54
-               C146 34, 130 18, 110 18 Z"
-            fill="rgba(0,0,0,0.05)"/>
-      <path d="M82 98
-               C72 110, 68 126, 68 144
-               L68 220
-               C68 242, 80 258, 96 268
-               L96 414
-               C96 438, 104 462, 110 462
-               C116 462, 124 438, 124 414
-               L124 268
-               C140 258, 152 242, 152 220
-               L152 144
-               C152 126, 148 110, 138 98
-               C128 88, 92 88, 82 98 Z"
-            fill="rgba(0,0,0,0.05)"/>
-
-      <!-- CLICKABLE ZONES (navigate TOP window) -->
-      <a href="/?part=Head" target="_top">
-        <circle cx="110" cy="54" r="34"
-                class="zone"
-                fill="{fill('Head')}" stroke="{stroke('Head')}" stroke-width="2"/>
-      </a>
-
-      <a href="/?part=Chest" target="_top">
-        <rect x="76" y="110" width="68" height="62" rx="14"
-              class="zone"
-              fill="{fill('Chest')}" stroke="{stroke('Chest')}" stroke-width="2"/>
-      </a>
-
-      <a href="/?part=Abdomen" target="_top">
-        <rect x="76" y="176" width="68" height="62" rx="14"
-              class="zone"
-              fill="{fill('Abdomen')}" stroke="{stroke('Abdomen')}" stroke-width="2"/>
-      </a>
-
-      <a href="/?part=Left%20Arm" target="_top">
-        <rect x="28" y="122" width="38" height="140" rx="16"
-              class="zone"
-              fill="{fill('Left Arm')}" stroke="{stroke('Left Arm')}" stroke-width="2"/>
-      </a>
-
-      <a href="/?part=Right%20Arm" target="_top">
-        <rect x="154" y="122" width="38" height="140" rx="16"
-              class="zone"
-              fill="{fill('Right Arm')}" stroke="{stroke('Right Arm')}" stroke-width="2"/>
-      </a>
-
-      <a href="/?part=Left%20Leg" target="_top">
-        <rect x="86" y="266" width="28" height="210" rx="14"
-              class="zone"
-              fill="{fill('Left Leg')}" stroke="{stroke('Left Leg')}" stroke-width="2"/>
-      </a>
-
-      <a href="/?part=Right%20Leg" target="_top">
-        <rect x="118" y="266" width="28" height="210" rx="14"
-              class="zone"
-              fill="{fill('Right Leg')}" stroke="{stroke('Right Leg')}" stroke-width="2"/>
-      </a>
-
-      <text x="110" y="505" text-anchor="middle" class="hint">
-        click zones to toggle selection
-      </text>
-    </svg>
-    """
-
-# ---------------------------------------------------
-# CHAT DISPLAY
-# ---------------------------------------------------
-st.markdown('<div class="chat-wrapper">', unsafe_allow_html=True)
-for msg in st.session_state.messages:
-    if msg["role"] == "bot":
-        st.markdown(f'<div class="bot-row"><div class="bot-bubble">{msg["content"]}</div></div>',
-                    unsafe_allow_html=True)
-    else:
-        st.markdown(f'<div class="user-row"><div class="user-bubble">{msg["content"]}</div></div>',
-                    unsafe_allow_html=True)
-st.markdown('</div>', unsafe_allow_html=True)
-
-# ---------------------------------------------------
-# STAGES
-# ---------------------------------------------------
-
-# Stage 0: intro + feeling slider
-if st.session_state.stage == 0:
-    if not st.session_state.messages:
-        add_bot("Hello — I'm your virtual doctor assistant.")
-        add_bot("How are you feeling today from 0 to 10?")
-        st.rerun()
-
-    feeling = st.slider("Feeling scale", 0, 10, 5)
-    if st.button("Submit feeling"):
-        add_user(f"Feeling level: {feeling}")
-        add_bot("Do you have any pain today?")
-        st.session_state.stage = 1
-        st.rerun()
-
-# Stage 1: yes/no quick reply
-elif st.session_state.stage == 1:
-    c1, c2 = st.columns(2)
-    if c1.button("Yes"):
-        add_user("Yes")
-        add_bot("Select where you feel pain (click multiple body areas).")
-        st.session_state.stage = 2
-        st.rerun()
-    if c2.button("No"):
-        add_user("No")
-        add_bot("Any new symptoms today?")
-        st.session_state.stage = 3
-        st.rerun()
-
-# Stage 2: CLICKABLE silhouette zones (works) + highlight + multi-select
-elif st.session_state.stage == 2:
-    st.markdown("### Body map (multi-select)")
-    st.markdown('<div class="smallhint">Click a zone to toggle it. Selected zones become blue.</div>',
-                unsafe_allow_html=True)
-
-    # 1) If we navigated with ?part=..., record it
-    clicked = _get_part_from_query()
-    if clicked:
-        clicked = clicked.replace("%20", " ")
-        toggle_part(clicked)
-
-        # Remove query param from URL so repeated clicks work cleanly
-        st.query_params.clear()
-        st.rerun()
-
-    # 2) Render clickable silhouette with highlights
-    html(render_clickable_silhouette(st.session_state.selected_parts), height=540)
-
-    # 3) Show selected parts as pills
-    if st.session_state.selected_parts:
-        pills = "".join([f'<span class="pill pill-selected">{p}</span>' for p in st.session_state.selected_parts])
-        st.markdown(pills, unsafe_allow_html=True)
-    else:
-        st.markdown('<span class="pill">No areas selected yet</span>', unsafe_allow_html=True)
-
-    # 4) Controls
-    ca, cb = st.columns(2)
-
-    if ca.button("Clear selection", use_container_width=True):
-        st.session_state.selected_parts = []
-        st.rerun()
-
-    if cb.button("Submit Pain Areas", use_container_width=True):
-        if not st.session_state.selected_parts:
-            st.warning("Please select at least one body area.")
+    
+    def __init__(self):
+        self.symptoms = {}
+        self.conversation_history = []
+        self.patient_name = None
+        self.current_topic = None
+        
+        # Symptom domains to assess
+        self.symptom_domains = {
+            'pain': ['location', 'severity', 'frequency', 'management'],
+            'mouth': ['dry_mouth', 'sores', 'taste_changes', 'severity'],
+            'swallowing': ['difficulty_level', 'types_of_food', 'pain_when_swallowing'],
+            'nutrition': ['appetite', 'weight_changes', 'food_intake', 'feeding_tube'],
+            'breathing': ['difficulty', 'frequency', 'severity'],
+            'mood': ['anxiety', 'depression', 'worry', 'sleep'],
+            'energy': ['fatigue_level', 'daily_activities', 'rest_needed']
+        }
+        
+    def add_to_history(self, speaker: str, message: str):
+        """Track conversation for report generation"""
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        self.conversation_history.append({
+            'timestamp': timestamp,
+            'speaker': speaker,
+            'message': message
+        })
+    
+    def display_message(self, message: str, typing_speed: float = 0.02):
+        """Display bot message with typing effect"""
+        print("\n🤖 ChatReport:", end=" ")
+        for char in message:
+            print(char, end='', flush=True)
+            time.sleep(typing_speed)
+        print()
+        self.add_to_history('bot', message)
+    
+    def get_user_input(self, prompt: str = "") -> str:
+        """Get user input"""
+        if prompt:
+            print(f"\n{prompt}")
+        user_input = input("You: ").strip()
+        self.add_to_history('user', user_input)
+        return user_input
+    
+    def greeting(self):
+        """Initial greeting"""
+        self.display_message(
+            "Hello! I'm ChatReport, here to help you share information about "
+            "how you've been feeling before your upcoming appointment."
+        )
+        time.sleep(0.5)
+        self.display_message(
+            "This should only take about 10-15 minutes. You can take your time, "
+            "and please feel free to share as much or as little detail as you'd like."
+        )
+        time.sleep(0.5)
+        self.display_message("What's your first name?")
+        
+        name = self.get_user_input()
+        self.patient_name = name
+        
+        self.display_message(
+            f"Nice to meet you, {name}! Thank you for taking the time to do this. "
+            f"Let's start with some general questions."
+        )
+    
+    def assess_pain(self):
+        """Conversational pain assessment"""
+        self.current_topic = 'pain'
+        self.display_message(
+            "Let's talk about any pain you might be experiencing. "
+            "Have you had any pain since your last appointment?"
+        )
+        
+        response = self.get_user_input().lower()
+        
+        if any(word in response for word in ['no', 'not', 'none', "haven't"]):
+            self.symptoms['pain'] = {'present': False}
+            self.display_message("That's good to hear. We'll move on to the next topic.")
+            return
+        
+        # Pain is present - gather details
+        self.symptoms['pain'] = {'present': True, 'details': {}}
+        
+        self.display_message("I see. Can you tell me where you're feeling the pain?")
+        location = self.get_user_input()
+        self.symptoms['pain']['details']['location'] = location
+        
+        self.display_message(
+            "On a scale of 0 to 10, where 0 is no pain and 10 is the worst pain imaginable, "
+            "how would you rate your pain at its worst?"
+        )
+        severity = self.get_user_input()
+        self.symptoms['pain']['details']['severity'] = severity
+        
+        self.display_message("How often would you say you experience this pain?")
+        frequency = self.get_user_input()
+        self.symptoms['pain']['details']['frequency'] = frequency
+        
+        self.display_message(
+            "Are you doing anything to manage the pain? For example, taking medication, "
+            "using ice, or anything else?"
+        )
+        management = self.get_user_input()
+        self.symptoms['pain']['details']['management'] = management
+        
+        # Empathetic follow-up
+        if any(num in severity for num in ['7', '8', '9', '10']):
+            self.display_message(
+                "I'm sorry you're experiencing such significant pain. "
+                "Your doctor will definitely want to discuss this with you."
+            )
+    
+    def assess_mouth_symptoms(self):
+        """Assess mouth-related symptoms"""
+        self.current_topic = 'mouth'
+        self.display_message(
+            "Now let's talk about your mouth. Many patients experience dry mouth, "
+            "mouth sores, or changes in taste during treatment. "
+            "Have you noticed any of these issues?"
+        )
+        
+        response = self.get_user_input().lower()
+        
+        if any(word in response for word in ['no', 'not', 'none']):
+            self.symptoms['mouth'] = {'present': False}
+            self.display_message("Great! Let's continue.")
+            return
+        
+        self.symptoms['mouth'] = {'present': True, 'details': {}}
+        
+        # Identify specific issues
+        self.display_message(
+            "Could you describe what you're experiencing? For example, "
+            "is your mouth feeling dry, do you have sores, or has your sense of taste changed?"
+        )
+        description = self.get_user_input()
+        self.symptoms['mouth']['details']['description'] = description
+        
+        self.display_message(
+            "How much is this affecting your daily life? Would you say it's mild, "
+            "moderate, or severe?"
+        )
+        severity = self.get_user_input()
+        self.symptoms['mouth']['details']['severity'] = severity
+    
+    def assess_swallowing(self):
+        """Assess swallowing difficulties"""
+        self.current_topic = 'swallowing'
+        self.display_message(
+            "Let's talk about eating and swallowing. Have you had any difficulty "
+            "swallowing since your last visit?"
+        )
+        
+        response = self.get_user_input().lower()
+        
+        if any(word in response for word in ['no', 'not', 'none', "haven't", 'easy']):
+            self.symptoms['swallowing'] = {'present': False}
+            self.display_message("That's good. Let's move forward.")
+            return
+        
+        self.symptoms['swallowing'] = {'present': True, 'details': {}}
+        
+        self.display_message(
+            "Can you tell me more about the difficulty? For instance, "
+            "is it painful, or does food feel like it's getting stuck?"
+        )
+        description = self.get_user_input()
+        self.symptoms['swallowing']['details']['description'] = description
+        
+        self.display_message(
+            "What types of foods are you able to eat right now? "
+            "For example, are you eating soft foods, liquids, or regular foods?"
+        )
+        food_types = self.get_user_input()
+        self.symptoms['swallowing']['details']['food_types'] = food_types
+    
+    def assess_nutrition(self):
+        """Assess nutritional intake"""
+        self.current_topic = 'nutrition'
+        self.display_message(
+            "I'd like to ask about your eating and nutrition. "
+            "How has your appetite been lately?"
+        )
+        
+        appetite = self.get_user_input()
+        self.symptoms['nutrition'] = {'details': {'appetite': appetite}}
+        
+        self.display_message(
+            "Have you noticed any changes in your weight? "
+            "For example, have you lost or gained weight?"
+        )
+        weight = self.get_user_input()
+        self.symptoms['nutrition']['details']['weight_changes'] = weight
+        
+        # Check for concerning weight loss
+        if any(word in weight.lower() for word in ['lost', 'losing', 'dropped', 'down']):
+            self.display_message(
+                "I see. Do you happen to know approximately how much weight you've lost?"
+            )
+            amount = self.get_user_input()
+            self.symptoms['nutrition']['details']['weight_amount'] = amount
+    
+    def assess_mood(self):
+        """Assess emotional wellbeing"""
+        self.current_topic = 'mood'
+        self.display_message(
+            "I want to check in on how you're doing emotionally. "
+            "Treatment can be challenging, and it's normal to have ups and downs. "
+            "How would you describe your mood lately?"
+        )
+        
+        mood = self.get_user_input().lower()
+        self.symptoms['mood'] = {'details': {'description': mood}}
+        
+        # Check for concerning responses
+        if any(word in mood for word in ['worried', 'anxious', 'depressed', 'sad', 'scared', 'down', 'hopeless']):
+            self.display_message(
+                "Thank you for sharing that with me. Many patients feel this way, "
+                "and your care team wants to support you. "
+                "Are you experiencing any trouble sleeping?"
+            )
+            sleep = self.get_user_input()
+            self.symptoms['mood']['details']['sleep'] = sleep
+            
+            self.display_message(
+                "Your doctor will want to discuss ways to help you feel better. "
+                "You're not alone in this."
+            )
+    
+    def generate_report(self) -> str:
+        """Generate a clinical report from collected information"""
+        report = []
+        report.append("=" * 60)
+        report.append("CHATREPORT SYMPTOM SUMMARY")
+        report.append("=" * 60)
+        report.append(f"Patient Name: {self.patient_name}")
+        report.append(f"Report Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+        report.append("=" * 60)
+        report.append("")
+        
+        # Pain
+        if self.symptoms.get('pain', {}).get('present'):
+            report.append("🔴 PAIN - PRESENT")
+            details = self.symptoms['pain']['details']
+            report.append(f"  Location: {details.get('location', 'Not specified')}")
+            report.append(f"  Severity: {details.get('severity', 'Not specified')}/10")
+            report.append(f"  Frequency: {details.get('frequency', 'Not specified')}")
+            report.append(f"  Management: {details.get('management', 'Not specified')}")
         else:
-            chosen = ", ".join(st.session_state.selected_parts)
-            add_user(f"Pain at: {chosen}")
-            add_bot("Thanks — how severe is the pain from 0 to 10?")
-            st.session_state.selected_parts = []
-            st.session_state.stage = 3
-            st.rerun()
+            report.append("✅ PAIN - Not reported")
+        report.append("")
+        
+        # Mouth symptoms
+        if self.symptoms.get('mouth', {}).get('present'):
+            report.append("🔴 MOUTH SYMPTOMS - PRESENT")
+            details = self.symptoms['mouth']['details']
+            report.append(f"  Description: {details.get('description', 'Not specified')}")
+            report.append(f"  Severity: {details.get('severity', 'Not specified')}")
+        else:
+            report.append("✅ MOUTH SYMPTOMS - Not reported")
+        report.append("")
+        
+        # Swallowing
+        if self.symptoms.get('swallowing', {}).get('present'):
+            report.append("🔴 SWALLOWING DIFFICULTY - PRESENT")
+            details = self.symptoms['swallowing']['details']
+            report.append(f"  Description: {details.get('description', 'Not specified')}")
+            report.append(f"  Food Types: {details.get('food_types', 'Not specified')}")
+        else:
+            report.append("✅ SWALLOWING - No difficulties reported")
+        report.append("")
+        
+        # Nutrition
+        if 'nutrition' in self.symptoms:
+            report.append("📊 NUTRITION STATUS")
+            details = self.symptoms['nutrition']['details']
+            report.append(f"  Appetite: {details.get('appetite', 'Not specified')}")
+            report.append(f"  Weight Changes: {details.get('weight_changes', 'Not specified')}")
+            if 'weight_amount' in details:
+                report.append(f"  Amount: {details['weight_amount']}")
+        report.append("")
+        
+        # Mood
+        if 'mood' in self.symptoms:
+            report.append("💭 EMOTIONAL WELLBEING")
+            details = self.symptoms['mood']['details']
+            report.append(f"  Mood: {details.get('description', 'Not specified')}")
+            if 'sleep' in details:
+                report.append(f"  Sleep: {details['sleep']}")
+        
+        report.append("")
+        report.append("=" * 60)
+        report.append("END OF REPORT")
+        report.append("=" * 60)
+        
+        return "\n".join(report)
+    
+    def closing(self):
+        """Closing message"""
+        self.display_message(
+            f"Thank you so much for taking the time to share this information with me, {self.patient_name}. "
+        )
+        time.sleep(0.5)
+        self.display_message(
+            "I've created a summary report that your doctor will review before your appointment. "
+            "This will help them better understand how you've been doing."
+        )
+        time.sleep(0.5)
+        self.display_message(
+            "Is there anything else you'd like to add that we haven't covered?"
+        )
+        
+        additional = self.get_user_input()
+        
+        if additional and additional.lower() not in ['no', 'nope', 'nothing', 'no thanks']:
+            self.symptoms['additional_notes'] = additional
+            self.display_message(
+                "Thank you for sharing that. I've added it to your report."
+            )
+        
+        self.display_message(
+            "Take care, and we'll see you at your upcoming appointment!"
+        )
+    
+    def run(self):
+        """Main conversation flow"""
+        print("\n" + "="*60)
+        print("  CHATREPORT - Symptom Reporting System")
+        print("  Fox Chase Cancer Center")
+        print("="*60)
+        
+        time.sleep(1)
+        
+        try:
+            # Greeting
+            self.greeting()
+            time.sleep(1)
+            
+            # Symptom assessments
+            self.assess_pain()
+            time.sleep(1)
+            
+            self.assess_mouth_symptoms()
+            time.sleep(1)
+            
+            self.assess_swallowing()
+            time.sleep(1)
+            
+            self.assess_nutrition()
+            time.sleep(1)
+            
+            self.assess_mood()
+            time.sleep(1)
+            
+            # Closing
+            self.closing()
+            
+            # Generate and display report
+            print("\n\n")
+            print(self.generate_report())
+            
+        except KeyboardInterrupt:
+            print("\n\nChat ended by user.")
+        except Exception as e:
+            print(f"\n\nAn error occurred: {e}")
 
-# Stage 3: symptoms
-elif st.session_state.stage == 3:
-    symptoms = st.multiselect(
-        "Select symptoms",
-        ["Fatigue", "Nausea", "Fever", "Shortness of Breath", "None"]
-    )
-    if st.button("Submit Symptoms"):
-        add_user("Symptoms: " + (", ".join(symptoms) if symptoms else "None selected"))
-        add_bot("Anything else you'd like your care team to know?")
-        st.session_state.stage = 4
-        st.rerun()
 
-# Stage 4: free text wrap-up
-elif st.session_state.stage == 4:
-    user_text = st.chat_input("Type message...")
-    if user_text:
-        add_user(user_text)
-        time.sleep(0.25)
-        add_bot("Thank you. Your check-in is complete.")
-        st.session_state.stage = 5
-        st.rerun()
+def main():
+    """Run the ChatReport demo"""
+    chatbot = ChatReport()
+    chatbot.run()
 
-# Stage 5: end
-elif st.session_state.stage == 5:
-    st.success("Demo complete.")
-    if st.button("Restart demo"):
-        st.session_state.messages = []
-        st.session_state.stage = 0
-        st.session_state.selected_parts = []
-        st.query_params.clear()
-        st.rerun()
+
+if __name__ == "__main__":
+    main()
