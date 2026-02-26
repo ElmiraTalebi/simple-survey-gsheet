@@ -1,6 +1,32 @@
 import streamlit as st
 from typing import Dict, List, Set
 import random
+import gspread
+from google.oauth2.service_account import Credentials
+from datetime import datetime
+import json
+
+# ============================================================
+# GOOGLE SHEETS SETUP
+# ============================================================
+SCOPE = ["https://www.googleapis.com/auth/spreadsheets"]
+creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
+client = gspread.authorize(creds)
+sheet = client.open_by_key(st.secrets["gsheet_id"]).worksheet("Form")
+
+def save_to_sheet():
+    """Save patient name, timestamp, and full chat as a dict to Google Sheets."""
+    chat_dict = {
+        "feeling_level": st.session_state.feeling_level,
+        "pain": st.session_state.pain_yesno,
+        "pain_locations": sorted(list(st.session_state.selected_parts)),
+        "symptoms": st.session_state.symptoms,
+        "conversation": st.session_state.messages,
+    }
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    name = st.session_state.get("patient_name", "Unknown")
+    sheet.append_row([timestamp, name, json.dumps(chat_dict)])
+
 # ============================================================
 # PAGE CONFIG
 # ============================================================
@@ -126,7 +152,10 @@ if "messages" not in st.session_state:
     st.session_state.messages: List[Dict[str, str]] = []
 
 if "stage" not in st.session_state:
-    st.session_state.stage = 0  # 0..4
+    st.session_state.stage = -1  # -1 = name entry, 0..4 = main stages
+
+if "patient_name" not in st.session_state:
+    st.session_state.patient_name = ""
 
 if "selected_parts" not in st.session_state:
     st.session_state.selected_parts: Set[str] = set()
@@ -139,6 +168,9 @@ if "feeling_level" not in st.session_state:
 
 if "symptoms" not in st.session_state:
     st.session_state.symptoms: List[str] = []
+
+if "submitted" not in st.session_state:
+    st.session_state.submitted = False
 
 # ============================================================
 # HELPERS
@@ -153,7 +185,7 @@ def ensure_stage_prompt() -> None:
     """Make sure the doctor has asked the current stage question (once)."""
     stage = st.session_state.stage
     if len(st.session_state.messages) == 0:
-        add_doctor("Hi — I’m your virtual doctor check-in assistant. Let’s do a quick symptom check-in.")
+        add_doctor(f"Hi {st.session_state.patient_name} — I'm your virtual doctor check-in assistant. Let's do a quick symptom check-in.")
         return
 
     # If last message is already a doctor prompt for the stage, do nothing.
@@ -268,9 +300,30 @@ def body_svg(selected: Set[str]) -> str:
 """.strip()
 
 # ============================================================
-# HEADER + ENSURE PROMPT
+# HEADER
 # ============================================================
 st.markdown('<div class="chat-shell"><div class="header">🩺 Cancer Symptom Check-In </div>', unsafe_allow_html=True)
+
+# ============================================================
+# STAGE -1 — Patient name entry (before chat starts)
+# ============================================================
+if st.session_state.stage == -1:
+    st.markdown('<div class="panel"><div class="panel-title">Welcome · Please enter your name</div>', unsafe_allow_html=True)
+    name_input = st.text_input("Your name:", value=st.session_state.patient_name)
+    if st.button("Start Check-In"):
+        if name_input.strip():
+            st.session_state.patient_name = name_input.strip()
+            st.session_state.stage = 0
+            ensure_stage_prompt()
+            st.rerun()
+        else:
+            st.warning("Please enter your name to continue.")
+    st.markdown("</div>", unsafe_allow_html=True)
+    st.stop()
+
+# ============================================================
+# ENSURE PROMPT FOR CURRENT STAGE
+# ============================================================
 ensure_stage_prompt()
 
 # ============================================================
@@ -336,10 +389,10 @@ elif stage == 1:
     with c2:
         if st.button("No pain"):
             st.session_state.pain_yesno = False
-            add_patient("No, I don’t have pain today.")
+            add_patient("No, I don't have pain today.")
             # If no pain, we can skip body selector but still keep the stage flow
             # We still proceed to symptom checklist (stage 3) per your requested stages.
-            add_doctor("Okay — we’ll skip the body pain map.")
+            add_doctor("Okay — we'll skip the body pain map.")
             st.session_state.stage = 3
             ensure_stage_prompt()
             st.rerun()
@@ -386,7 +439,7 @@ elif stage == 2:
             if st.session_state.selected_parts:
                 add_patient("Pain locations: " + ", ".join(sorted(st.session_state.selected_parts)) + ".")
             else:
-                add_patient("I’m not sure / I didn’t select a specific location.")
+                add_patient("I'm not sure / I didn't select a specific location.")
             st.session_state.stage = 3
             ensure_stage_prompt()
             st.rerun()
@@ -431,23 +484,35 @@ elif stage == 3:
 # Stage 4 — free text chat input
 # -------------------------------
 elif stage == 4:
-    st.markdown(
-        '<div class="panel"><div class="panel-title">Stage 4 · Free text</div>'
-        '<div class="small-note">Type anything else you want your care team to know. (Prototype: simulated reply.)</div></div>',
-        unsafe_allow_html=True
-    )
+    if st.session_state.submitted:
+        st.success("✅ Your check-in has been submitted. Thank you!")
+    else:
+        st.markdown(
+            '<div class="panel"><div class="panel-title">Stage 4 · Free text</div>'
+            '<div class="small-note">Type anything else you want your care team to know. When done, click Submit.</div></div>',
+            unsafe_allow_html=True
+        )
 
-    # Use Streamlit chat input for a messenger-like feel
-    user_text = st.chat_input("Type your message…")
+        # Use Streamlit chat input for a messenger-like feel
+        user_text = st.chat_input("Type your message…")
 
-    if user_text:
-        add_patient(user_text)
+        if user_text:
+            add_patient(user_text)
 
-        # Local simulated response (NO API calls)
-        canned = [
-            "Thanks — I’ve recorded that. If symptoms worsen, consider contacting your care team.",
-            "Got it. I’m logging this for your check-in summary.",
-            "Thank you for sharing. Is there anything else you want to mention?",
-        ]
-        add_doctor(random.choice(canned))
-        st.rerun()
+            # Local simulated response (NO API calls)
+            canned = [
+                "Thanks — I've recorded that. If symptoms worsen, consider contacting your care team.",
+                "Got it. I'm logging this for your check-in summary.",
+                "Thank you for sharing. Is there anything else you want to mention?",
+            ]
+            add_doctor(random.choice(canned))
+            st.rerun()
+
+        # Submit button — saves everything to Google Sheets
+        if st.button("✅ Submit Check-In"):
+            try:
+                save_to_sheet()
+                st.session_state.submitted = True
+                st.rerun()
+            except Exception as e:
+                st.error(f"Failed to save to Google Sheets: {e}")
