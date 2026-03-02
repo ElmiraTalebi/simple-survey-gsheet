@@ -295,6 +295,44 @@ st.markdown("""
     padding: 18px !important;
     border-radius: 14px !important;
 }
+
+/* Animated GPT follow-up box that appears after widget submission */
+@keyframes followup-in {
+    0%   { opacity: 0; transform: translateY(12px) scale(0.97); }
+    60%  { opacity: 1; transform: translateY(-3px) scale(1.01); }
+    100% { opacity: 1; transform: translateY(0)    scale(1);    }
+}
+.followup-box {
+    margin-top: 16px;
+    padding: 14px 18px;
+    border-radius: 18px;
+    background: linear-gradient(135deg, #f0f7ff, #e8f0fe);
+    border: 1.5px solid rgba(31, 122, 255, 0.18);
+    box-shadow: 0 4px 18px rgba(31, 122, 255, 0.10);
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    animation: followup-in 0.45s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+.followup-avatar {
+    font-size: 22px;
+    flex: 0 0 auto;
+    margin-top: 2px;
+}
+.followup-text {
+    font-size: 15px;
+    line-height: 1.55;
+    color: #1a2540;
+    white-space: pre-wrap;
+}
+.followup-label {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: rgba(31, 122, 255, 0.6);
+    margin-bottom: 4px;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -313,6 +351,8 @@ defaults = {
     "past_checkins": [],
     "gpt_followup_done": set(),  # ensures each stage only fires one GPT follow-up
     "last_audio_hash": None,     # prevents double-processing voice recordings
+    "pending_followup": False,   # True when GPT reply is ready to show as animated box
+    "pending_followup_text": "", # the GPT reply text waiting to be shown
 }
 for k, v in defaults.items():
     if k not in st.session_state:
@@ -328,12 +368,46 @@ def add_patient(text: str) -> None:
     st.session_state.messages.append({"role": "patient", "content": text})
 
 def gpt_followup(stage_key: str) -> None:
-    """Fire a GPT follow-up after a structured widget is submitted (once per stage)."""
+    """
+    Fire a GPT follow-up after a structured widget is submitted (once per stage).
+    Instead of immediately adding to the chat history, we store the reply as
+    'pending' so it can be shown AFTER the next widget renders — as an animated
+    box below the questionnaire, not above it.
+    """
     if stage_key in st.session_state.gpt_followup_done:
         return
     st.session_state.gpt_followup_done.add(stage_key)
     reply = get_gpt_reply()
-    add_doctor(reply)
+    # Store as pending — will be rendered as animated box below the widget panel
+    st.session_state.pending_followup = True
+    st.session_state.pending_followup_text = reply
+
+def flush_pending_followup() -> None:
+    """
+    Move a pending GPT follow-up into the real message history.
+    Called when the patient interacts (types, speaks, or submits next widget),
+    so the reply becomes part of the permanent chat record.
+    """
+    if st.session_state.pending_followup and st.session_state.pending_followup_text:
+        add_doctor(st.session_state.pending_followup_text)
+        st.session_state.pending_followup = False
+        st.session_state.pending_followup_text = ""
+
+def render_followup_box() -> None:
+    """
+    Render the pending GPT follow-up as a cute animated box below the widget panel.
+    This shows AFTER the questionnaire, not before — which is the desired UX.
+    """
+    if st.session_state.pending_followup and st.session_state.pending_followup_text:
+        text = st.session_state.pending_followup_text.replace('"', '&quot;').replace('<', '&lt;').replace('>', '&gt;')
+        st.markdown(f"""
+<div class="followup-box">
+  <div class="followup-avatar">🩺</div>
+  <div>
+    <div class="followup-label">Assistant</div>
+    <div class="followup-text">{text}</div>
+  </div>
+</div>""", unsafe_allow_html=True)
 
 def toggle_body_part(part: str) -> None:
     if part in st.session_state.selected_parts:
@@ -476,6 +550,7 @@ if not st.session_state.submitted:
 
     # Typed text
     if user_text:
+        flush_pending_followup()  # move GPT box into chat history first
         add_patient(user_text)
         with st.spinner("Assistant is thinking…"):
             reply = get_gpt_reply()
@@ -498,6 +573,7 @@ if not st.session_state.submitted:
 
             if transcribed and not transcribed.startswith("(Transcription failed"):
                 st.info(f'🎙️ Heard: "{transcribed}"')
+                flush_pending_followup()  # move GPT box into chat history first
                 add_patient(transcribed)
                 with st.spinner("Assistant is thinking…"):
                     reply = get_gpt_reply()
@@ -527,6 +603,7 @@ if stage == 0:
     )
 
     if st.button("Send feeling level ➜", use_container_width=True):
+        flush_pending_followup()
         add_patient(f"My feeling level today is {st.session_state.feeling_level}/10.")
         st.session_state.stage = 1
         with st.spinner("Assistant is thinking…"):
@@ -534,6 +611,7 @@ if stage == 0:
         st.rerun()
 
     st.markdown("</div>", unsafe_allow_html=True)
+    render_followup_box()
 
 # Stage 1 — Pain yes/no
 elif stage == 1:
@@ -541,6 +619,7 @@ elif stage == 1:
     c1, c2 = st.columns(2)
     with c1:
         if st.button("✅ Yes, I have pain"):
+            flush_pending_followup()
             st.session_state.pain_yesno = True
             add_patient("Yes, I have pain today.")
             st.session_state.stage = 2
@@ -549,6 +628,7 @@ elif stage == 1:
             st.rerun()
     with c2:
         if st.button("🙂 No pain today"):
+            flush_pending_followup()
             st.session_state.pain_yesno = False
             add_patient("No, I don't have any pain today.")
             st.session_state.stage = 3
@@ -556,6 +636,7 @@ elif stage == 1:
                 gpt_followup("stage1_no")
             st.rerun()
     st.markdown("</div>", unsafe_allow_html=True)
+    render_followup_box()
 
 # Stage 2 — Body pain map
 elif stage == 2:
@@ -584,6 +665,7 @@ elif stage == 2:
             st.rerun()
     with cB:
         if st.button("Send pain locations ➜"):
+            flush_pending_followup()
             if st.session_state.selected_parts:
                 add_patient("Pain locations: " + ", ".join(sorted(st.session_state.selected_parts)) + ".")
             else:
@@ -593,6 +675,7 @@ elif stage == 2:
                 gpt_followup("stage2")
             st.rerun()
     st.markdown("</div>", unsafe_allow_html=True)
+    render_followup_box()
     
 # Stage 3 — Symptom checklist (large clickable rows)
 elif stage == 3:
@@ -627,6 +710,7 @@ elif stage == 3:
             st.rerun()
 
     if st.button("Send symptoms ➜", use_container_width=True):
+        flush_pending_followup()
         if st.session_state.symptoms:
             add_patient("Symptoms today: " + "; ".join(st.session_state.symptoms) + ".")
         else:
@@ -637,6 +721,7 @@ elif stage == 3:
         st.rerun()
 
     st.markdown("</div>", unsafe_allow_html=True)
+    render_followup_box()
 
 
 # Stage 4 — Free chat + submit
@@ -651,7 +736,9 @@ elif stage == 4:
             "</div>",
             unsafe_allow_html=True,
         )
+        render_followup_box()
         if st.button("✅ Submit Check-In"):
+            flush_pending_followup()
             try:
                 save_to_sheet()
                 st.session_state.submitted = True
