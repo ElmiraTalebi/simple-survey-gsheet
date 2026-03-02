@@ -123,7 +123,7 @@ st.markdown("""
 }
 .progress-track { height:6px; background:#dce5f0; border-radius:99px; overflow:hidden; }
 .progress-fill {
-    height:100%; background:linear-gradient(90deg,#3b82f6,#06b6d4);
+    height:100%; background:linear-gradient(90deg, #3b82f6, #06b6d4);
     border-radius:99px; transition:width 0.4s ease;
 }
 .card {
@@ -146,7 +146,7 @@ st.markdown("""
 }
 /* greeting CTA */
 .big-btn .stButton > button {
-    background:linear-gradient(135deg,#3b82f6,#2563eb) !important; color:white !important;
+    background:linear-gradient(135deg, #3b82f6, #2563eb) !important; color:white !important;
     font-size:18px !important; padding:1rem 1.5rem !important; border-radius:16px !important;
     box-shadow:0 4px 16px rgba(59,130,246,0.35) !important;
 }
