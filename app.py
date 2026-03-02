@@ -5,7 +5,9 @@ import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime
 import json
-
+import streamlit as st
+from openai import OpenAI
+client_llm = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 # ============================================================
 # GOOGLE SHEETS SETUP
 # ============================================================
@@ -25,8 +27,15 @@ def save_to_sheet():
     }
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     name = st.session_state.get("patient_name", "Unknown")
-    sheet.append_row([timestamp, name, json.dumps(chat_dict)])
-
+    sheet.append_row([
+    timestamp,
+    name,
+    st.session_state.feeling_level,
+    str(st.session_state.pain_yesno),
+    ", ".join(st.session_state.selected_parts),
+    "; ".join(st.session_state.symptoms),
+    json.dumps(st.session_state.messages)
+])
 # ============================================================
 # PAGE CONFIG
 # ============================================================
@@ -175,6 +184,18 @@ if "submitted" not in st.session_state:
 # ============================================================
 # HELPERS
 # ============================================================
+def llm_response(user_text: str):
+
+    response = client_llm.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_text}
+        ],
+        temperature=0.2
+    )
+
+    return response.choices[0].message.content
 def extract_structured_data(text: str):
     text_lower = text.lower()
 
@@ -326,6 +347,23 @@ def body_svg(selected: Set[str]) -> str:
   </text>
 </svg>
 """.strip()
+
+# ============================================================
+SYSTEM_PROMPT = """
+You are a clinical symptom intake assistant.
+
+Rules:
+- Do NOT give medical advice.
+- Do NOT suggest treatments.
+- Only collect symptoms.
+- If asked for medical advice, respond:
+  "Please contact your healthcare provider for medical advice."
+- If severe emergency symptoms are described, instruct patient to seek urgent care.
+"""
+
+
+
+# ============================================================
 
 # ============================================================
 # HEADER
@@ -554,10 +592,8 @@ elif stage == 4:
         if user_text:
             add_patient(user_text)
 
-            # structured extraction
-            structured = extract_structured_data(user_text)
-
-            add_doctor("Thank you — I've recorded that information.")
+            reply = llm_response(user_text)
+            add_doctor(reply)
 
             st.session_state.submitted = True
             save_to_sheet()
