@@ -307,7 +307,7 @@ defaults = {
     "patient_name": "",
     "selected_parts": set(),
     "pain_yesno": None,
-    "feeling_level": 5,
+    "feeling_level": None,
     "symptoms": [],
     "submitted": False,
     "past_checkins": [],
