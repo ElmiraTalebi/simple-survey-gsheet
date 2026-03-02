@@ -175,6 +175,34 @@ if "submitted" not in st.session_state:
 # ============================================================
 # HELPERS
 # ============================================================
+def extract_structured_data(text: str):
+    text_lower = text.lower()
+
+    if "pain" in text_lower:
+        st.session_state.symptoms.append("Pain (free text)")
+
+    if "tired" in text_lower:
+        st.session_state.symptoms.append("Fatigue (free text)")
+
+    if "breath" in text_lower:
+        st.session_state.symptoms.append("Shortness of breath (free text)")
+
+    return True
+    
+def detect_red_flags():
+    red_flags = []
+
+    if "Shortness of breath" in st.session_state.symptoms:
+        red_flags.append("shortness of breath")
+
+    if "Fever / chills" in st.session_state.symptoms:
+        red_flags.append("fever")
+
+    if st.session_state.feeling_level <= 1:
+        red_flags.append("very low overall feeling")
+
+    return red_flags
+    
 def add_doctor(text: str) -> None:
     st.session_state.messages.append({"role": "doctor", "content": text})
 
@@ -364,13 +392,22 @@ stage = st.session_state.stage
 # Stage 0 — feeling slider
 # -------------------------------
 if stage == 0:
-    st.markdown('<div class="panel"><div class="panel-title">Stage 0 · Feeling level</div>', unsafe_allow_html=True)
-    st.session_state.feeling_level = st.slider("Feeling (0 = worst, 10 = best)", 0, 10, int(st.session_state.feeling_level))
-    if st.button("Send feeling level"):
-        add_patient(f"My feeling level is {st.session_state.feeling_level}/10.")
-        st.session_state.stage = 1
-        ensure_stage_prompt()
-        st.rerun()
+    st.markdown('<div class="panel"><div class="panel-title">Stage 0 · How are you feeling today?</div>', unsafe_allow_html=True)
+
+    cols = st.columns(5)
+
+    scale_labels = ["Very Bad", "Bad", "Okay", "Good", "Very Good"]
+    scale_values = [0, 2, 5, 8, 10]
+
+    for i in range(5):
+        with cols[i]:
+            if st.button(scale_labels[i]):
+                st.session_state.feeling_level = scale_values[i]
+                add_patient(f"I feel {scale_labels[i]} today ({scale_values[i]}/10).")
+                st.session_state.stage = 1
+                ensure_stage_prompt()
+                st.rerun()
+
     st.markdown("</div>", unsafe_allow_html=True)
 
 # -------------------------------
@@ -474,45 +511,55 @@ elif stage == 3:
             add_patient("Symptoms today: " + "; ".join(st.session_state.symptoms) + ".")
         else:
             add_patient("No significant symptoms from the checklist.")
+    
+        red_flags = detect_red_flags()
+    
+        if red_flags:
+            add_doctor("⚠️ Some of your symptoms may require urgent medical attention. Please contact your care team immediately or call emergency services if symptoms are severe.")
+    
         st.session_state.stage = 4
         ensure_stage_prompt()
         st.rerun()
-
-    st.markdown("</div>", unsafe_allow_html=True)
 
 # -------------------------------
 # Stage 4 — free text chat input
 # -------------------------------
 elif stage == 4:
-    if st.session_state.submitted:
-        st.success("✅ Your check-in has been submitted. Thank you!")
-    else:
-        st.markdown(
-            '<div class="panel"><div class="panel-title">Stage 4 · Free text</div>'
-            '<div class="small-note">Type anything else you want your care team to know. When done, click Submit.</div></div>',
-            unsafe_allow_html=True
-        )
 
-        # Use Streamlit chat input for a messenger-like feel
+    if "free_text_permission" not in st.session_state:
+        st.session_state.free_text_permission = None
+
+    st.markdown('<div class="panel"><div class="panel-title">Stage 4 · Anything else?</div>', unsafe_allow_html=True)
+
+    if st.session_state.free_text_permission is None:
+        c1, c2 = st.columns(2)
+
+        with c1:
+            if st.button("Yes, I want to add more"):
+                st.session_state.free_text_permission = True
+                st.rerun()
+
+        with c2:
+            if st.button("No, that's all"):
+                add_patient("No additional information.")
+                st.session_state.free_text_permission = False
+                st.session_state.submitted = True
+                save_to_sheet()
+                st.rerun()
+
+    elif st.session_state.free_text_permission:
+
         user_text = st.chat_input("Type your message…")
 
         if user_text:
             add_patient(user_text)
 
-            # Local simulated response (NO API calls)
-            canned = [
-                "Thanks — I've recorded that. If symptoms worsen, consider contacting your care team.",
-                "Got it. I'm logging this for your check-in summary.",
-                "Thank you for sharing. Is there anything else you want to mention?",
-            ]
-            add_doctor(random.choice(canned))
-            st.rerun()
+            # structured extraction
+            structured = extract_structured_data(user_text)
 
-        # Submit button — saves everything to Google Sheets
-        if st.button("✅ Submit Check-In"):
-            try:
-                save_to_sheet()
-                st.session_state.submitted = True
-                st.rerun()
-            except Exception as e:
-                st.error(f"Failed to save to Google Sheets: {e}")
+            add_doctor("Thank you — I've recorded that information.")
+
+            st.session_state.submitted = True
+            save_to_sheet()
+            st.rerun()
+            
