@@ -283,6 +283,18 @@ st.markdown("""
     backdrop-filter:blur(10px); border-top:1px solid rgba(200,210,230,0.55);
     padding-top:10px;
 }
+.stButton>button {
+    font-size: 18px !important;
+    padding: 16px 12px !important;
+    border-radius: 16px !important;
+    font-weight: 600 !important;
+}
+
+.scale-button button {
+    font-size: 20px !important;
+    padding: 18px !important;
+    border-radius: 14px !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -498,16 +510,29 @@ if not st.session_state.submitted:
 # STAGE PANELS — structured widgets sit below the chat
 # ============================================================
 
-# Stage 0 — Feeling slider
+# Stage 0 — Feeling scale (replaces slider with clickable boxes)
 if stage == 0:
     st.markdown('<div class="panel"><div class="panel-title">How are you feeling today?</div>', unsafe_allow_html=True)
-    st.session_state.feeling_level = st.slider("0 = worst, 10 = best", 0, 10, int(st.session_state.feeling_level))
-    if st.button("Send feeling level ➜"):
+    st.markdown("Tap a number from 0 (worst) to 10 (best):")
+
+    scale_cols = st.columns(11)
+    for i in range(11):
+        with scale_cols[i]:
+            if st.button(str(i), key=f"feeling_{i}", use_container_width=True):
+                st.session_state.feeling_level = i
+
+    st.markdown(
+        f"<div style='font-size:18px;margin-top:8px;'>Selected: <b>{st.session_state.feeling_level}/10</b></div>",
+        unsafe_allow_html=True
+    )
+
+    if st.button("Send feeling level ➜", use_container_width=True):
         add_patient(f"My feeling level today is {st.session_state.feeling_level}/10.")
         st.session_state.stage = 1
         with st.spinner("Assistant is thinking…"):
             gpt_followup("stage0")
         st.rerun()
+
     st.markdown("</div>", unsafe_allow_html=True)
 
 # Stage 1 — Pain yes/no
@@ -568,10 +593,11 @@ elif stage == 2:
                 gpt_followup("stage2")
             st.rerun()
     st.markdown("</div>", unsafe_allow_html=True)
-
-# Stage 3 — Symptom checklist
+    
+# Stage 3 — Symptom checklist (large clickable rows)
 elif stage == 3:
     st.markdown('<div class="panel"><div class="panel-title">Any of these symptoms today?</div>', unsafe_allow_html=True)
+
     symptom_options = [
         "Fatigue / low energy",
         "Nausea",
@@ -586,12 +612,21 @@ elif stage == 3:
         "Sleep problems",
         "Anxiety / low mood",
     ]
-    st.session_state.symptoms = st.multiselect(
-        "Select all that apply (leave empty if none):",
-        symptom_options,
-        default=st.session_state.symptoms,
-    )
-    if st.button("Send symptoms ➜"):
+
+    # Ensure list exists
+    if "symptoms" not in st.session_state:
+        st.session_state.symptoms = []
+
+    for symptom in symptom_options:
+        label = f"✓ {symptom}" if symptom in st.session_state.symptoms else symptom
+        if st.button(label, key=f"symptom_{symptom}", use_container_width=True):
+            if symptom in st.session_state.symptoms:
+                st.session_state.symptoms.remove(symptom)
+            else:
+                st.session_state.symptoms.append(symptom)
+            st.rerun()
+
+    if st.button("Send symptoms ➜", use_container_width=True):
         if st.session_state.symptoms:
             add_patient("Symptoms today: " + "; ".join(st.session_state.symptoms) + ".")
         else:
@@ -600,7 +635,9 @@ elif stage == 3:
         with st.spinner("Assistant is thinking…"):
             gpt_followup("stage3")
         st.rerun()
+
     st.markdown("</div>", unsafe_allow_html=True)
+
 
 # Stage 4 — Free chat + submit
 elif stage == 4:
