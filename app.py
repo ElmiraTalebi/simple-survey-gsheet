@@ -1,10 +1,10 @@
 import streamlit as st
 from typing import Dict, List, Set
-import random
 import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime
 import json
+from openai import OpenAI
 
 # ============================================================
 # GOOGLE SHEETS SETUP
@@ -26,6 +26,76 @@ def save_to_sheet():
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     name = st.session_state.get("patient_name", "Unknown")
     sheet.append_row([timestamp, name, json.dumps(chat_dict)])
+
+# ============================================================
+# OPENAI CLIENT SETUP
+# ============================================================
+openai_client = OpenAI(api_key=st.secrets["openai_api_key"])
+
+def build_system_prompt() -> str:
+    """
+    Build the GPT system prompt using the structured check-in data collected
+    in Stages 0–3, so the free-text conversation is fully informed and personalized.
+    As discussed in the meeting: constrain GPT to symptom intake only, give it
+    memory of the session, and forbid medical advice.
+    """
+    name = st.session_state.get("patient_name", "the patient")
+    feeling = st.session_state.feeling_level
+    pain = st.session_state.pain_yesno
+    locations = sorted(list(st.session_state.selected_parts))
+    symptoms = st.session_state.symptoms
+
+    pain_str = "reported pain" if pain else "no pain"
+    loc_str  = ", ".join(locations) if locations else "no specific locations selected"
+    sym_str  = ", ".join(symptoms)  if symptoms  else "none selected"
+
+    return f"""You are a virtual symptom-intake assistant for a cancer care clinic.
+Your ONLY job is to gather additional symptom information from the patient through natural, empathetic conversation.
+
+Today's structured check-in summary for {name}:
+- Feeling level: {feeling}/10
+- Pain: {pain_str}
+- Pain locations: {loc_str}
+- Symptoms checklist: {sym_str}
+
+Your rules (follow strictly):
+1. ONLY discuss symptoms, how the patient is feeling, and anything medically relevant to their check-in.
+2. Ask thoughtful follow-up questions based on what they've already reported above (e.g. if they reported nausea, ask how long it has lasted or how severe it is).
+3. If the patient asks for medical advice, diagnosis, or treatment recommendations, respond: "I'm not able to give medical advice — I'm here to help record how you're feeling so your care team can follow up."
+4. If the patient goes off-topic, gently redirect: "Let's stay focused on your check-in for today."
+5. Keep responses short, warm, and easy to read. No bullet lists unless summarizing.
+6. Do NOT diagnose, prescribe, or speculate about causes of symptoms.
+7. After a few exchanges, if nothing new is coming up, you may say something like: "It sounds like we have a good picture of how you're feeling today. Feel free to submit when you're ready."
+
+Remember: you are a data-collection assistant, not a doctor."""
+
+def get_gpt_reply() -> str:
+    """
+    Call the ChatGPT API with the full conversation history (memory),
+    as discussed in the meeting. The messages list is converted from the
+    app's internal format (role: doctor/patient) to OpenAI format (role: assistant/user).
+    Only Stage 4 messages are passed — structured check-in data is injected via system prompt.
+    """
+    # Convert app message format → OpenAI message format
+    # We only pass messages from Stage 4 onward to keep context focused.
+    openai_messages = [{"role": "system", "content": build_system_prompt()}]
+
+    for msg in st.session_state.messages:
+        if msg["role"] == "doctor":
+            openai_messages.append({"role": "assistant", "content": msg["content"]})
+        elif msg["role"] == "patient":
+            openai_messages.append({"role": "user", "content": msg["content"]})
+
+    try:
+        response = openai_client.chat.completions.create(
+            model="gpt-4o-mini",   # cost-effective; swap to "gpt-4o" for higher quality
+            messages=openai_messages,
+            max_tokens=300,
+            temperature=0.5,       # low temp = consistent, focused replies
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        return f"(Sorry, I couldn't connect right now. Please try again. Error: {e})"
 
 # ============================================================
 # PAGE CONFIG
@@ -131,7 +201,7 @@ st.markdown(
     padding: 0.55rem 0.9rem;
 }
 
-/* Sticky input feel (Streamlit chat_input sits at bottom already; we just style a bit) */
+/* Sticky input feel */
 [data-testid="stChatInput"]{
     position: sticky;
     bottom: 0;
@@ -140,10 +210,19 @@ st.markdown(
     border-top: 1px solid rgba(200,210,230,0.55);
     padding-top: 10px;
 }
+
+/* Spinner label */
+.gpt-thinking {
+    color: rgba(0,0,0,0.45);
+    font-size: 13px;
+    font-style: italic;
+    margin-top: 6px;
+}
 </style>
 """,
     unsafe_allow_html=True,
 )
+
 # ============================================================
 # SESSION STATE
 # ============================================================
@@ -187,8 +266,6 @@ def ensure_stage_prompt() -> None:
         add_doctor(f"Hi {st.session_state.patient_name} — I'm your virtual doctor check-in assistant. Let's do a quick symptom check-in.")
         return
 
-    # If last message is already a doctor prompt for the stage, do nothing.
-    # We use a simple marker check based on stage number and key phrasing.
     last_doc = None
     for m in reversed(st.session_state.messages):
         if m["role"] == "doctor":
@@ -222,10 +299,9 @@ def body_svg(selected: Set[str]) -> str:
     Regions highlight blue if selected.
     """
     def fill(part: str) -> str:
-        return "#1f7aff" if part in selected else "#cfd8e6"  # blue vs light gray
+        return "#1f7aff" if part in selected else "#cfd8e6"
 
     stroke = "#6b7a90"
-    # A clean, simple silhouette (not anatomically perfect, but clear + regioned)
     return f"""
 <svg width="320" height="520" viewBox="0 0 320 520" xmlns="http://www.w3.org/2000/svg">
   <defs>
@@ -290,7 +366,6 @@ def body_svg(selected: Set[str]) -> str:
           fill="{fill('Right Leg')}" stroke="{stroke}" stroke-width="2"/>
   </g>
 
-  <!-- Label line -->
   <text x="160" y="520" text-anchor="middle" font-size="12" fill="rgba(0,0,0,0.55)">
     Click buttons to toggle regions (highlights update live)
   </text>
@@ -303,7 +378,7 @@ def body_svg(selected: Set[str]) -> str:
 st.markdown('<div class="chat-shell"><div class="header">🩺 Cancer Symptom Check-In </div>', unsafe_allow_html=True)
 
 # ============================================================
-# STAGE -1 — Patient name entry (before chat starts)
+# STAGE -1 — Patient name entry
 # ============================================================
 if st.session_state.stage == -1:
     st.markdown('<div class="panel"><div class="panel-title">Welcome · Please enter your name</div>', unsafe_allow_html=True)
@@ -354,7 +429,7 @@ for msg in st.session_state.messages:
 st.markdown("</div></div>", unsafe_allow_html=True)
 
 # ============================================================
-# STAGE PANELS (step-based conversation)
+# STAGE PANELS
 # ============================================================
 stage = st.session_state.stage
 
@@ -370,7 +445,8 @@ if stage == 0:
         ensure_stage_prompt()
         st.rerun()
     st.markdown("</div>", unsafe_allow_html=True)
-    # -------------------------------
+
+# -------------------------------
 # Stage 1 — yes/no pain
 # -------------------------------
 elif stage == 1:
@@ -387,8 +463,6 @@ elif stage == 1:
         if st.button("No pain"):
             st.session_state.pain_yesno = False
             add_patient("No, I don't have pain today.")
-            # If no pain, we can skip body selector but still keep the stage flow
-            # We still proceed to symptom checklist (stage 3) per your requested stages.
             add_doctor("Okay — we'll skip the body pain map.")
             st.session_state.stage = 3
             ensure_stage_prompt()
@@ -404,12 +478,10 @@ elif stage == 2:
     left, right = st.columns([1.2, 1.0], vertical_alignment="top")
 
     with left:
-        # Visible SVG silhouette
         st.markdown(body_svg(st.session_state.selected_parts), unsafe_allow_html=True)
 
     with right:
         st.markdown("**Click to toggle regions** (multiple selections allowed):")
-        # Real Streamlit buttons + callbacks (no URL hacks, no query params)
         buttons = [
             "Head", "Chest", "Abdomen",
             "Left Arm", "Right Arm",
@@ -430,7 +502,6 @@ elif stage == 2:
         if st.button("Clear selections"):
             st.session_state.selected_parts = set()
             st.rerun()
-
     with cB:
         if st.button("Send selected pain locations"):
             if st.session_state.selected_parts:
@@ -444,7 +515,7 @@ elif stage == 2:
     st.markdown("</div>", unsafe_allow_html=True)
 
 # -------------------------------
-# Stage 3 — symptom checklist (multi-select)
+# Stage 3 — symptom checklist
 # -------------------------------
 elif stage == 3:
     st.markdown('<div class="panel"><div class="panel-title">Stage 3 · Symptom checklist</div>', unsafe_allow_html=True)
@@ -464,7 +535,9 @@ elif stage == 3:
         "Anxiety / low mood",
     ]
 
-    st.session_state.symptoms = st.multiselect("Select symptoms you have today:", symptom_options, default=st.session_state.symptoms)
+    st.session_state.symptoms = st.multiselect(
+        "Select symptoms you have today:", symptom_options, default=st.session_state.symptoms
+    )
 
     if st.button("Send symptoms"):
         if st.session_state.symptoms:
@@ -476,32 +549,33 @@ elif stage == 3:
         st.rerun()
 
     st.markdown("</div>", unsafe_allow_html=True)
-    # -------------------------------
-# Stage 4 — free text chat input
-# -------------------------------
+
+# ---------------------------------------------------------------
+# Stage 4 — GPT-powered free text chat
+# ---------------------------------------------------------------
 elif stage == 4:
     if st.session_state.submitted:
         st.success("✅ Your check-in has been submitted. Thank you!")
     else:
         st.markdown(
             '<div class="panel"><div class="panel-title">Stage 4 · Free text</div>'
-            '<div class="small-note">Type anything else you want your care team to know. When done, click Submit.</div></div>',
-            unsafe_allow_html=True
+            '<div class="small-note">Type anything else you want your care team to know. '
+            'The assistant will ask follow-up questions. When done, click Submit.</div></div>',
+            unsafe_allow_html=True,
         )
 
-        # Use Streamlit chat input for a messenger-like feel
         user_text = st.chat_input("Type your message…")
 
         if user_text:
+            # 1. Record patient message
             add_patient(user_text)
 
-            # Local simulated response (NO API calls)
-            canned = [
-                "Thanks — I've recorded that. If symptoms worsen, consider contacting your care team.",
-                "Got it. I'm logging this for your check-in summary.",
-                "Thank you for sharing. Is there anything else you want to mention?",
-            ]
-            add_doctor(random.choice(canned))
+            # 2. Call GPT with full conversation history as memory
+            with st.spinner("Assistant is thinking…"):
+                reply = get_gpt_reply()
+
+            # 3. Record GPT reply as doctor message
+            add_doctor(reply)
             st.rerun()
 
         # Submit button — saves everything to Google Sheets
