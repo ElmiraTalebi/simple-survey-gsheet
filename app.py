@@ -244,6 +244,13 @@ else:
 sheet = None
 sheets_init_error: Optional[str] = None
 
+
+def _require_secret(*keys: str):
+    value = _secret(*keys)
+    if value is None:
+        raise KeyError(f"Missing required secret. Tried: {', '.join(keys)}")
+    return value
+    
 def _init_sheets():
     global sheet, sheets_init_error
     if sheet is not None or sheets_init_error is not None:
