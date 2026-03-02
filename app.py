@@ -1,6 +1,5 @@
 import streamlit as st
-from typing import Dict, List, Set
-import random  # (still imported; you can remove if you no longer use it)
+from typing import Dict, List, Set, Any
 import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime
@@ -8,51 +7,118 @@ import json
 from openai import OpenAI
 
 # ============================================================
-# OPENAI / LLM SETUP
+# PAGE CONFIG (keep near top)
 # ============================================================
-# Make sure you have OPENAI_API_KEY in Streamlit secrets (local .streamlit/secrets.toml or Streamlit Cloud Secrets)
+st.set_page_config(page_title="Cancer Symptom Check-In", page_icon="🩺", layout="centered")
+
+# ============================================================
+# OPENAI / LLM SETUP  (API is the main chatbot in Stage 4)
+# ============================================================
+# Put OPENAI_API_KEY in Streamlit secrets:
+# - local: .streamlit/secrets.toml
+# - Streamlit Cloud: App -> Settings -> Secrets
 client_llm = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
 SYSTEM_PROMPT = """
-You are a clinical symptom intake assistant.
+You are a clinical symptom check-in assistant for cancer patients.
+Your ONLY job is to collect symptoms and report them clearly for the care team.
 
-Rules:
+Hard rules:
 - Do NOT give medical advice.
-- Do NOT suggest treatments.
-- Only collect symptoms and confirm what the patient reports.
-- If asked for medical advice, respond exactly:
+- Do NOT recommend medications, treatments, or diagnoses.
+- If the patient asks for advice/treatment/diagnosis, say exactly:
   "Please contact your healthcare provider for medical advice."
-- If severe emergency symptoms are described (trouble breathing, chest pain, heavy bleeding, fainting),
-  instruct the patient to seek emergency medical attention immediately.
-- Keep responses short (1-3 sentences).
+  Then immediately continue symptom intake with ONE short question.
+- Keep responses short (1–4 sentences).
+- Ask ONE intake question at a time.
+- Use simple language. Make it easy to answer.
+
+Emergency safety:
+If the patient reports any emergency symptom (e.g., trouble breathing, chest pain, heavy bleeding, fainting, confusion),
+tell them: "Please seek emergency medical attention immediately."
+Then ask a short safety question: "Are you currently safe?"
+
+Output format:
+You MUST return valid JSON only (no extra text), exactly with keys:
+{
+  "assistant_message": "...",
+  "extracted": {
+    "symptoms": ["..."],
+    "pain_locations": ["..."],
+    "severity_0_to_10": null or number,
+    "duration": "... or empty string",
+    "urgency": "none" | "monitor" | "urgent" | "emergency",
+    "red_flags": ["..."]
+  },
+  "summary_for_clinician": "1-3 short bullet-like sentences"
+}
+
+Notes:
+- symptoms should be short phrases (e.g. "nausea", "fatigue", "shortness of breath").
+- pain_locations should be among: Head, Chest, Abdomen, Left Arm, Right Arm, Left Leg, Right Leg, Other.
+- If you are unsure, set fields to empty lists / null / "monitor".
 """
 
-def llm_response(user_text: str) -> str:
-    """Get a safe constrained response from the LLM (with error handling)."""
+def build_api_messages() -> List[Dict[str, str]]:
+    """Convert our UI chat history into OpenAI chat messages (limit history for cost/speed)."""
+    msgs: List[Dict[str, str]] = [{"role": "system", "content": SYSTEM_PROMPT}]
+    recent = st.session_state.messages[-20:]  # last 20 bubbles
+
+    for m in recent:
+        if m["role"] == "doctor":
+            msgs.append({"role": "assistant", "content": m["content"]})
+        else:
+            msgs.append({"role": "user", "content": m["content"]})
+
+    return msgs
+
+def llm_turn() -> Dict[str, Any]:
+    """
+    Call the API for the next assistant turn.
+    Returns a parsed dict containing:
+      assistant_message, extracted{}, summary_for_clinician
+    """
     try:
         response = client_llm.chat.completions.create(
             model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_text},
-            ],
+            messages=build_api_messages(),
             temperature=0.2,
         )
-        return response.choices[0].message.content
+        raw = response.choices[0].message.content
+        data = json.loads(raw)  # must be JSON per prompt
+        return data
     except Exception:
-        # Fallback if API fails for any reason
-        return "Thanks — I recorded that. If you feel worse, please contact your care team."
+        # Safe fallback if API or JSON parsing fails
+        return {
+            "assistant_message": (
+                "Thanks — I recorded that. Please contact your healthcare provider for medical advice. "
+                "What symptom is bothering you most right now?"
+            ),
+            "extracted": {
+                "symptoms": [],
+                "pain_locations": [],
+                "severity_0_to_10": None,
+                "duration": "",
+                "urgency": "monitor",
+                "red_flags": []
+            },
+            "summary_for_clinician": ""
+        }
 
 # ============================================================
 # GOOGLE SHEETS SETUP
 # ============================================================
 SCOPE = ["https://www.googleapis.com/auth/spreadsheets"]
 creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
-client = gspread.authorize(creds)
-sheet = client.open_by_key(st.secrets["gsheet_id"]).worksheet("Form")
+gs_client = gspread.authorize(creds)
+sheet = gs_client.open_by_key(st.secrets["gsheet_id"]).worksheet("Form")
 
 def save_to_sheet():
-    """Save timestamp + name + structured fields + full conversation."""
+    """
+    Save timestamp + name + structured fields + API-extracted JSON + full conversation.
+    Recommended Google Sheet columns:
+    Timestamp | Name | Feeling | PainYesNo | PainLocations | ChecklistSymptoms | API_Structured | API_Summary | FullChat
+    """
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     name = st.session_state.get("patient_name", "Unknown")
 
@@ -63,13 +129,10 @@ def save_to_sheet():
         str(st.session_state.pain_yesno),
         ", ".join(sorted(st.session_state.selected_parts)),
         "; ".join(st.session_state.symptoms),
-        json.dumps(st.session_state.messages),
+        json.dumps(st.session_state.structured),  # API structured
+        st.session_state.structured.get("summary_for_clinician", ""),
+        json.dumps(st.session_state.messages),     # full chat
     ])
-
-# ============================================================
-# PAGE CONFIG
-# ============================================================
-st.set_page_config(page_title="Cancer Symptom Check-In", page_icon="🩺", layout="centered")
 
 # ============================================================
 # CSS — messenger look + soft medical background
@@ -77,24 +140,18 @@ st.set_page_config(page_title="Cancer Symptom Check-In", page_icon="🩺", layou
 st.markdown(
     """
 <style>
-/* Soft medical background */
 [data-testid="stAppViewContainer"]{
     background: linear-gradient(135deg,#eef4ff,#f6fbff);
 }
-
-/* Header */
 .header{
     font-size: 24px;
     font-weight: 700;
     margin: 8px 0 14px 0;
 }
-
-/* Chat window */
 .chat-shell{
     max-width: 840px;
     margin: 0 auto;
 }
-
 .chat-window{
     max-height: 62vh;
     overflow-y: auto;
@@ -104,12 +161,8 @@ st.markdown(
     border: 1px solid rgba(200,210,230,0.55);
     backdrop-filter: blur(10px);
 }
-
-/* Message rows */
 .row-left{ display:flex; justify-content:flex-start; align-items:flex-end; margin: 10px 0; gap: 10px; }
 .row-right{ display:flex; justify-content:flex-end; align-items:flex-end; margin: 10px 0; gap: 10px; }
-
-/* Avatars */
 .avatar{
     width: 36px;
     height: 36px;
@@ -123,8 +176,6 @@ st.markdown(
     font-size: 18px;
     flex: 0 0 auto;
 }
-
-/* Bubbles */
 .bubble-doc{
     background: #ffffff;
     border: 1px solid rgba(220,225,235,0.95);
@@ -133,7 +184,6 @@ st.markdown(
     max-width: 72%;
     box-shadow: 0 2px 10px rgba(0,0,0,0.05);
 }
-
 .bubble-pat{
     background: #1f7aff;
     color: white;
@@ -142,14 +192,11 @@ st.markdown(
     max-width: 72%;
     box-shadow: 0 2px 10px rgba(0,0,0,0.08);
 }
-
 .small-note{
     color: rgba(0,0,0,0.55);
     font-size: 12px;
     margin-top: 6px;
 }
-
-/* Stage panels */
 .panel{
     margin-top: 14px;
     padding: 14px;
@@ -158,19 +205,14 @@ st.markdown(
     border: 1px solid rgba(200,210,230,0.55);
     backdrop-filter: blur(10px);
 }
-
 .panel-title{
     font-weight: 700;
     margin-bottom: 10px;
 }
-
-/* Make default button spacing nicer */
 .stButton>button{
     border-radius: 14px;
     padding: 0.55rem 0.9rem;
 }
-
-/* Sticky input feel */
 [data-testid="stChatInput"]{
     position: sticky;
     bottom: 0;
@@ -211,43 +253,28 @@ if "symptoms" not in st.session_state:
 if "submitted" not in st.session_state:
     st.session_state.submitted = False
 
+# Used in Stage 4 gating (Yes/No)
 if "free_text_permission" not in st.session_state:
     st.session_state.free_text_permission = None
+
+# API-driven structured capture
+if "structured" not in st.session_state:
+    st.session_state.structured = {
+        "symptoms": [],
+        "pain_locations": [],
+        "severity_0_to_10": None,
+        "duration": "",
+        "urgency": "unknown",
+        "red_flags": [],
+        "summary_for_clinician": ""
+    }
+
+if "api_chat_started" not in st.session_state:
+    st.session_state.api_chat_started = False
 
 # ============================================================
 # HELPERS
 # ============================================================
-def extract_structured_data(text: str) -> None:
-    """Very simple keyword-based extraction from free text."""
-    t = text.lower()
-
-    def add_once(label: str) -> None:
-        if label not in st.session_state.symptoms:
-            st.session_state.symptoms.append(label)
-
-    if "pain" in t:
-        add_once("Pain (free text)")
-    if "tired" in t or "fatigue" in t:
-        add_once("Fatigue (free text)")
-    if "breath" in t or "short of breath" in t:
-        add_once("Shortness of breath (free text)")
-    if "fever" in t or "chills" in t:
-        add_once("Fever / chills (free text)")
-
-def detect_red_flags() -> List[str]:
-    """Check for urgent symptoms based on selected checklist + extracted free text."""
-    s = " ".join(st.session_state.symptoms).lower()
-    red_flags = []
-
-    if "shortness of breath" in s or "breath" in s:
-        red_flags.append("shortness of breath")
-    if "fever" in s or "chills" in s:
-        red_flags.append("fever/chills")
-    if st.session_state.feeling_level <= 1:
-        red_flags.append("very low overall feeling")
-
-    return red_flags
-
 def add_doctor(text: str) -> None:
     st.session_state.messages.append({"role": "doctor", "content": text})
 
@@ -259,7 +286,7 @@ def ensure_stage_prompt() -> None:
     stage = st.session_state.stage
     if len(st.session_state.messages) == 0:
         add_doctor(
-            f"Hi {st.session_state.patient_name} — I'm your virtual doctor check-in assistant. "
+            f"Hi {st.session_state.patient_name} — I'm your virtual check-in assistant. "
             "Let's do a quick symptom check-in."
         )
         return
@@ -271,11 +298,11 @@ def ensure_stage_prompt() -> None:
             break
 
     prompts = {
-        0: "How are you feeling today from 0 to 10?",
+        0: "How are you feeling today?",
         1: "Do you have any pain today?",
         2: "Please select where you feel pain on the body.",
         3: "Which symptoms are you experiencing today? (Select all that apply.)",
-        4: "Anything else you want to tell me in your own words?",
+        4: "Now you can chat with me so I can collect details for your care team.",
     }
 
     want = prompts.get(stage, None)
@@ -358,13 +385,52 @@ def body_svg(selected: Set[str]) -> str:
 </svg>
 """.strip()
 
+def merge_extracted(extracted: Dict[str, Any]) -> None:
+    """Merge model-extracted fields into our session state."""
+    if not extracted:
+        return
+
+    # symptoms
+    sym = extracted.get("symptoms", []) or []
+    for s in sym:
+        if s and s not in st.session_state.structured["symptoms"]:
+            st.session_state.structured["symptoms"].append(s)
+
+    # pain locations -> we also sync to selected_parts so your UI remains consistent
+    locs = extracted.get("pain_locations", []) or []
+    for loc in locs:
+        if loc:
+            st.session_state.structured["pain_locations"].append(loc) if loc not in st.session_state.structured["pain_locations"] else None
+            st.session_state.selected_parts.add(loc)
+
+    # severity + duration
+    sev = extracted.get("severity_0_to_10", None)
+    if isinstance(sev, (int, float)):
+        # clamp
+        sev = max(0, min(10, int(sev)))
+        st.session_state.structured["severity_0_to_10"] = sev
+
+    dur = extracted.get("duration", "")
+    if isinstance(dur, str) and dur.strip():
+        st.session_state.structured["duration"] = dur.strip()
+
+    # urgency + red flags
+    urg = extracted.get("urgency", "")
+    if urg in ["none", "monitor", "urgent", "emergency"]:
+        st.session_state.structured["urgency"] = urg
+
+    rfs = extracted.get("red_flags", []) or []
+    for rf in rfs:
+        if rf and rf not in st.session_state.structured["red_flags"]:
+            st.session_state.structured["red_flags"].append(rf)
+
 # ============================================================
 # HEADER
 # ============================================================
-st.markdown('<div class="chat-shell"><div class="header">🩺 Cancer Symptom Check-In </div>', unsafe_allow_html=True)
+st.markdown('<div class="chat-shell"><div class="header">🩺 Cancer Symptom Check-In</div>', unsafe_allow_html=True)
 
 # ============================================================
-# STAGE -1 — Patient name entry (before chat starts)
+# STAGE -1 — Patient name entry
 # ============================================================
 if st.session_state.stage == -1:
     st.markdown('<div class="panel"><div class="panel-title">Welcome · Please enter your name</div>', unsafe_allow_html=True)
@@ -476,7 +542,7 @@ elif stage == 2:
 
     with right:
         st.markdown("**Click to toggle regions** (multiple selections allowed):")
-        buttons = ["Head", "Chest", "Abdomen", "Left Arm", "Right Arm", "Left Leg", "Right Leg"]
+        buttons = ["Head", "Chest", "Abdomen", "Left Arm", "Right Arm", "Left Leg", "Right Leg", "Other"]
         for part in buttons:
             label = f"✓ {part}" if part in st.session_state.selected_parts else part
             if st.button(label, key=f"toggle_{part}"):
@@ -541,10 +607,6 @@ elif stage == 3:
         else:
             add_patient("No significant symptoms from the checklist.")
 
-        red_flags = detect_red_flags()
-        if red_flags:
-            add_doctor("⚠️ Some of your symptoms may require urgent medical attention. Please contact your care team immediately or call emergency services if symptoms are severe.")
-
         st.session_state.stage = 4
         ensure_stage_prompt()
         st.rerun()
@@ -552,7 +614,7 @@ elif stage == 3:
     st.markdown("</div>", unsafe_allow_html=True)
 
 # -------------------------------
-# Stage 4 — gated free text
+# Stage 4 — API is the main chatbot here
 # -------------------------------
 elif stage == 4:
 
@@ -560,44 +622,55 @@ elif stage == 4:
         st.success("✅ Your check-in has been submitted. Thank you!")
         st.stop()
 
-    st.markdown('<div class="panel"><div class="panel-title">Stage 4 · Anything else?</div>', unsafe_allow_html=True)
+    st.markdown('<div class="panel"><div class="panel-title">Stage 4 · Chat (symptom intake)</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="small-note">Describe how you feel. I will ask a few short questions and log your symptoms for your care team.</div></div>',
+        unsafe_allow_html=True
+    )
 
-    if st.session_state.free_text_permission is None:
-        c1, c2 = st.columns(2)
+    # Ask a first question once
+    if not st.session_state.api_chat_started:
+        st.session_state.api_chat_started = True
+        add_doctor("To start, what symptom is bothering you most right now?")
+        st.rerun()
 
-        with c1:
-            if st.button("Yes, I want to add more"):
-                st.session_state.free_text_permission = True
-                st.rerun()
+    # Patient types messages; EVERY patient message triggers an API reply
+    user_text = st.chat_input("Type your message…")
 
-        with c2:
-            if st.button("No, that's all"):
-                add_patient("No additional information.")
-                st.session_state.free_text_permission = False
+    if user_text:
+        add_patient(user_text)
 
-                save_to_sheet()
-                st.session_state.submitted = True
-                st.rerun()
+        # Call API to get the next assistant message + extracted fields
+        data = llm_turn()
 
-    elif st.session_state.free_text_permission:
+        assistant_message = data.get("assistant_message", "")
+        extracted = data.get("extracted", {}) or {}
+        summary = data.get("summary_for_clinician", "") or ""
 
-        user_text = st.chat_input("Type your message…")
+        if assistant_message:
+            add_doctor(assistant_message)
 
-        if user_text:
-            add_patient(user_text)
+        # Merge extracted structure into session_state.structured
+        merge_extracted(extracted)
 
-            # Simple local extraction
-            extract_structured_data(user_text)
+        # Save/refresh clinician summary
+        if summary.strip():
+            st.session_state.structured["summary_for_clinician"] = summary.strip()
 
-            # Red-flag warning (if needed)
-            red_flags = detect_red_flags()
-            if red_flags:
-                add_doctor("⚠️ Some of what you wrote may be urgent. Please contact your care team right away, or seek emergency help if severe.")
+        # Also show an on-screen warning if the model flags emergency
+        if st.session_state.structured.get("urgency") == "emergency":
+            st.error("⚠️ Emergency warning: Please seek emergency medical attention immediately.")
 
-            # LLM response (constrained)
-            reply = llm_response(user_text)
-            add_doctor(reply)
+        st.rerun()
 
-            save_to_sheet()
-            st.session_state.submitted = True
-            st.rerun()
+    # Optional: show a tiny “what we captured” panel (helpful for debugging; you can remove later)
+    with st.expander("What the assistant has captured so far (debug)"):
+        st.json(st.session_state.structured)
+
+    # Finish/submit
+    st.markdown('<div class="panel"><div class="panel-title">Finish</div>', unsafe_allow_html=True)
+    if st.button("✅ Submit Check-In"):
+        save_to_sheet()
+        st.session_state.submitted = True
+        st.rerun()
+    st.markdown("</div>", unsafe_allow_html=True)
