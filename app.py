@@ -4,37 +4,229 @@ from datetime import datetime
 from typing import Dict, List, Set, Optional
 
 import streamlit as st
-
-# Third-party
 import gspread
 from google.oauth2.service_account import Credentials
 from openai import OpenAI
 
 # ============================================================
-# STREAMLIT PAGE CONFIG (must be near top)
+# PAGE CONFIG
 # ============================================================
 st.set_page_config(page_title="Cancer Symptom Check-In", page_icon="🩺", layout="centered")
 
 # ============================================================
-# UTIL: Secrets helpers (robust across local + Streamlit Cloud)
+# SESSION STATE DEFAULTS
 # ============================================================
-def _secret(*keys: str, default=None):
-    """Return the first matching secret value among keys."""
+defaults = {
+    "messages": [],
+    "stage": -1,
+    "patient_name": "",
+    "selected_parts": set(),
+    "pain_yesno": None,
+    "feeling_level": 5,
+    "symptoms": [],
+    "submitted": False,
+    "past_checkins": [],
+    "gpt_followup_done": set(),
+    "last_audio_hash": None,
+    "interaction_mode": "Simple",
+    "mode_selected": False,
+}
+for k, v in defaults.items():
+    if k not in st.session_state:
+        st.session_state[k] = v
+
+# ============================================================
+# OPENAI SETUP
+# ============================================================
+def _secret(*keys, default=None):
     for k in keys:
         if k in st.secrets:
             return st.secrets[k]
     return default
 
-def _require_secret(*keys: str) -> str:
-    v = _secret(*keys)
-    if v is None:
-        raise KeyError(f"Missing required secret. Tried: {', '.join(keys)}")
-    return v
+OPENAI_API_KEY = _secret("openai_api_key", "OPENAI_API_KEY")
+openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
+
+def get_gpt_reply():
+    if not openai_client:
+        return "(LLM not configured.)"
+
+    messages = [{"role": "system", "content": "You are a warm symptom intake assistant. Ask one question at a time. No medical advice."}]
+    for m in st.session_state.messages[-20:]:
+        role = "assistant" if m["role"] == "doctor" else "user"
+        messages.append({"role": role, "content": m["content"]})
+
+    response = openai_client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=messages,
+        temperature=0.6,
+        max_tokens=250,
+    )
+    return response.choices[0].message.content.strip()
 
 # ============================================================
-# OPENAI CLIENT
+# HELPERS
 # ============================================================
-# Support multiple common secret key names (you used different ones across drafts).
+def add_doctor(text):
+    st.session_state.messages.append({"role": "doctor", "content": text})
+
+def add_patient(text):
+    st.session_state.messages.append({"role": "patient", "content": text})
+
+# ============================================================
+# HEADER
+# ============================================================
+st.title("🩺 Cancer Symptom Check-In")
+
+# ============================================================
+# NAME ENTRY
+# ============================================================
+if st.session_state.stage == -1:
+    name = st.text_input("Enter your name")
+    if st.button("Start Check-In"):
+        if name.strip():
+            st.session_state.patient_name = name.strip()
+            add_doctor(f"Hi {name}, let's begin today's check-in.")
+            st.session_state.stage = 0
+            st.rerun()
+        else:
+            st.warning("Please enter your name.")
+    st.stop()
+
+# ============================================================
+# ACCESSIBILITY MODE SELECTOR
+# ============================================================
+if st.session_state.stage == 0 and not st.session_state.mode_selected:
+    st.subheader("Choose Interaction Style")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        if st.button("🟦 Simple Click Mode"):
+            st.session_state.interaction_mode = "Simple"
+            st.session_state.mode_selected = True
+            st.rerun()
+
+    with col2:
+        if st.button("💬 Conversational Mode"):
+            st.session_state.interaction_mode = "Conversational"
+            st.session_state.mode_selected = True
+            st.rerun()
+
+    st.stop()
+
+# ============================================================
+# CHAT WINDOW
+# ============================================================
+for msg in st.session_state.messages:
+    if msg["role"] == "doctor":
+        st.markdown(f"**🩺 Assistant:** {msg['content']}")
+    else:
+        st.markdown(f"**🙂 You:** {msg['content']}")
+
+# ============================================================
+# STAGE 0 — FEELING LEVEL
+# ============================================================
+if st.session_state.stage == 0:
+
+    st.subheader("How are you feeling today?")
+
+    if st.session_state.interaction_mode == "Simple":
+        cols = st.columns(6)
+        for i in range(11):
+            if cols[i % 6].button(str(i), key=f"feel_{i}"):
+                st.session_state.feeling_level = i
+                add_patient(f"My feeling level is {i}/10.")
+                add_doctor(get_gpt_reply())
+                st.session_state.stage = 1
+                st.rerun()
+    else:
+        level = st.slider("0 = worst, 10 = best", 0, 10, st.session_state.feeling_level)
+        if st.button("Send"):
+            st.session_state.feeling_level = level
+            add_patient(f"My feeling level is {level}/10.")
+            add_doctor(get_gpt_reply())
+            st.session_state.stage = 1
+            st.rerun()
+
+# ============================================================
+# STAGE 1 — PAIN YES/NO
+# ============================================================
+elif st.session_state.stage == 1:
+
+    st.subheader("Do you have pain today?")
+    col1, col2 = st.columns(2)
+
+    if col1.button("Yes"):
+        add_patient("Yes, I have pain.")
+        add_doctor(get_gpt_reply())
+        st.session_state.stage = 2
+        st.rerun()
+
+    if col2.button("No"):
+        add_patient("No pain today.")
+        add_doctor(get_gpt_reply())
+        st.session_state.stage = 3
+        st.rerun()
+
+# ============================================================
+# STAGE 3 — SYMPTOMS
+# ============================================================
+elif st.session_state.stage == 3:
+
+    st.subheader("Any symptoms today?")
+
+    symptom_options = [
+        "Fatigue",
+        "Nausea",
+        "Vomiting",
+        "Shortness of breath",
+        "Fever",
+        "Sleep problems",
+        "Anxiety",
+    ]
+
+    if st.session_state.interaction_mode == "Simple":
+        for sym in symptom_options:
+            selected = sym in st.session_state.symptoms
+            label = f"✓ {sym}" if selected else sym
+            if st.button(label, key=f"sym_{sym}"):
+                if selected:
+                    st.session_state.symptoms.remove(sym)
+                else:
+                    st.session_state.symptoms.append(sym)
+                st.rerun()
+    else:
+        st.session_state.symptoms = st.multiselect(
+            "Select all that apply:",
+            symptom_options,
+            default=st.session_state.symptoms,
+        )
+
+    if st.button("Continue"):
+        if st.session_state.symptoms:
+            add_patient("Symptoms: " + ", ".join(st.session_state.symptoms))
+        else:
+            add_patient("No symptoms.")
+        add_doctor(get_gpt_reply())
+        st.session_state.stage = 4
+        st.rerun()
+
+# ============================================================
+# STAGE 4 — FREE CHAT (ONLY IN CONVERSATIONAL MODE)
+# ============================================================
+elif st.session_state.stage == 4:
+
+    if st.session_state.interaction_mode == "Conversational":
+        user_text = st.chat_input("Type your message...")
+        if user_text:
+            add_patient(user_text)
+            add_doctor(get_gpt_reply())
+            st.rerun()
+
+    if st.button("Submit Check-In"):
+        st.success("Check-in submitted. Thank you.")
+        st.session_state.submitted = True# Support multiple common secret key names (you used different ones across drafts).
 OPENAI_API_KEY = _secret("openai_api_key", "OPENAI_API_KEY", "openai_key")
 openai_client: Optional[OpenAI] = None
 openai_init_error: Optional[str] = None
