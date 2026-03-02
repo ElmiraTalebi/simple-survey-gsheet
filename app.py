@@ -158,6 +158,29 @@ def get_gpt_reply() -> str:
     except Exception as e:
         return f"(Sorry, I couldn't connect right now. Please try again. Error: {e})"
 
+def transcribe_audio(audio_bytes: bytes) -> str:
+    """
+    Two-step voice pipeline as discussed in transcript:
+      Step 1 — Send audio to OpenAI Whisper API for transcription.
+      Step 2 — Return transcribed text so it can be passed to GPT as a patient message.
+
+    Professor's exact words: 'we basically need two steps — we need to transcribe,
+    and then pass to our API. Which is not a big deal, but it adds a little bit of delay.'
+    Whisper handles accented speech, weak voices, and varied input well.
+    """
+    try:
+        import io
+        audio_file = io.BytesIO(audio_bytes)
+        audio_file.name = "recording.wav"   # Whisper requires a filename with extension
+        result = openai_client.audio.transcriptions.create(
+            model="whisper-1",
+            file=audio_file,
+            language="en",
+        )
+        return result.text.strip()
+    except Exception as e:
+        return f"(Transcription failed: {e})"
+
 # ============================================================
 # PAGE CONFIG
 # ============================================================
@@ -204,6 +227,14 @@ st.markdown("""
 }
 .panel-title{ font-weight:700; margin-bottom:10px; }
 .stButton>button{ border-radius:14px; padding:0.55rem 0.9rem; }
+/* Make the audio recorder widget compact and inline */
+[data-testid="stAudioInput"] {
+    margin-top: 0 !important;
+}
+[data-testid="stAudioInput"] > label {
+    font-size: 11px;
+    color: rgba(0,0,0,0.45);
+}
 [data-testid="stChatInput"]{
     position:sticky; bottom:0; background:rgba(255,255,255,0.6);
     backdrop-filter:blur(10px); border-top:1px solid rgba(200,210,230,0.55);
@@ -226,6 +257,7 @@ defaults = {
     "submitted": False,
     "past_checkins": [],
     "gpt_followup_done": set(),  # ensures each stage only fires one GPT follow-up
+    "last_audio_id": None,       # tracks last processed audio to avoid double-sending
 }
 for k, v in defaults.items():
     if k not in st.session_state:
@@ -353,19 +385,56 @@ st.markdown("</div>", unsafe_allow_html=True)
 stage = st.session_state.stage
 
 # ============================================================
-# PERSISTENT FREE-TEXT INPUT — available at every stage
-# The patient can reply to GPT follow-ups naturally at any point,
-# not just at the final stage. This is the "normal conversation"
-# that was discussed in the transcript.
+# INPUT AREA — Text OR Voice, available at every stage
+#
+# Two-step voice pipeline from transcript:
+#   1. Patient records audio via mic widget
+#   2. Audio → OpenAI Whisper API → transcribed text
+#   3. Transcribed text is sent as patient message → GPT replies
+#
+# The patient can also just type as before. Both modes work
+# at any stage — this is the "all kinds of ways to interact"
+# (type, click, slide, speak) that the professor described.
 # ============================================================
 if not st.session_state.submitted:
-    user_text = st.chat_input("Reply to the assistant or type anything…")
+
+    input_col, voice_col = st.columns([5, 1], vertical_alignment="bottom")
+
+    with input_col:
+        user_text = st.chat_input("Reply to the assistant or type anything…")
+
+    with voice_col:
+        # st.audio_input records from the browser microphone.
+        # Each new recording produces a new object with a unique identity,
+        # so we use id() to detect when a fresh recording arrives.
+        audio_value = st.audio_input("🎙️", key="mic_input")
+
+    # --- Handle typed text ---
     if user_text:
         add_patient(user_text)
         with st.spinner("Assistant is thinking…"):
             reply = get_gpt_reply()
         add_doctor(reply)
         st.rerun()
+
+    # --- Handle voice recording ---
+    # Only process if a new recording has arrived (avoid re-processing on reruns)
+    if audio_value is not None:
+        audio_id = id(audio_value)
+        if audio_id != st.session_state.last_audio_id:
+            st.session_state.last_audio_id = audio_id
+            with st.spinner("Transcribing your voice with Whisper…"):
+                transcribed = transcribe_audio(audio_value.getvalue())
+            if transcribed and not transcribed.startswith("(Transcription failed"):
+                # Show what was transcribed so the patient can see it was captured correctly
+                st.info(f"🎙️ Heard: *\"{transcribed}\"*")
+                add_patient(transcribed)
+                with st.spinner("Assistant is thinking…"):
+                    reply = get_gpt_reply()
+                add_doctor(reply)
+                st.rerun()
+            else:
+                st.warning(f"Could not transcribe audio. {transcribed} Please try again or type your message.")
 
 # ============================================================
 # STAGE PANELS — structured widgets sit below the chat
