@@ -11,9 +11,9 @@ from google.oauth2.service_account import Credentials
 from openai import OpenAI
 
 # ============================================================
-# STREAMLIT PAGE CONFIG
+# STREAMLIT PAGE CONFIG (must be near top)
 # ============================================================
-st.set_page_config(page_title="Cancer Symptom Check-In", page_icon="🩺", layout="wide")
+st.set_page_config(page_title="Cancer Symptom Check-In", page_icon="🩺", layout="centered")
 
 # ============================================================
 # UTIL: Secrets helpers (robust across local + Streamlit Cloud)
@@ -34,6 +34,7 @@ def _require_secret(*keys: str) -> str:
 # ============================================================
 # OPENAI CLIENT
 # ============================================================
+# Support multiple common secret key names (you used different ones across drafts).
 OPENAI_API_KEY = _secret("openai_api_key", "OPENAI_API_KEY", "openai_key")
 openai_client: Optional[OpenAI] = None
 openai_init_error: Optional[str] = None
@@ -46,7 +47,7 @@ else:
     openai_init_error = "OpenAI API key not found in Streamlit secrets."
 
 # ============================================================
-# GOOGLE SHEETS SETUP
+# GOOGLE SHEETS SETUP (robust + lazy error handling)
 # ============================================================
 sheet = None
 sheets_init_error: Optional[str] = None
@@ -67,6 +68,7 @@ def _init_sheets():
         try:
             sheet_local = book.worksheet("Form")
         except Exception:
+            # Create if missing (keeps app from crashing)
             sheet_local = book.add_worksheet(title="Form", rows=2000, cols=20)
             sheet_local.append_row(["timestamp", "name", "json"])  # header
 
@@ -89,7 +91,8 @@ def load_past_checkins(name: str) -> List[Dict]:
     try:
         all_rows = sheet.get_all_values()
         past: List[Dict] = []
-        for row in all_rows[1:]:
+        for row in all_rows[1:]:  # skip header row
+            # Expect [timestamp, name, json]
             if len(row) >= 3 and row[1].strip().lower() == name.strip().lower():
                 try:
                     data = json.loads(row[2])
@@ -119,58 +122,15 @@ def save_to_sheet() -> None:
     sheet.append_row([timestamp, name, json.dumps(chat_dict)])
 
 # ============================================================
-# STAGE HELPERS
-# ============================================================
-STAGE_TITLES = {
-    -1: "Welcome",
-    0: "Overall feeling",
-    1: "Pain today",
-    2: "Pain location",
-    3: "Symptoms",
-    4: "Final review",
-}
-
-def stage_key(stage: int) -> str:
-    return f"stage{stage}"
-
-def stage_focus_text(stage: int) -> str:
-    if stage == 0:
-        return "Focus on how the patient is feeling overall today."
-    if stage == 1:
-        return "Focus only on whether the patient has pain today and any brief clarification."
-    if stage == 2:
-        return "Focus only on where the pain is located and any brief clarification about that pain."
-    if stage == 3:
-        return "Focus only on the selected symptoms and one gentle follow-up if needed."
-    if stage == 4:
-        return "Wrap up, allow any final symptom-related detail, and help the patient finish the check-in."
-    return "Start the check-in warmly."
-
-def next_stage_after(current_stage: int) -> int:
-    if current_stage == 0:
-        return 1
-    if current_stage == 1:
-        return 2 if st.session_state.pain_yesno else 3
-    if current_stage == 2:
-        return 3
-    if current_stage == 3:
-        return 4
-    return 4
-
-def stage_answered(stage: int) -> bool:
-    return stage_key(stage) in st.session_state.answered_stages
-
-# ============================================================
 # PROMPTING
 # ============================================================
 def build_system_prompt() -> str:
     """
     Build the GPT system prompt.
-    The left side collects the structured answer for the current stage.
-    The right side is a brief follow-up conversation for the SAME stage.
+    Hybrid approach: widgets collect data, GPT reacts and asks 1 follow-up at a time.
+    Past sessions are injected as memory.
     """
     name = st.session_state.get("patient_name", "the patient")
-    current_stage = st.session_state.get("stage", -1)
 
     feeling = st.session_state.get("feeling_level", None)
     pain = st.session_state.get("pain_yesno", None)
@@ -205,20 +165,13 @@ def build_system_prompt() -> str:
     return f"""You are a warm, empathetic virtual symptom-intake assistant for a cancer care clinic.
 Your role is to conduct a brief, natural daily check-in with the patient: {name}.
 
-IMPORTANT UI CONTEXT:
-- The page is split into two sides.
-- The LEFT side contains the current structured questionnaire stage.
-- The RIGHT side is for your brief conversational follow-up.
-- Stay focused on the CURRENT stage only unless the patient clearly brings up another urgent symptom.
-
-CURRENT STAGE:
-- Stage number: {current_stage}
-- Stage name: {STAGE_TITLES.get(current_stage, "Unknown")}
-- Stage focus: {stage_focus_text(current_stage)}
+You are part of a HYBRID interface. The patient fills in structured widgets (a feeling slider, a
+body pain map, a symptom checklist), and YOU handle the conversational layer — reacting naturally
+to each widget submission and asking ONE thoughtful follow-up question at a time.
 
 This is a light daily check-in, not a deep formal survey.
 
-=== TODAY'S STRUCTURED DATA (collected so far) ===
+=== TODAY'S STRUCTURED DATA (collected so far via widgets) ===
 {session_str}
 
 === PATIENT HISTORY / MEMORY (past sessions) ===
@@ -226,28 +179,30 @@ This is a light daily check-in, not a deep formal survey.
 
 === YOUR RULES ===
 1. Be warm, natural, and conversational. Short sentences.
-2. After a structured answer is submitted, ask ONE focused follow-up question for the current stage.
-3. Keep follow-up brief so the patient can move to the next page.
-4. Use memory when helpful, especially for recurring issues.
-5. If the patient goes off-topic, redirect gently back to symptoms.
-6. NEVER give medical advice, diagnoses, medication suggestions, or treatment guidance.
+2. React to new widget submissions and ask ONE focused follow-up question.
+3. Use memory to follow up on recurring issues.
+4. If the patient goes off-topic, redirect gently back to symptoms.
+5. NEVER give medical advice, diagnoses, medication suggestions, or treatment guidance.
    If asked, say: "I'm not able to give medical advice — I'm here so your care team can follow up with you."
-7. Ask ONE question at a time. Do not list multiple questions.
-8. When the patient seems done for this stage, you may say they can continue to the next question.
-9. In stage 4, once complete, say: "It sounds like we have a good picture of how you're doing today. Feel free to hit Submit when you're ready."
+6. Ask ONE question at a time. Do not list multiple questions.
+7. When complete, say: "It sounds like we have a good picture of how you're doing today. Feel free to hit Submit when you're ready."
 """
 
 def _openai_ready() -> bool:
     return (openai_client is not None) and (openai_init_error is None)
 
 def get_gpt_reply() -> str:
-    """Call the GPT API with the conversation history."""
+    """
+    Call the GPT API with the conversation history.
+    - Limits message history to reduce prompt bloat.
+    """
     if not _openai_ready():
         return "(LLM is not configured right now. Please check app secrets for an OpenAI API key.)"
 
+    # Build messages with truncation (keep last N turns)
     openai_messages = [{"role": "system", "content": build_system_prompt()}]
 
-    history = st.session_state.messages[-20:]
+    history = st.session_state.messages[-20:]  # last 20 bubbles is enough for this app
     for msg in history:
         if msg.get("role") == "doctor":
             openai_messages.append({"role": "assistant", "content": msg.get("content", "")})
@@ -290,159 +245,43 @@ st.markdown("""
 [data-testid="stAppViewContainer"]{
     background: linear-gradient(135deg,#eef4ff,#f6fbff);
 }
-.block-container{
-    padding-top: 1.2rem;
-    padding-bottom: 1rem;
-    max-width: 1500px;
-}
-.header{
-    font-size: 28px;
-    font-weight: 700;
-    margin: 0 0 12px 0;
-}
-.subheader{
-    color: rgba(0,0,0,0.6);
-    margin-bottom: 18px;
-    font-size: 15px;
-}
-.top-shell{
-    max-width: 1400px;
-    margin: 0 auto;
-}
-.stage-badge{
-    display: inline-block;
-    background: #eaf2ff;
-    color: #1f4fa3;
-    padding: 6px 12px;
-    border-radius: 999px;
-    font-size: 13px;
-    font-weight: 700;
-    margin-bottom: 10px;
-}
-.panel{
-    background: rgba(255,255,255,0.82);
-    border: 1px solid rgba(200,210,230,0.65);
-    border-radius: 20px;
-    padding: 20px;
-    min-height: 72vh;
-    box-shadow: 0 6px 20px rgba(0,0,0,0.05);
-    backdrop-filter: blur(8px);
-}
-.panel-title{
-    font-size: 22px;
-    font-weight: 700;
-    margin-bottom: 8px;
-}
-.panel-note{
-    font-size: 14px;
-    color: rgba(0,0,0,0.6);
-    margin-bottom: 16px;
-}
+.header{ font-size:24px; font-weight:700; margin:8px 0 14px 0; }
+.chat-shell{ max-width:840px; margin:0 auto; }
 .chat-window{
-    height: 52vh;
-    overflow-y: auto;
-    padding: 10px 6px 10px 2px;
-    margin-bottom: 12px;
+    max-height:55vh; overflow-y:auto; padding:18px 14px; border-radius:18px;
+    background:rgba(255,255,255,0.55); border:1px solid rgba(200,210,230,0.55);
+    backdrop-filter:blur(10px);
 }
-.row-left{
-    display:flex;
-    justify-content:flex-start;
-    align-items:flex-end;
-    margin:10px 0;
-    gap:10px;
-}
-.row-right{
-    display:flex;
-    justify-content:flex-end;
-    align-items:flex-end;
-    margin:10px 0;
-    gap:10px;
-}
+.row-left{ display:flex; justify-content:flex-start; align-items:flex-end; margin:10px 0; gap:10px; }
+.row-right{ display:flex; justify-content:flex-end; align-items:flex-end; margin:10px 0; gap:10px; }
 .avatar{
-    width:36px;
-    height:36px;
-    border-radius:50%;
-    display:flex;
-    justify-content:center;
-    align-items:center;
-    background:rgba(255,255,255,0.96);
-    border:1px solid rgba(210,220,240,0.9);
-    box-shadow:0 2px 8px rgba(0,0,0,0.08);
-    font-size:18px;
-    flex:0 0 auto;
+    width:36px; height:36px; border-radius:50%;
+    display:flex; justify-content:center; align-items:center;
+    background:rgba(255,255,255,0.9); border:1px solid rgba(210,220,240,0.9);
+    box-shadow:0 2px 8px rgba(0,0,0,0.08); font-size:18px; flex:0 0 auto;
 }
 .bubble-doc{
-    background:#ffffff;
-    border:1px solid rgba(220,225,235,0.95);
-    border-radius:18px;
-    padding:12px 14px;
-    max-width:76%;
-    box-shadow:0 2px 10px rgba(0,0,0,0.05);
-    white-space:pre-wrap;
+    background:#ffffff; border:1px solid rgba(220,225,235,0.95);
+    border-radius:18px; padding:12px 14px; max-width:72%;
+    box-shadow:0 2px 10px rgba(0,0,0,0.05); white-space:pre-wrap;
 }
 .bubble-pat{
-    background:#1f7aff;
-    color:white;
-    border-radius:18px;
-    padding:12px 14px;
-    max-width:76%;
-    box-shadow:0 2px 10px rgba(0,0,0,0.08);
-    white-space:pre-wrap;
+    background:#1f7aff; color:white; border-radius:18px;
+    padding:12px 14px; max-width:72%;
+    box-shadow:0 2px 10px rgba(0,0,0,0.08); white-space:pre-wrap;
 }
-.small-note{
-    color: rgba(0,0,0,0.58);
-    font-size: 13px;
-    margin-top: 8px;
+.small-note{ color:rgba(0,0,0,0.55); font-size:12px; margin-top:6px; }
+.panel{
+    margin-top:14px; padding:14px; border-radius:16px;
+    background:rgba(255,255,255,0.65); border:1px solid rgba(200,210,230,0.55);
+    backdrop-filter:blur(10px);
 }
-.answer-box{
-    background: #f7faff;
-    border: 1px solid #dfeaff;
-    border-radius: 16px;
-    padding: 14px;
-    margin: 14px 0;
-}
-.progress-wrap{
-    display:flex;
-    gap:8px;
-    flex-wrap:wrap;
-    margin-bottom: 14px;
-}
-.progress-pill{
-    padding:7px 12px;
-    border-radius:999px;
-    background:#eef3fb;
-    color:#58708f;
-    font-size:13px;
-    font-weight:600;
-}
-.progress-pill.active{
-    background:#1f7aff;
-    color:#fff;
-}
-.progress-pill.done{
-    background:#dff3e8;
-    color:#16663d;
-}
-.stButton > button{
-    font-size: 18px !important;
-    padding: 16px 12px !important;
-    border-radius: 16px !important;
-    font-weight: 600 !important;
-}
-div[data-testid="stHorizontalBlock"] .stButton > button{
-    min-height: 58px !important;
-}
-[data-testid="stTextInput"] input{
-    font-size: 17px !important;
-    padding: 0.8rem 0.9rem !important;
-}
-[data-testid="stAudioInput"]{
-    margin-top: 6px;
-}
-hr.soft{
-    border: none;
-    border-top: 1px solid rgba(210,220,235,0.8);
-    margin: 14px 0 16px 0;
+.panel-title{ font-weight:700; margin-bottom:10px; }
+.stButton>button{ border-radius:14px; padding:0.55rem 0.9rem; }
+[data-testid="stChatInput"]{
+    position:sticky; bottom:0; background:rgba(255,255,255,0.6);
+    backdrop-filter:blur(10px); border-top:1px solid rgba(200,210,230,0.55);
+    padding-top:10px;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -456,13 +295,12 @@ defaults = {
     "patient_name": "",
     "selected_parts": set(),
     "pain_yesno": None,
-    "feeling_level": None,
+    "feeling_level": 5,
     "symptoms": [],
     "submitted": False,
     "past_checkins": [],
-    "gpt_followup_done": set(),
-    "answered_stages": set(),
-    "last_audio_hash": None,
+    "gpt_followup_done": set(),  # ensures each stage only fires one GPT follow-up
+    "last_audio_hash": None,     # prevents double-processing voice recordings
 }
 for k, v in defaults.items():
     if k not in st.session_state:
@@ -477,11 +315,11 @@ def add_doctor(text: str) -> None:
 def add_patient(text: str) -> None:
     st.session_state.messages.append({"role": "patient", "content": text})
 
-def gpt_followup(stage_name: str) -> None:
+def gpt_followup(stage_key: str) -> None:
     """Fire a GPT follow-up after a structured widget is submitted (once per stage)."""
-    if stage_name in st.session_state.gpt_followup_done:
+    if stage_key in st.session_state.gpt_followup_done:
         return
-    st.session_state.gpt_followup_done.add(stage_name)
+    st.session_state.gpt_followup_done.add(stage_key)
     reply = get_gpt_reply()
     add_doctor(reply)
 
@@ -532,41 +370,107 @@ def body_svg(selected: Set[str]) -> str:
   </text>
 </svg>""".strip()
 
-def render_progress(current_stage: int) -> None:
-    labels = {
-        0: "Feeling",
-        1: "Pain",
-        2: "Location",
-        3: "Symptoms",
-        4: "Finish",
-    }
-    html = ['<div class="progress-wrap">']
-    for idx in [0, 1, 2, 3, 4]:
-        classes = ["progress-pill"]
-        if idx == current_stage:
-            classes.append("active")
-        elif stage_key(idx) in st.session_state.answered_stages or idx < current_stage:
-            classes.append("done")
-        html.append(f'<div class="{" ".join(classes)}">{idx + 1}. {labels[idx]}</div>')
-    html.append('</div>')
-    st.markdown("".join(html), unsafe_allow_html=True)
+# ============================================================
+# TOP WARNINGS (show helpful errors instead of crashing)
+# ============================================================
+if openai_init_error:
+    st.warning(f"LLM not ready: {openai_init_error}")
 
-def send_followup_message_from_text(text: str) -> None:
-    text = text.strip()
-    if not text:
-        return
-    add_patient(text)
-    with st.spinner("Assistant is thinking…"):
-        reply = get_gpt_reply()
-    add_doctor(reply)
+_init_sheets()
+if sheets_init_error:
+    st.warning(f"Google Sheets not ready: {sheets_init_error}")
 
-def handle_audio_followup(stage: int) -> None:
-    audio_value = None
-    if hasattr(st, "audio_input"):
-        audio_value = st.audio_input("🎙️ Speak instead of typing", key=f"mic_input_stage_{stage}")
+# ============================================================
+# HEADER
+# ============================================================
+st.markdown('<div class="chat-shell"><div class="header">🩺 Cancer Symptom Check-In</div>', unsafe_allow_html=True)
+
+# ============================================================
+# STAGE -1 — Name entry
+# ============================================================
+if st.session_state.stage == -1:
+    st.markdown('<div class="panel"><div class="panel-title">Welcome · Please enter your name</div>', unsafe_allow_html=True)
+    name_input = st.text_input("Your name:", value=st.session_state.patient_name)
+
+    if st.button("Start Check-In"):
+        if name_input.strip():
+            st.session_state.patient_name = name_input.strip()
+
+            with st.spinner("Loading your history…"):
+                st.session_state.past_checkins = load_past_checkins(name_input.strip())
+
+            with st.spinner("Getting your assistant ready…"):
+                opening = get_gpt_reply()
+
+            if not opening or opening.startswith("(LLM is not configured"):
+                opening = (
+                    f"Hi {st.session_state.patient_name}! I'm your virtual check-in assistant. "
+                    "Let's do a quick check-in. How have you been feeling? "
+                    "Use the slider below to give me a number from 0 to 10."
+                )
+
+            add_doctor(opening)
+            st.session_state.stage = 0
+            st.rerun()
+        else:
+            st.warning("Please enter your name to continue.")
+
+    st.markdown("</div>", unsafe_allow_html=True)
+    st.stop()
+
+# ============================================================
+# CHAT WINDOW — render all messages
+# ============================================================
+st.markdown('<div class="chat-window">', unsafe_allow_html=True)
+for msg in st.session_state.messages:
+    if msg.get("role") == "doctor":
+        st.markdown(
+            f"""
+        <div class="row-left">
+          <div class="avatar">🩺</div>
+          <div class="bubble-doc">{msg.get("content","")}</div>
+        </div>""",
+            unsafe_allow_html=True,
+        )
     else:
-        st.caption("🎙️ Upgrade Streamlit for voice")
+        st.markdown(
+            f"""
+        <div class="row-right">
+          <div class="bubble-pat">{msg.get("content","")}</div>
+          <div class="avatar">🙂</div>
+        </div>""",
+            unsafe_allow_html=True,
+        )
+st.markdown("</div>", unsafe_allow_html=True)
 
+stage = st.session_state.stage
+
+# ============================================================
+# INPUT AREA — Text OR Voice (voice optional depending on Streamlit version)
+# ============================================================
+if not st.session_state.submitted:
+
+    cols = st.columns([5, 1])
+    with cols[0]:
+        user_text = st.chat_input("Reply to the assistant or type anything…")
+
+    audio_value = None
+    with cols[1]:
+        # st.audio_input exists in newer Streamlit; fall back gracefully if missing.
+        if hasattr(st, "audio_input"):
+            audio_value = st.audio_input("🎙️", key="mic_input")
+        else:
+            st.caption("🎙️ Upgrade Streamlit for voice")
+
+    # Typed text
+    if user_text:
+        add_patient(user_text)
+        with st.spinner("Assistant is thinking…"):
+            reply = get_gpt_reply()
+        add_doctor(reply)
+        st.rerun()
+
+    # Voice recording
     if audio_value is not None:
         try:
             audio_bytes = audio_value.getvalue()
@@ -582,339 +486,138 @@ def handle_audio_followup(stage: int) -> None:
 
             if transcribed and not transcribed.startswith("(Transcription failed"):
                 st.info(f'🎙️ Heard: "{transcribed}"')
-                send_followup_message_from_text(transcribed)
+                add_patient(transcribed)
+                with st.spinner("Assistant is thinking…"):
+                    reply = get_gpt_reply()
+                add_doctor(reply)
                 st.rerun()
             else:
                 st.warning(f"Could not transcribe audio. {transcribed} Please try again or type your message.")
 
-def render_right_panel(stage: int) -> None:
-    st.markdown('<div class="panel-title">Assistant follow-up</div>', unsafe_allow_html=True)
-
-    if not st.session_state.messages:
-        st.info("The assistant will appear here.")
-    else:
-        st.markdown('<div class="chat-window">', unsafe_allow_html=True)
-        for msg in st.session_state.messages[-12:]:
-            if msg.get("role") == "doctor":
-                st.markdown(
-                    f"""
-                    <div class="row-left">
-                      <div class="avatar">🩺</div>
-                      <div class="bubble-doc">{msg.get("content","")}</div>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
-            else:
-                st.markdown(
-                    f"""
-                    <div class="row-right">
-                      <div class="bubble-pat">{msg.get("content","")}</div>
-                      <div class="avatar">🙂</div>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
-        st.markdown("</div>", unsafe_allow_html=True)
-
-    if stage == 4 or stage_answered(stage):
-        st.markdown('<hr class="soft" />', unsafe_allow_html=True)
-        st.markdown(
-            '<div class="panel-note">You can reply here if you want to answer the assistant before moving on.</div>',
-            unsafe_allow_html=True,
-        )
-        input_key = f"followup_text_stage_{stage}"
-        user_text = st.text_input("Type your reply", key=input_key, placeholder="Type a short reply for the assistant…")
-        send_col, spacer_col = st.columns([1, 2])
-        with send_col:
-            if st.button("Send reply", key=f"send_reply_{stage}", use_container_width=True):
-                if user_text.strip():
-                    send_followup_message_from_text(user_text)
-                    st.session_state[input_key] = ""
-                    st.rerun()
-                else:
-                    st.warning("Please type a message first.")
-        handle_audio_followup(stage)
-    else:
-        st.markdown(
-            '<div class="panel-note">Answer the question on the left first. Then the assistant will ask a short follow-up here.</div>',
-            unsafe_allow_html=True,
-        )
-
 # ============================================================
-# TOP WARNINGS
+# STAGE PANELS — structured widgets sit below the chat
 # ============================================================
-if openai_init_error:
-    st.warning(f"LLM not ready: {openai_init_error}")
 
-_init_sheets()
-if sheets_init_error:
-    st.warning(f"Google Sheets not ready: {sheets_init_error}")
+# Stage 0 — Feeling slider
+if stage == 0:
+    st.markdown('<div class="panel"><div class="panel-title">How are you feeling today?</div>', unsafe_allow_html=True)
+    st.session_state.feeling_level = st.slider("0 = worst, 10 = best", 0, 10, int(st.session_state.feeling_level))
+    if st.button("Send feeling level ➜"):
+        add_patient(f"My feeling level today is {st.session_state.feeling_level}/10.")
+        st.session_state.stage = 1
+        with st.spinner("Assistant is thinking…"):
+            gpt_followup("stage0")
+        st.rerun()
+    st.markdown("</div>", unsafe_allow_html=True)
 
-# ============================================================
-# HEADER
-# ============================================================
-st.markdown('<div class="top-shell">', unsafe_allow_html=True)
-st.markdown('<div class="header">🩺 Cancer Symptom Check-In</div>', unsafe_allow_html=True)
-st.markdown(
-    '<div class="subheader">One question per page. Answer on the left, then review the assistant follow-up on the right.</div>',
-    unsafe_allow_html=True,
-)
-
-# ============================================================
-# STAGE -1 — Name entry
-# ============================================================
-if st.session_state.stage == -1:
-    st.markdown('<div class="panel" style="min-height:auto;"><div class="panel-title">Welcome</div>', unsafe_allow_html=True)
-    st.markdown('<div class="panel-note">Please enter your name to start today’s check-in.</div>', unsafe_allow_html=True)
-    name_input = st.text_input("Your name:", value=st.session_state.patient_name)
-
-    if st.button("Start Check-In", use_container_width=False):
-        if name_input.strip():
-            st.session_state.patient_name = name_input.strip()
-
-            with st.spinner("Loading your history…"):
-                st.session_state.past_checkins = load_past_checkins(name_input.strip())
-
-            with st.spinner("Getting your assistant ready…"):
-                opening = get_gpt_reply()
-
-            if not opening or opening.startswith("(LLM is not configured"):
-                opening = (
-                    f"Hi {st.session_state.patient_name}! I'm your virtual check-in assistant. "
-                    "Let's do a quick check-in. How have you been feeling today?"
-                )
-
-            add_doctor(opening)
-            st.session_state.stage = 0
+# Stage 1 — Pain yes/no
+elif stage == 1:
+    st.markdown('<div class="panel"><div class="panel-title">Do you have any pain today?</div>', unsafe_allow_html=True)
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("✅ Yes, I have pain"):
+            st.session_state.pain_yesno = True
+            add_patient("Yes, I have pain today.")
+            st.session_state.stage = 2
+            with st.spinner("Assistant is thinking…"):
+                gpt_followup("stage1_yes")
             st.rerun()
-        else:
-            st.warning("Please enter your name to continue.")
+    with c2:
+        if st.button("🙂 No pain today"):
+            st.session_state.pain_yesno = False
+            add_patient("No, I don't have any pain today.")
+            st.session_state.stage = 3
+            with st.spinner("Assistant is thinking…"):
+                gpt_followup("stage1_no")
+            st.rerun()
+    st.markdown("</div>", unsafe_allow_html=True)
 
-    st.markdown("</div></div>", unsafe_allow_html=True)
-    st.stop()
-
-# ============================================================
-# MAIN TWO-PANEL LAYOUT
-# ============================================================
-render_progress(st.session_state.stage)
-left_col, right_col = st.columns([1.05, 1.0], gap="large")
-stage = st.session_state.stage
-
-with left_col:
-    st.markdown(f'<div class="panel"><div class="stage-badge">Step {stage + 1} of 5</div>', unsafe_allow_html=True)
-
-    # Stage 0 — Feeling scale
-    if stage == 0:
-        st.markdown('<div class="panel-title">How are you feeling today?</div>', unsafe_allow_html=True)
-        st.markdown('<div class="panel-note">Tap a number from 0 (worst) to 10 (best).</div>', unsafe_allow_html=True)
-
-        scale_cols = st.columns(11)
-        for i in range(11):
-            with scale_cols[i]:
-                if st.button(str(i), key=f"feeling_{i}", use_container_width=True):
-                    st.session_state.feeling_level = i
-
-        if st.session_state.feeling_level is None:
-            st.markdown('<div class="small-note">No selection yet</div>', unsafe_allow_html=True)
-        else:
-            st.markdown(
-                f'<div class="answer-box"><b>Selected feeling level:</b> {st.session_state.feeling_level}/10</div>',
-                unsafe_allow_html=True,
-            )
-
-        if not stage_answered(0):
-            if st.button("Save answer and ask assistant ➜", key="submit_stage0", use_container_width=True):
-                if st.session_state.feeling_level is None:
-                    st.warning("Please choose a number before continuing.")
-                else:
-                    add_patient(f"My feeling level today is {st.session_state.feeling_level}/10.")
-                    st.session_state.answered_stages.add(stage_key(0))
-                    with st.spinner("Assistant is thinking…"):
-                        gpt_followup(stage_key(0))
-                    st.rerun()
-        else:
-            st.success("Saved. The assistant is ready on the right.")
-            if st.button("Continue to next question ➜", key="next_from_0", use_container_width=True):
-                st.session_state.stage = next_stage_after(0)
+# Stage 2 — Body pain map
+elif stage == 2:
+    st.markdown('<div class="panel"><div class="panel-title">Where do you feel pain?</div>', unsafe_allow_html=True)
+    left, right = st.columns([1.2, 1.0])
+    with left:
+        st.markdown(body_svg(st.session_state.selected_parts), unsafe_allow_html=True)
+    with right:
+        st.markdown("**Click to toggle regions:**")
+        for part in ["Head", "Chest", "Abdomen", "Left Arm", "Right Arm", "Left Leg", "Right Leg"]:
+            label = f"✓ {part}" if part in st.session_state.selected_parts else part
+            if st.button(label, key=f"toggle_{part}"):
+                toggle_body_part(part)
                 st.rerun()
-
-    # Stage 1 — Pain yes/no
-    elif stage == 1:
-        st.markdown('<div class="panel-title">Do you have any pain today?</div>', unsafe_allow_html=True)
-        st.markdown('<div class="panel-note">Choose the option that fits best.</div>', unsafe_allow_html=True)
-
-        c1, c2 = st.columns(2)
-        with c1:
-            if st.button("✅ Yes, I have pain", key="pain_yes", use_container_width=True):
-                st.session_state.pain_yesno = True
-        with c2:
-            if st.button("🙂 No pain today", key="pain_no", use_container_width=True):
-                st.session_state.pain_yesno = False
-
-        if st.session_state.pain_yesno is None:
-            st.markdown('<div class="small-note">No selection yet</div>', unsafe_allow_html=True)
-        else:
-            selected_text = "Yes, I have pain today." if st.session_state.pain_yesno else "No, I do not have pain today."
-            st.markdown(
-                f'<div class="answer-box"><b>Selected answer:</b> {selected_text}</div>',
-                unsafe_allow_html=True,
-            )
-
-        if not stage_answered(1):
-            if st.button("Save answer and ask assistant ➜", key="submit_stage1", use_container_width=True):
-                if st.session_state.pain_yesno is None:
-                    st.warning("Please choose Yes or No before continuing.")
-                else:
-                    if st.session_state.pain_yesno:
-                        add_patient("Yes, I have pain today.")
-                    else:
-                        add_patient("No, I don't have any pain today.")
-                    st.session_state.answered_stages.add(stage_key(1))
-                    with st.spinner("Assistant is thinking…"):
-                        gpt_followup(stage_key(1))
-                    st.rerun()
-        else:
-            st.success("Saved. The assistant is ready on the right.")
-            button_label = "Continue to pain location ➜" if st.session_state.pain_yesno else "Continue to symptoms ➜"
-            if st.button(button_label, key="next_from_1", use_container_width=True):
-                st.session_state.stage = next_stage_after(1)
-                st.rerun()
-
-    # Stage 2 — Body pain map
-    elif stage == 2:
-        st.markdown('<div class="panel-title">Where do you feel pain?</div>', unsafe_allow_html=True)
-        st.markdown('<div class="panel-note">Click the body regions that apply.</div>', unsafe_allow_html=True)
-
-        map_left, map_right = st.columns([1.15, 1.0])
-        with map_left:
-            st.markdown(body_svg(st.session_state.selected_parts), unsafe_allow_html=True)
-        with map_right:
-            st.markdown("**Toggle regions:**")
-            for part in ["Head", "Chest", "Abdomen", "Left Arm", "Right Arm", "Left Leg", "Right Leg"]:
-                label = f"✓ {part}" if part in st.session_state.selected_parts else part
-                if st.button(label, key=f"toggle_{part}", use_container_width=True):
-                    toggle_body_part(part)
-                    st.rerun()
-            if st.button("Clear all", key="clear_parts", use_container_width=True):
-                st.session_state.selected_parts = set()
-                st.rerun()
-
         st.markdown(
-            '<div class="answer-box"><b>Selected regions:</b> '
+            '<div class="small-note">Selected: '
             + (", ".join(sorted(st.session_state.selected_parts)) or "None")
             + "</div>",
             unsafe_allow_html=True,
         )
 
-        if not stage_answered(2):
-            if st.button("Save answer and ask assistant ➜", key="submit_stage2", use_container_width=True):
-                if st.session_state.selected_parts:
-                    add_patient("Pain locations: " + ", ".join(sorted(st.session_state.selected_parts)) + ".")
-                else:
-                    add_patient("I'm not sure of the exact pain location.")
-                st.session_state.answered_stages.add(stage_key(2))
-                with st.spinner("Assistant is thinking…"):
-                    gpt_followup(stage_key(2))
-                st.rerun()
+    cA, cB = st.columns(2)
+    with cA:
+        if st.button("Clear all"):
+            st.session_state.selected_parts = set()
+            st.rerun()
+    with cB:
+        if st.button("Send pain locations ➜"):
+            if st.session_state.selected_parts:
+                add_patient("Pain locations: " + ", ".join(sorted(st.session_state.selected_parts)) + ".")
+            else:
+                add_patient("I'm not sure of the exact location.")
+            st.session_state.stage = 3
+            with st.spinner("Assistant is thinking…"):
+                gpt_followup("stage2")
+            st.rerun()
+    st.markdown("</div>", unsafe_allow_html=True)
+
+# Stage 3 — Symptom checklist
+elif stage == 3:
+    st.markdown('<div class="panel"><div class="panel-title">Any of these symptoms today?</div>', unsafe_allow_html=True)
+    symptom_options = [
+        "Fatigue / low energy",
+        "Nausea",
+        "Vomiting",
+        "Poor appetite",
+        "Mouth sores",
+        "Trouble swallowing",
+        "Shortness of breath",
+        "Fever / chills",
+        "Constipation",
+        "Diarrhea",
+        "Sleep problems",
+        "Anxiety / low mood",
+    ]
+    st.session_state.symptoms = st.multiselect(
+        "Select all that apply (leave empty if none):",
+        symptom_options,
+        default=st.session_state.symptoms,
+    )
+    if st.button("Send symptoms ➜"):
+        if st.session_state.symptoms:
+            add_patient("Symptoms today: " + "; ".join(st.session_state.symptoms) + ".")
         else:
-            st.success("Saved. The assistant is ready on the right.")
-            if st.button("Continue to next question ➜", key="next_from_2", use_container_width=True):
-                st.session_state.stage = next_stage_after(2)
-                st.rerun()
+            add_patient("No symptoms from the checklist today.")
+        st.session_state.stage = 4
+        with st.spinner("Assistant is thinking…"):
+            gpt_followup("stage3")
+        st.rerun()
+    st.markdown("</div>", unsafe_allow_html=True)
 
-    # Stage 3 — Symptoms
-    elif stage == 3:
-        st.markdown('<div class="panel-title">Any of these symptoms today?</div>', unsafe_allow_html=True)
-        st.markdown('<div class="panel-note">Tap any symptoms that apply. Tap again to remove.</div>', unsafe_allow_html=True)
-
-        symptom_options = [
-            "Fatigue / low energy",
-            "Nausea",
-            "Vomiting",
-            "Poor appetite",
-            "Mouth sores",
-            "Trouble swallowing",
-            "Shortness of breath",
-            "Fever / chills",
-            "Constipation",
-            "Diarrhea",
-            "Sleep problems",
-            "Anxiety / low mood",
-        ]
-
-        for symptom in symptom_options:
-            label = f"✓ {symptom}" if symptom in st.session_state.symptoms else symptom
-            if st.button(label, key=f"symptom_{symptom}", use_container_width=True):
-                if symptom in st.session_state.symptoms:
-                    st.session_state.symptoms.remove(symptom)
-                else:
-                    st.session_state.symptoms.append(symptom)
-                st.rerun()
-
+# Stage 4 — Free chat + submit
+elif stage == 4:
+    if st.session_state.submitted:
+        st.success("✅ Your check-in has been submitted. Thank you — your care team will review this shortly.")
+    else:
         st.markdown(
-            '<div class="answer-box"><b>Selected symptoms:</b> '
-            + ("; ".join(st.session_state.symptoms) if st.session_state.symptoms else "None")
-            + "</div>",
+            '<div class="panel">'
+            '<div class="panel-title">💬 Anything else to share?</div>'
+            '<div class="small-note">Chat freely with the assistant, or click Submit when ready.</div>'
+            "</div>",
             unsafe_allow_html=True,
         )
-
-        if not stage_answered(3):
-            if st.button("Save answer and ask assistant ➜", key="submit_stage3", use_container_width=True):
-                if st.session_state.symptoms:
-                    add_patient("Symptoms today: " + "; ".join(st.session_state.symptoms) + ".")
-                else:
-                    add_patient("No symptoms from the checklist today.")
-                st.session_state.answered_stages.add(stage_key(3))
-                with st.spinner("Assistant is thinking…"):
-                    gpt_followup(stage_key(3))
+        if st.button("✅ Submit Check-In"):
+            try:
+                save_to_sheet()
+                st.session_state.submitted = True
                 st.rerun()
-        else:
-            st.success("Saved. The assistant is ready on the right.")
-            if st.button("Continue to final review ➜", key="next_from_3", use_container_width=True):
-                st.session_state.stage = next_stage_after(3)
-                st.rerun()
-
-    # Stage 4 — Final review + submit
-    elif stage == 4:
-        st.markdown('<div class="panel-title">Final review</div>', unsafe_allow_html=True)
-        st.markdown('<div class="panel-note">Use the assistant on the right for any last detail, then submit when ready.</div>', unsafe_allow_html=True)
-
-        summary_html = f"""
-        <div class="answer-box">
-            <div><b>Feeling level:</b> {st.session_state.feeling_level if st.session_state.feeling_level is not None else "Not answered"}</div>
-            <div><b>Pain today:</b> {("Yes" if st.session_state.pain_yesno else "No") if st.session_state.pain_yesno is not None else "Not answered"}</div>
-            <div><b>Pain locations:</b> {", ".join(sorted(st.session_state.selected_parts)) or "None"}</div>
-            <div><b>Symptoms:</b> {"; ".join(st.session_state.symptoms) if st.session_state.symptoms else "None"}</div>
-        </div>
-        """
-        st.markdown(summary_html, unsafe_allow_html=True)
-
-        if not stage_answered(4):
-            if st.button("Ask assistant for final follow-up ➜", key="submit_stage4", use_container_width=True):
-                st.session_state.answered_stages.add(stage_key(4))
-                with st.spinner("Assistant is thinking…"):
-                    gpt_followup(stage_key(4))
-                st.rerun()
-        else:
-            st.success("Final review is ready. You can still reply on the right if needed.")
-
-        if st.session_state.submitted:
-            st.success("✅ Your check-in has been submitted. Thank you — your care team will review this shortly.")
-        else:
-            if st.button("✅ Submit Check-In", key="submit_checkin", use_container_width=True):
-                try:
-                    save_to_sheet()
-                    st.session_state.submitted = True
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Failed to save to Google Sheets: {e}")
-
-    st.markdown("</div>", unsafe_allow_html=True)
-
-with right_col:
-    st.markdown('<div class="panel">', unsafe_allow_html=True)
-    render_right_panel(stage)
-    st.markdown("</div>", unsafe_allow_html=True)
-
-st.markdown("</div>", unsafe_allow_html=True)
+            except Exception as e:
+                st.error(f"Failed to save to Google Sheets: {e}")
