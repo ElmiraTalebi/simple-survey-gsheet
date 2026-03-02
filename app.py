@@ -313,6 +313,8 @@ defaults = {
     "past_checkins": [],
     "gpt_followup_done": set(),  # ensures each stage only fires one GPT follow-up
     "last_audio_hash": None,     # prevents double-processing voice recordings
+    "stage_completed": False,
+    "next_stage": None,
 }
 for k, v in defaults.items():
     if k not in st.session_state:
@@ -528,73 +530,136 @@ if stage == 0:
 
     if st.button("Send feeling level ➜", use_container_width=True):
         add_patient(f"My feeling level today is {st.session_state.feeling_level}/10.")
-        st.session_state.stage = 1
         with st.spinner("Assistant is thinking…"):
             gpt_followup("stage0")
-        st.rerun()
+
+    st.session_state.stage_completed = True
+    st.rerun()
 
     st.markdown("</div>", unsafe_allow_html=True)
+     # THEN show Continue OUTSIDE the panel
+    if st.session_state.stage_completed:
+        st.markdown("---")
+        if st.button("Continue ➜", use_container_width=True):
+            st.session_state.stage = 1
+            st.session_state.stage_completed = False
+            st.rerun()
+
 
 # Stage 1 — Pain yes/no
 elif stage == 1:
     st.markdown('<div class="panel"><div class="panel-title">Do you have any pain today?</div>', unsafe_allow_html=True)
-    c1, c2 = st.columns(2)
-    with c1:
-        if st.button("✅ Yes, I have pain"):
-            st.session_state.pain_yesno = True
-            add_patient("Yes, I have pain today.")
-            st.session_state.stage = 2
-            with st.spinner("Assistant is thinking…"):
-                gpt_followup("stage1_yes")
-            st.rerun()
-    with c2:
-        if st.button("🙂 No pain today"):
-            st.session_state.pain_yesno = False
-            add_patient("No, I don't have any pain today.")
-            st.session_state.stage = 3
-            with st.spinner("Assistant is thinking…"):
-                gpt_followup("stage1_no")
-            st.rerun()
+
+    # If stage is already completed, we do NOT show Yes/No buttons again
+    if not st.session_state.stage_completed:
+
+        c1, c2 = st.columns(2)
+
+        with c1:
+            if st.button("✅ Yes, I have pain", use_container_width=True):
+                st.session_state.pain_yesno = True
+                add_patient("Yes, I have pain today.")
+
+                # GPT follow-up happens NOW, but we do NOT change stage yet
+                with st.spinner("Assistant is thinking…"):
+                    gpt_followup("stage1_yes")
+
+                # Mark stage complete + set where to go next
+                st.session_state.stage_completed = True
+                st.session_state.next_stage = 2
+                st.rerun()
+
+        with c2:
+            if st.button("🙂 No pain today", use_container_width=True):
+                st.session_state.pain_yesno = False
+                add_patient("No, I don't have any pain today.")
+
+                # GPT follow-up happens NOW, but we do NOT change stage yet
+                with st.spinner("Assistant is thinking…"):
+                    gpt_followup("stage1_no")
+
+                # Mark stage complete + set where to go next
+                st.session_state.stage_completed = True
+                st.session_state.next_stage = 3
+                st.rerun()
+
+    # Close the panel
     st.markdown("</div>", unsafe_allow_html=True)
 
+    # Continue button OUTSIDE panel (only after follow-up is shown)
+    if st.session_state.stage_completed:
+        st.markdown("---")
+        if st.button("Continue ➜", use_container_width=True):
+            # Move to whichever branch was selected
+            st.session_state.stage = int(st.session_state.next_stage)
+            st.session_state.stage_completed = False
+            st.session_state.next_stage = None
+            st.rerun()
+
+# Stage 2 — Body pain map
 # Stage 2 — Body pain map
 elif stage == 2:
     st.markdown('<div class="panel"><div class="panel-title">Where do you feel pain?</div>', unsafe_allow_html=True)
-    left, right = st.columns([1.2, 1.0])
-    with left:
-        st.markdown(body_svg(st.session_state.selected_parts), unsafe_allow_html=True)
-    with right:
-        st.markdown("**Click to toggle regions:**")
-        for part in ["Head", "Chest", "Abdomen", "Left Arm", "Right Arm", "Left Leg", "Right Leg"]:
-            label = f"✓ {part}" if part in st.session_state.selected_parts else part
-            if st.button(label, key=f"toggle_{part}"):
-                toggle_body_part(part)
-                st.rerun()
-        st.markdown(
-            '<div class="small-note">Selected: '
-            + (", ".join(sorted(st.session_state.selected_parts)) or "None")
-            + "</div>",
-            unsafe_allow_html=True,
-        )
 
-    cA, cB = st.columns(2)
-    with cA:
-        if st.button("Clear all"):
-            st.session_state.selected_parts = set()
-            st.rerun()
-    with cB:
-        if st.button("Send pain locations ➜"):
-            if st.session_state.selected_parts:
-                add_patient("Pain locations: " + ", ".join(sorted(st.session_state.selected_parts)) + ".")
-            else:
-                add_patient("I'm not sure of the exact location.")
-            st.session_state.stage = 3
-            with st.spinner("Assistant is thinking…"):
-                gpt_followup("stage2")
-            st.rerun()
+    # Only show selection UI if stage not completed
+    if not st.session_state.stage_completed:
+
+        left, right = st.columns([1.2, 1.0])
+
+        with left:
+            st.markdown(body_svg(st.session_state.selected_parts), unsafe_allow_html=True)
+
+        with right:
+            st.markdown("**Click to toggle regions:**")
+            for part in ["Head", "Chest", "Abdomen", "Left Arm", "Right Arm", "Left Leg", "Right Leg"]:
+                label = f"✓ {part}" if part in st.session_state.selected_parts else part
+                if st.button(label, key=f"toggle_{part}", use_container_width=True):
+                    toggle_body_part(part)
+                    st.rerun()
+
+            st.markdown(
+                '<div class="small-note">Selected: '
+                + (", ".join(sorted(st.session_state.selected_parts)) or "None")
+                + "</div>",
+                unsafe_allow_html=True,
+            )
+
+        cA, cB = st.columns(2)
+
+        with cA:
+            if st.button("Clear all", use_container_width=True):
+                st.session_state.selected_parts = set()
+                st.rerun()
+
+        with cB:
+            if st.button("Send pain locations ➜", use_container_width=True):
+
+                if st.session_state.selected_parts:
+                    add_patient("Pain locations: " + ", ".join(sorted(st.session_state.selected_parts)) + ".")
+                else:
+                    add_patient("I'm not sure of the exact location.")
+
+                with st.spinner("Assistant is thinking…"):
+                    gpt_followup("stage2")
+
+                st.session_state.stage_completed = True
+                st.session_state.next_stage = 3
+                st.rerun()
+
+    # Close panel
     st.markdown("</div>", unsafe_allow_html=True)
+
+    # Continue button (only after follow-up)
+    if st.session_state.stage_completed:
+        st.markdown("---")
+        if st.button("Continue ➜", use_container_width=True):
+            st.session_state.stage = 3
+            st.session_state.stage_completed = False
+            st.session_state.next_stage = None
+            st.rerun()
     
 # Stage 3 — Symptom checklist (large clickable rows)
+# Stage 3 — Symptom checklist
 elif stage == 3:
     st.markdown('<div class="panel"><div class="panel-title">Any of these symptoms today?</div>', unsafe_allow_html=True)
 
@@ -613,30 +678,45 @@ elif stage == 3:
         "Anxiety / low mood",
     ]
 
-    # Ensure list exists
-    if "symptoms" not in st.session_state:
-        st.session_state.symptoms = []
+    if not st.session_state.stage_completed:
 
-    for symptom in symptom_options:
-        label = f"✓ {symptom}" if symptom in st.session_state.symptoms else symptom
-        if st.button(label, key=f"symptom_{symptom}", use_container_width=True):
-            if symptom in st.session_state.symptoms:
-                st.session_state.symptoms.remove(symptom)
+        if "symptoms" not in st.session_state:
+            st.session_state.symptoms = []
+
+        for symptom in symptom_options:
+            label = f"✓ {symptom}" if symptom in st.session_state.symptoms else symptom
+            if st.button(label, key=f"symptom_{symptom}", use_container_width=True):
+                if symptom in st.session_state.symptoms:
+                    st.session_state.symptoms.remove(symptom)
+                else:
+                    st.session_state.symptoms.append(symptom)
+                st.rerun()
+
+        if st.button("Send symptoms ➜", use_container_width=True):
+
+            if st.session_state.symptoms:
+                add_patient("Symptoms today: " + "; ".join(st.session_state.symptoms) + ".")
             else:
-                st.session_state.symptoms.append(symptom)
+                add_patient("No symptoms from the checklist today.")
+
+            with st.spinner("Assistant is thinking…"):
+                gpt_followup("stage3")
+
+            st.session_state.stage_completed = True
+            st.session_state.next_stage = 4
             st.rerun()
 
-    if st.button("Send symptoms ➜", use_container_width=True):
-        if st.session_state.symptoms:
-            add_patient("Symptoms today: " + "; ".join(st.session_state.symptoms) + ".")
-        else:
-            add_patient("No symptoms from the checklist today.")
-        st.session_state.stage = 4
-        with st.spinner("Assistant is thinking…"):
-            gpt_followup("stage3")
-        st.rerun()
-
+    # Close panel
     st.markdown("</div>", unsafe_allow_html=True)
+
+    # Continue button
+    if st.session_state.stage_completed:
+        st.markdown("---")
+        if st.button("Continue ➜", use_container_width=True):
+            st.session_state.stage = 4
+            st.session_state.stage_completed = False
+            st.session_state.next_stage = None
+            st.rerun()
 
 
 # Stage 4 — Free chat + submit
