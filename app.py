@@ -1,13 +1,48 @@
 import streamlit as st
 from typing import Dict, List, Set
-import random
+import random  # (still imported; you can remove if you no longer use it)
 import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime
 import json
-import streamlit as st
 from openai import OpenAI
+
+# ============================================================
+# OPENAI / LLM SETUP
+# ============================================================
+# Make sure you have OPENAI_API_KEY in Streamlit secrets (local .streamlit/secrets.toml or Streamlit Cloud Secrets)
 client_llm = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+
+SYSTEM_PROMPT = """
+You are a clinical symptom intake assistant.
+
+Rules:
+- Do NOT give medical advice.
+- Do NOT suggest treatments.
+- Only collect symptoms and confirm what the patient reports.
+- If asked for medical advice, respond exactly:
+  "Please contact your healthcare provider for medical advice."
+- If severe emergency symptoms are described (trouble breathing, chest pain, heavy bleeding, fainting),
+  instruct the patient to seek emergency medical attention immediately.
+- Keep responses short (1-3 sentences).
+"""
+
+def llm_response(user_text: str) -> str:
+    """Get a safe constrained response from the LLM (with error handling)."""
+    try:
+        response = client_llm.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_text},
+            ],
+            temperature=0.2,
+        )
+        return response.choices[0].message.content
+    except Exception:
+        # Fallback if API fails for any reason
+        return "Thanks — I recorded that. If you feel worse, please contact your care team."
+
 # ============================================================
 # GOOGLE SHEETS SETUP
 # ============================================================
@@ -17,25 +52,20 @@ client = gspread.authorize(creds)
 sheet = client.open_by_key(st.secrets["gsheet_id"]).worksheet("Form")
 
 def save_to_sheet():
-    """Save patient name, timestamp, and full chat as a dict to Google Sheets."""
-    chat_dict = {
-        "feeling_level": st.session_state.feeling_level,
-        "pain": st.session_state.pain_yesno,
-        "pain_locations": sorted(list(st.session_state.selected_parts)),
-        "symptoms": st.session_state.symptoms,
-        "conversation": st.session_state.messages,
-    }
+    """Save timestamp + name + structured fields + full conversation."""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     name = st.session_state.get("patient_name", "Unknown")
+
     sheet.append_row([
-    timestamp,
-    name,
-    st.session_state.feeling_level,
-    str(st.session_state.pain_yesno),
-    ", ".join(st.session_state.selected_parts),
-    "; ".join(st.session_state.symptoms),
-    json.dumps(st.session_state.messages)
-])
+        timestamp,
+        name,
+        int(st.session_state.feeling_level),
+        str(st.session_state.pain_yesno),
+        ", ".join(sorted(st.session_state.selected_parts)),
+        "; ".join(st.session_state.symptoms),
+        json.dumps(st.session_state.messages),
+    ])
+
 # ============================================================
 # PAGE CONFIG
 # ============================================================
@@ -140,7 +170,7 @@ st.markdown(
     padding: 0.55rem 0.9rem;
 }
 
-/* Sticky input feel (Streamlit chat_input sits at bottom already; we just style a bit) */
+/* Sticky input feel */
 [data-testid="stChatInput"]{
     position: sticky;
     bottom: 0;
@@ -181,49 +211,43 @@ if "symptoms" not in st.session_state:
 if "submitted" not in st.session_state:
     st.session_state.submitted = False
 
+if "free_text_permission" not in st.session_state:
+    st.session_state.free_text_permission = None
+
 # ============================================================
 # HELPERS
 # ============================================================
-def llm_response(user_text: str):
+def extract_structured_data(text: str) -> None:
+    """Very simple keyword-based extraction from free text."""
+    t = text.lower()
 
-    response = client_llm.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_text}
-        ],
-        temperature=0.2
-    )
+    def add_once(label: str) -> None:
+        if label not in st.session_state.symptoms:
+            st.session_state.symptoms.append(label)
 
-    return response.choices[0].message.content
-def extract_structured_data(text: str):
-    text_lower = text.lower()
+    if "pain" in t:
+        add_once("Pain (free text)")
+    if "tired" in t or "fatigue" in t:
+        add_once("Fatigue (free text)")
+    if "breath" in t or "short of breath" in t:
+        add_once("Shortness of breath (free text)")
+    if "fever" in t or "chills" in t:
+        add_once("Fever / chills (free text)")
 
-    if "pain" in text_lower:
-        st.session_state.symptoms.append("Pain (free text)")
-
-    if "tired" in text_lower:
-        st.session_state.symptoms.append("Fatigue (free text)")
-
-    if "breath" in text_lower:
-        st.session_state.symptoms.append("Shortness of breath (free text)")
-
-    return True
-    
-def detect_red_flags():
+def detect_red_flags() -> List[str]:
+    """Check for urgent symptoms based on selected checklist + extracted free text."""
+    s = " ".join(st.session_state.symptoms).lower()
     red_flags = []
 
-    if "Shortness of breath" in st.session_state.symptoms:
+    if "shortness of breath" in s or "breath" in s:
         red_flags.append("shortness of breath")
-
-    if "Fever / chills" in st.session_state.symptoms:
-        red_flags.append("fever")
-
+    if "fever" in s or "chills" in s:
+        red_flags.append("fever/chills")
     if st.session_state.feeling_level <= 1:
         red_flags.append("very low overall feeling")
 
     return red_flags
-    
+
 def add_doctor(text: str) -> None:
     st.session_state.messages.append({"role": "doctor", "content": text})
 
@@ -234,11 +258,12 @@ def ensure_stage_prompt() -> None:
     """Make sure the doctor has asked the current stage question (once)."""
     stage = st.session_state.stage
     if len(st.session_state.messages) == 0:
-        add_doctor(f"Hi {st.session_state.patient_name} — I'm your virtual doctor check-in assistant. Let's do a quick symptom check-in.")
+        add_doctor(
+            f"Hi {st.session_state.patient_name} — I'm your virtual doctor check-in assistant. "
+            "Let's do a quick symptom check-in."
+        )
         return
 
-    # If last message is already a doctor prompt for the stage, do nothing.
-    # We use a simple marker check based on stage number and key phrasing.
     last_doc = None
     for m in reversed(st.session_state.messages):
         if m["role"] == "doctor":
@@ -254,10 +279,7 @@ def ensure_stage_prompt() -> None:
     }
 
     want = prompts.get(stage, None)
-    if not want:
-        return
-
-    if last_doc is None or want not in last_doc:
+    if want and (last_doc is None or want not in last_doc):
         add_doctor(want)
 
 def toggle_body_part(part: str) -> None:
@@ -267,15 +289,11 @@ def toggle_body_part(part: str) -> None:
         st.session_state.selected_parts.add(part)
 
 def body_svg(selected: Set[str]) -> str:
-    """
-    Simple human silhouette made of separate SVG regions.
-    Regions highlight blue if selected.
-    """
+    """Simple human silhouette made of separate SVG regions."""
     def fill(part: str) -> str:
-        return "#1f7aff" if part in selected else "#cfd8e6"  # blue vs light gray
+        return "#1f7aff" if part in selected else "#cfd8e6"
 
     stroke = "#6b7a90"
-    # A clean, simple silhouette (not anatomically perfect, but clear + regioned)
     return f"""
 <svg width="320" height="520" viewBox="0 0 320 520" xmlns="http://www.w3.org/2000/svg">
   <defs>
@@ -284,22 +302,18 @@ def body_svg(selected: Set[str]) -> str:
     </filter>
   </defs>
 
-  <!-- HEAD -->
   <g filter="url(#shadow)">
     <circle cx="160" cy="70" r="38" fill="{fill('Head')}" stroke="{stroke}" stroke-width="2"/>
   </g>
 
-  <!-- CHEST -->
   <g filter="url(#shadow)">
     <rect x="110" y="120" width="100" height="70" rx="24" fill="{fill('Chest')}" stroke="{stroke}" stroke-width="2"/>
   </g>
 
-  <!-- ABDOMEN -->
   <g filter="url(#shadow)">
     <rect x="115" y="195" width="90" height="70" rx="22" fill="{fill('Abdomen')}" stroke="{stroke}" stroke-width="2"/>
   </g>
 
-  <!-- LEFT ARM -->
   <g filter="url(#shadow)">
     <path d="M110 132
              C 80 145, 72 180, 78 220
@@ -309,7 +323,6 @@ def body_svg(selected: Set[str]) -> str:
           fill="{fill('Left Arm')}" stroke="{stroke}" stroke-width="2"/>
   </g>
 
-  <!-- RIGHT ARM -->
   <g filter="url(#shadow)">
     <path d="M210 132
              C 240 145, 248 180, 242 220
@@ -319,7 +332,6 @@ def body_svg(selected: Set[str]) -> str:
           fill="{fill('Right Arm')}" stroke="{stroke}" stroke-width="2"/>
   </g>
 
-  <!-- LEFT LEG -->
   <g filter="url(#shadow)">
     <path d="M135 265
              C 120 310, 118 360, 126 410
@@ -330,7 +342,6 @@ def body_svg(selected: Set[str]) -> str:
           fill="{fill('Left Leg')}" stroke="{stroke}" stroke-width="2"/>
   </g>
 
-  <!-- RIGHT LEG -->
   <g filter="url(#shadow)">
     <path d="M185 265
              C 200 310, 202 360, 194 410
@@ -341,29 +352,11 @@ def body_svg(selected: Set[str]) -> str:
           fill="{fill('Right Leg')}" stroke="{stroke}" stroke-width="2"/>
   </g>
 
-  <!-- Label line -->
   <text x="160" y="520" text-anchor="middle" font-size="12" fill="rgba(0,0,0,0.55)">
     Click buttons to toggle regions (highlights update live)
   </text>
 </svg>
 """.strip()
-
-# ============================================================
-SYSTEM_PROMPT = """
-You are a clinical symptom intake assistant.
-
-Rules:
-- Do NOT give medical advice.
-- Do NOT suggest treatments.
-- Only collect symptoms.
-- If asked for medical advice, respond:
-  "Please contact your healthcare provider for medical advice."
-- If severe emergency symptoms are described, instruct patient to seek urgent care.
-"""
-
-
-
-# ============================================================
 
 # ============================================================
 # HEADER
@@ -422,24 +415,23 @@ for msg in st.session_state.messages:
 st.markdown("</div></div>", unsafe_allow_html=True)
 
 # ============================================================
-# STAGE PANELS (step-based conversation)
+# STAGE PANELS
 # ============================================================
 stage = st.session_state.stage
 
 # -------------------------------
-# Stage 0 — feeling slider
+# Stage 0 — feeling buttons
 # -------------------------------
 if stage == 0:
     st.markdown('<div class="panel"><div class="panel-title">Stage 0 · How are you feeling today?</div>', unsafe_allow_html=True)
 
     cols = st.columns(5)
-
     scale_labels = ["Very Bad", "Bad", "Okay", "Good", "Very Good"]
     scale_values = [0, 2, 5, 8, 10]
 
     for i in range(5):
         with cols[i]:
-            if st.button(scale_labels[i]):
+            if st.button(scale_labels[i], key=f"feel_{i}"):
                 st.session_state.feeling_level = scale_values[i]
                 add_patient(f"I feel {scale_labels[i]} today ({scale_values[i]}/10).")
                 st.session_state.stage = 1
@@ -465,8 +457,6 @@ elif stage == 1:
         if st.button("No pain"):
             st.session_state.pain_yesno = False
             add_patient("No, I don't have pain today.")
-            # If no pain, we can skip body selector but still keep the stage flow
-            # We still proceed to symptom checklist (stage 3) per your requested stages.
             add_doctor("Okay — we'll skip the body pain map.")
             st.session_state.stage = 3
             ensure_stage_prompt()
@@ -482,26 +472,23 @@ elif stage == 2:
     left, right = st.columns([1.2, 1.0], vertical_alignment="top")
 
     with left:
-        # Visible SVG silhouette
         st.markdown(body_svg(st.session_state.selected_parts), unsafe_allow_html=True)
 
     with right:
         st.markdown("**Click to toggle regions** (multiple selections allowed):")
-        # Real Streamlit buttons + callbacks (no URL hacks, no query params)
-        buttons = [
-            "Head", "Chest", "Abdomen",
-            "Left Arm", "Right Arm",
-            "Left Leg", "Right Leg",
-        ]
+        buttons = ["Head", "Chest", "Abdomen", "Left Arm", "Right Arm", "Left Leg", "Right Leg"]
         for part in buttons:
             label = f"✓ {part}" if part in st.session_state.selected_parts else part
             if st.button(label, key=f"toggle_{part}"):
                 toggle_body_part(part)
                 st.rerun()
 
-        st.markdown('<div class="small-note">Selected: ' +
-                    (", ".join(sorted(st.session_state.selected_parts)) if st.session_state.selected_parts else "None") +
-                    "</div>", unsafe_allow_html=True)
+        st.markdown(
+            '<div class="small-note">Selected: ' +
+            (", ".join(sorted(st.session_state.selected_parts)) if st.session_state.selected_parts else "None") +
+            "</div>",
+            unsafe_allow_html=True
+        )
 
     cA, cB = st.columns([1, 1])
     with cA:
@@ -522,7 +509,7 @@ elif stage == 2:
     st.markdown("</div>", unsafe_allow_html=True)
 
 # -------------------------------
-# Stage 3 — symptom checklist (multi-select)
+# Stage 3 — symptom checklist
 # -------------------------------
 elif stage == 3:
     st.markdown('<div class="panel"><div class="panel-title">Stage 3 · Symptom checklist</div>', unsafe_allow_html=True)
@@ -542,30 +529,36 @@ elif stage == 3:
         "Anxiety / low mood",
     ]
 
-    st.session_state.symptoms = st.multiselect("Select symptoms you have today:", symptom_options, default=st.session_state.symptoms)
+    st.session_state.symptoms = st.multiselect(
+        "Select symptoms you have today:",
+        symptom_options,
+        default=st.session_state.symptoms
+    )
 
     if st.button("Send symptoms"):
         if st.session_state.symptoms:
             add_patient("Symptoms today: " + "; ".join(st.session_state.symptoms) + ".")
         else:
             add_patient("No significant symptoms from the checklist.")
-    
+
         red_flags = detect_red_flags()
-    
         if red_flags:
             add_doctor("⚠️ Some of your symptoms may require urgent medical attention. Please contact your care team immediately or call emergency services if symptoms are severe.")
-    
+
         st.session_state.stage = 4
         ensure_stage_prompt()
         st.rerun()
 
+    st.markdown("</div>", unsafe_allow_html=True)
+
 # -------------------------------
-# Stage 4 — free text chat input
+# Stage 4 — gated free text
 # -------------------------------
 elif stage == 4:
 
-    if "free_text_permission" not in st.session_state:
-        st.session_state.free_text_permission = None
+    if st.session_state.submitted:
+        st.success("✅ Your check-in has been submitted. Thank you!")
+        st.stop()
 
     st.markdown('<div class="panel"><div class="panel-title">Stage 4 · Anything else?</div>', unsafe_allow_html=True)
 
@@ -581,8 +574,9 @@ elif stage == 4:
             if st.button("No, that's all"):
                 add_patient("No additional information.")
                 st.session_state.free_text_permission = False
-                st.session_state.submitted = True
+
                 save_to_sheet()
+                st.session_state.submitted = True
                 st.rerun()
 
     elif st.session_state.free_text_permission:
@@ -592,10 +586,18 @@ elif stage == 4:
         if user_text:
             add_patient(user_text)
 
+            # Simple local extraction
+            extract_structured_data(user_text)
+
+            # Red-flag warning (if needed)
+            red_flags = detect_red_flags()
+            if red_flags:
+                add_doctor("⚠️ Some of what you wrote may be urgent. Please contact your care team right away, or seek emergency help if severe.")
+
+            # LLM response (constrained)
             reply = llm_response(user_text)
             add_doctor(reply)
 
-            st.session_state.submitted = True
             save_to_sheet()
+            st.session_state.submitted = True
             st.rerun()
-            
