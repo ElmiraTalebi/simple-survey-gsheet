@@ -308,6 +308,14 @@ st.markdown("""
 }
 .panel-title{ font-weight:700; margin-bottom:10px; }
 .stButton>button{ border-radius:14px; padding:0.55rem 0.9rem; }
+/* Pull mic widget up so it sits on the same line as the chat input */
+[data-testid="stAudioInput"] {
+    margin-top: 0 !important;
+    padding-top: 0 !important;
+}
+[data-testid="stAudioInput"] > label {
+    display: none !important;
+}
 [data-testid="stChatInput"]{
     position:sticky; bottom:0; background:rgba(255,255,255,0.6);
     backdrop-filter:blur(10px); border-top:1px solid rgba(200,210,230,0.55);
@@ -480,7 +488,7 @@ stage = st.session_state.stage
 # ============================================================
 if not st.session_state.submitted:
 
-    cols = st.columns([5, 1], vertical_alignment="center")
+    cols = st.columns([5, 1], vertical_alignment="bottom")
     with cols[0]:
         user_text = st.chat_input("Reply to the assistant or type anything…", key="chat_input_main")
 
@@ -488,7 +496,7 @@ if not st.session_state.submitted:
     with cols[1]:
         # st.audio_input exists in newer Streamlit; fall back gracefully if missing.
         if hasattr(st, "audio_input"):
-            audio_value = st.audio_input("", key="mic_input")
+            audio_value = st.audio_input("", key="mic_input", label_visibility="collapsed")
         else:
             st.caption("Upgrade Streamlit for voice")
 
@@ -515,7 +523,7 @@ if not st.session_state.submitted:
                 transcribed = transcribe_audio(audio_bytes)
 
             if transcribed and not transcribed.startswith("(Transcription failed"):
-                st.info(f'Heard: "{transcribed}"')
+                st.info(f'🎙️ Heard: "{transcribed}"')
                 add_patient(transcribed)
                 with st.spinner("Assistant is thinking…"):
                     reply = get_gpt_reply()
