@@ -480,7 +480,7 @@ stage = st.session_state.stage
 # ============================================================
 if not st.session_state.submitted:
 
-    cols = st.columns([5, 1])
+    cols = st.columns([5, 1], vertical_alignment="center")
     with cols[0]:
         user_text = st.chat_input("Reply to the assistant or type anything…", key="chat_input_main")
 
