@@ -308,13 +308,20 @@ st.markdown("""
 }
 .panel-title{ font-weight:700; margin-bottom:10px; }
 .stButton>button{ border-radius:14px; padding:0.55rem 0.9rem; }
-/* Pull mic widget up so it sits on the same line as the chat input */
+/* Mic widget — same height and alignment as the chat input box */
 [data-testid="stAudioInput"] {
     margin-top: 0 !important;
     padding-top: 0 !important;
 }
 [data-testid="stAudioInput"] > label {
     display: none !important;
+}
+[data-testid="stAudioInput"] > div {
+    height: 52px !important;
+    border-radius: 12px !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
 }
 [data-testid="stChatInput"]{
     position:sticky; bottom:0;
