@@ -207,6 +207,31 @@ def get_gpt_reply() -> str:
     # Build messages with truncation (keep last N turns)
     openai_messages = [{"role": "system", "content": build_system_prompt()}]
 
+    # Inject past visits as synthetic conversation turns so GPT can naturally
+    # reference and continue from the patient's history in free-text chat.
+    # Each past visit becomes a user summary + a brief assistant acknowledgement.
+    past = st.session_state.get("past_checkins", [])
+    for p in past:
+        ts   = p.get("timestamp", "unknown date")
+        fl   = p.get("feeling_level", "?")
+        pn   = "yes" if p.get("pain") else "no"
+        locs = ", ".join(p.get("pain_locations", [])) or "none"
+        syms = ", ".join(p.get("symptoms", [])) or "none"
+        # Summarise the past visit as if the patient reported it
+        openai_messages.append({
+            "role": "user",
+            "content": (
+                f"[Past visit on {ts}] "
+                f"Feeling: {fl}/10. Pain: {pn}. "
+                f"Pain locations: {locs}. Symptoms: {syms}."
+            )
+        })
+        # A short assistant acknowledgement keeps the conversation turn structure valid
+        openai_messages.append({
+            "role": "assistant",
+            "content": f"Thank you for that update from {ts}. I have noted how you were feeling then."
+        })
+
     history = st.session_state.messages[-20:]  # last 20 bubbles is enough for this app
     for msg in history:
         if msg.get("role") == "doctor":
