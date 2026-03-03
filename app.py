@@ -694,17 +694,50 @@ elif stage == 4:
         sym_html = "".join(f'<span class="tag">{s}</span>' for s in symptoms) if symptoms else "<span style='color:rgba(0,0,0,0.4)'>None reported</span>"
         loc_html = "".join(f'<span class="tag">{l}</span>' for l in locations) if locations else "<span style='color:rgba(0,0,0,0.4)'>None / N/A</span>"
 
-        conv_rows = ""
+        # Build transcript of non-widget messages for GPT to summarise
+        transcript_lines = []
         for m in st.session_state.messages:
-            role    = m.get("role", "")
-            txt     = m.get("content", "")
+            role = m.get("role", "")
+            txt  = m.get("content", "")
             if txt in widget_msgs:
                 continue
             if role == "patient":
-                conv_rows += f'<div class="chat-turn"><div class="chat-turn-label">You</div><div class="chat-turn-text">{txt}</div></div>'
+                transcript_lines.append(f"Patient: {txt}")
             elif role == "doctor":
-                conv_rows += f'<div class="chat-turn"><div class="chat-turn-label">Assistant</div><div class="chat-turn-text">{txt}</div></div>'
-        conv_cell = conv_rows if conv_rows else "<span style='color:rgba(0,0,0,0.4)'>No additional conversation</span>"
+                transcript_lines.append(f"Assistant: {txt}")
+
+        if transcript_lines and _openai_ready():
+            transcript_text = "\n".join(transcript_lines)
+            try:
+                summary_response = openai_client.chat.completions.create(
+                    model=_secret("openai_model", default="gpt-4o-mini"),
+                    messages=[
+                        {"role": "system", "content": (
+                            "You are a clinical notes assistant. "
+                            "From the conversation below, extract ONLY the medically relevant information the patient mentioned — "
+                            "such as pain details, symptom descriptions, severity, duration, what makes it better or worse, mood, appetite, sleep, or any other health-related details. "
+                            "Format your output as a clean bullet-point list. "
+                            "Be concise. Do not include greetings, filler, or assistant questions — only facts the patient provided. "
+                            "If there is nothing clinically relevant beyond what the widgets already captured, reply with exactly: None"
+                        )},
+                        {"role": "user", "content": transcript_text}
+                    ],
+                    max_tokens=300,
+                    temperature=0.2,
+                )
+                summary_text = (summary_response.choices[0].message.content or "").strip()
+            except Exception:
+                summary_text = "None"
+        else:
+            summary_text = "None"
+
+        if summary_text and summary_text != "None":
+            lines = [l.lstrip("\u2022-\u2013 ").strip() for l in summary_text.split("\n") if l.strip() and l.strip() != "None"]
+            conv_cell = "<ul style='margin:0;padding-left:18px;'>" + "".join(
+                f"<li style='margin-bottom:5px;font-size:14px;color:#1a2540;line-height:1.5'>{l}</li>" for l in lines
+            ) + "</ul>"
+        else:
+            conv_cell = "<span style='color:rgba(0,0,0,0.4)'>No additional details shared</span>"
 
         st.markdown("""
 <style>
