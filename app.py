@@ -344,6 +344,7 @@ defaults = {
     "past_checkins": [],
     "gpt_followup_done": set(),  # ensures each stage only fires one GPT follow-up
     "last_audio_hash": None,     # prevents double-processing voice recordings
+    "mic_key_counter": 0,         # incremented after each recording to reset the widget
 }
 for k, v in defaults.items():
     if k not in st.session_state:
@@ -501,7 +502,7 @@ if not st.session_state.submitted:
     with cols[1]:
         # st.audio_input exists in newer Streamlit; fall back gracefully if missing.
         if hasattr(st, "audio_input"):
-            audio_value = st.audio_input("", key="mic_input", label_visibility="collapsed")
+            audio_value = st.audio_input("", key=f"mic_input_{st.session_state.mic_key_counter}", label_visibility="collapsed")
         else:
             st.caption("Upgrade Streamlit for voice")
 
@@ -524,6 +525,7 @@ if not st.session_state.submitted:
 
         if audio_bytes and audio_hash and audio_hash != st.session_state.last_audio_hash:
             st.session_state.last_audio_hash = audio_hash
+            st.session_state.mic_key_counter += 1
             with st.spinner("Transcribing your voice…"):
                 transcribed = transcribe_audio(audio_bytes)
 
