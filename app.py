@@ -317,9 +317,7 @@ st.markdown("""
     display: none !important;
 }
 [data-testid="stChatInput"]{
-    position:sticky; bottom:0; background:rgba(255,255,255,0.6);
-    backdrop-filter:blur(10px); border-top:1px solid rgba(200,210,230,0.55);
-    padding-top:10px;
+    position:sticky; bottom:0;
 }
 </style>
 """, unsafe_allow_html=True)
