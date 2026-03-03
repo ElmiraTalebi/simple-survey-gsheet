@@ -283,6 +283,18 @@ st.markdown("""
     backdrop-filter:blur(10px); border-top:1px solid rgba(200,210,230,0.55);
     padding-top:10px;
 }
+.stButton>button {
+    font-size: 18px !important;
+    padding: 16px 12px !important;
+    border-radius: 16px !important;
+    font-weight: 600 !important;
+}
+
+.scale-button button {
+    font-size: 20px !important;
+    padding: 18px !important;
+    border-radius: 14px !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -418,87 +430,13 @@ if st.session_state.stage == -1:
     st.markdown("</div>", unsafe_allow_html=True)
     st.stop()
 
-# ============================================================
-# CHAT WINDOW — render all messages
-# ============================================================
-st.markdown('<div class="chat-window">', unsafe_allow_html=True)
-for msg in st.session_state.messages:
-    if msg.get("role") == "doctor":
-        st.markdown(
-            f"""
-        <div class="row-left">
-          <div class="avatar">🩺</div>
-          <div class="bubble-doc">{msg.get("content","")}</div>
-        </div>""",
-            unsafe_allow_html=True,
-        )
-    else:
-        st.markdown(
-            f"""
-        <div class="row-right">
-          <div class="bubble-pat">{msg.get("content","")}</div>
-          <div class="avatar">🙂</div>
-        </div>""",
-            unsafe_allow_html=True,
-        )
-st.markdown("</div>", unsafe_allow_html=True)
-
 stage = st.session_state.stage
 
 # ============================================================
-# INPUT AREA — Text OR Voice (voice optional depending on Streamlit version)
-# ============================================================
-if not st.session_state.submitted:
-
-    cols = st.columns([5, 1])
-    with cols[0]:
-        user_text = st.chat_input("Reply to the assistant or type anything…", key="chat_input_main")
-
-    audio_value = None
-    with cols[1]:
-        # st.audio_input exists in newer Streamlit; fall back gracefully if missing.
-        if hasattr(st, "audio_input"):
-            audio_value = st.audio_input("🎙️", key="mic_input")
-        else:
-            st.caption("🎙️ Upgrade Streamlit for voice")
-
-    # Typed text
-    if user_text:
-        add_patient(user_text)
-        with st.spinner("Assistant is thinking…"):
-            reply = get_gpt_reply()
-        add_doctor(reply)
-        st.rerun()
-
-    # Voice recording
-    if audio_value is not None:
-        try:
-            audio_bytes = audio_value.getvalue()
-            audio_hash = hashlib.sha1(audio_bytes).hexdigest()
-        except Exception:
-            audio_bytes = None
-            audio_hash = None
-
-        if audio_bytes and audio_hash and audio_hash != st.session_state.last_audio_hash:
-            st.session_state.last_audio_hash = audio_hash
-            with st.spinner("Transcribing your voice…"):
-                transcribed = transcribe_audio(audio_bytes)
-
-            if transcribed and not transcribed.startswith("(Transcription failed"):
-                st.info(f'🎙️ Heard: "{transcribed}"')
-                add_patient(transcribed)
-                with st.spinner("Assistant is thinking…"):
-                    reply = get_gpt_reply()
-                add_doctor(reply)
-                st.rerun()
-            else:
-                st.warning(f"Could not transcribe audio. {transcribed} Please try again or type your message.")
-
-# ============================================================
-# STAGE PANELS — structured widgets sit below the chat
+# STAGE PANELS — questionnaire first
 # ============================================================
 
-# Stage 0 — Feeling scale (clickable number buttons)
+# Stage 0 — Feeling scale (replaces slider with clickable boxes)
 if stage == 0:
     st.markdown('<div class="panel"><div class="panel-title">How are you feeling today?</div>', unsafe_allow_html=True)
     st.markdown("Tap a number from 0 (worst) to 10 (best):")
@@ -508,13 +446,11 @@ if stage == 0:
         with scale_cols[i]:
             if st.button(str(i), key=f"feeling_{i}", use_container_width=True):
                 st.session_state.feeling_level = i
-                st.rerun()
 
-    if st.session_state.feeling_level is not None:
-        st.markdown(
-            f"<div style='font-size:18px;margin-top:8px;'>Selected: <b>{st.session_state.feeling_level}/10</b></div>",
-            unsafe_allow_html=True
-        )
+    st.markdown(
+        f"<div style='font-size:18px;margin-top:8px;'>Selected: <b>{st.session_state.feeling_level}/10</b></div>",
+        unsafe_allow_html=True
+    )
 
     if st.button("Send feeling level ➜", use_container_width=True):
         add_patient(f"My feeling level today is {st.session_state.feeling_level}/10.")
@@ -522,6 +458,7 @@ if stage == 0:
         with st.spinner("Assistant is thinking…"):
             gpt_followup("stage0")
         st.rerun()
+
     st.markdown("</div>", unsafe_allow_html=True)
 
 # Stage 1 — Pain yes/no
@@ -582,8 +519,8 @@ elif stage == 2:
                 gpt_followup("stage2")
             st.rerun()
     st.markdown("</div>", unsafe_allow_html=True)
-
-# Stage 3 — Symptom checklist (clickable toggle buttons)
+    
+# Stage 3 — Symptom checklist (large clickable rows)
 elif stage == 3:
     st.markdown('<div class="panel"><div class="panel-title">Any of these symptoms today?</div>', unsafe_allow_html=True)
 
@@ -601,6 +538,10 @@ elif stage == 3:
         "Sleep problems",
         "Anxiety / low mood",
     ]
+
+    # Ensure list exists
+    if "symptoms" not in st.session_state:
+        st.session_state.symptoms = []
 
     for symptom in symptom_options:
         label = f"✓ {symptom}" if symptom in st.session_state.symptoms else symptom
@@ -620,7 +561,9 @@ elif stage == 3:
         with st.spinner("Assistant is thinking…"):
             gpt_followup("stage3")
         st.rerun()
+
     st.markdown("</div>", unsafe_allow_html=True)
+
 
 # Stage 4 — Free chat + submit
 elif stage == 4:
@@ -641,3 +584,76 @@ elif stage == 4:
                 st.rerun()
             except Exception as e:
                 st.error(f"Failed to save to Google Sheets: {e}")
+
+# ============================================================
+# CHAT WINDOW — render all messages (shown after questionnaire)
+# ============================================================
+st.markdown('<div class="chat-window">', unsafe_allow_html=True)
+for msg in st.session_state.messages:
+    if msg.get("role") == "doctor":
+        st.markdown(
+            f"""
+        <div class="row-left">
+          <div class="avatar">🩺</div>
+          <div class="bubble-doc">{msg.get("content","")}</div>
+        </div>""",
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown(
+            f"""
+        <div class="row-right">
+          <div class="bubble-pat">{msg.get("content","")}</div>
+          <div class="avatar">🙂</div>
+        </div>""",
+            unsafe_allow_html=True,
+        )
+st.markdown("</div>", unsafe_allow_html=True)
+
+# ============================================================
+# INPUT AREA — Text OR Voice (shown after questionnaire)
+# ============================================================
+if not st.session_state.submitted:
+
+    cols = st.columns([5, 1])
+    with cols[0]:
+        user_text = st.chat_input("Reply to the assistant or type anything…", key="chat_input_main")
+
+    audio_value = None
+    with cols[1]:
+        if hasattr(st, "audio_input"):
+            audio_value = st.audio_input("🎙️", key="mic_input")
+        else:
+            st.caption("🎙️ Upgrade Streamlit for voice")
+
+    # Typed text
+    if user_text:
+        add_patient(user_text)
+        with st.spinner("Assistant is thinking…"):
+            reply = get_gpt_reply()
+        add_doctor(reply)
+        st.rerun()
+
+    # Voice recording
+    if audio_value is not None:
+        try:
+            audio_bytes = audio_value.getvalue()
+            audio_hash = hashlib.sha1(audio_bytes).hexdigest()
+        except Exception:
+            audio_bytes = None
+            audio_hash = None
+
+        if audio_bytes and audio_hash and audio_hash != st.session_state.last_audio_hash:
+            st.session_state.last_audio_hash = audio_hash
+            with st.spinner("Transcribing your voice…"):
+                transcribed = transcribe_audio(audio_bytes)
+
+            if transcribed and not transcribed.startswith("(Transcription failed"):
+                st.info(f'🎙️ Heard: "{transcribed}"')
+                add_patient(transcribed)
+                with st.spinner("Assistant is thinking…"):
+                    reply = get_gpt_reply()
+                add_doctor(reply)
+                st.rerun()
+            else:
+                st.warning(f"Could not transcribe audio. {transcribed} Please try again or type your message.")
