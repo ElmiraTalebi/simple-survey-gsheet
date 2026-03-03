@@ -655,7 +655,77 @@ elif stage == 3:
 # Stage 4 — Free chat + submit
 elif stage == 4:
     if st.session_state.submitted:
-        st.success("✅ Your check-in has been submitted. Thank you — your care team will review this shortly.")
+        # ── Summary table shown after submission ──────────────────────────
+        name        = st.session_state.get("patient_name", "—")
+        feeling     = st.session_state.get("feeling_level", None)
+        pain        = st.session_state.get("pain_yesno", None)
+        locations   = sorted(list(st.session_state.get("selected_parts", set())))
+        symptoms    = st.session_state.get("symptoms", [])
+
+        # Auto-generated widget messages — excluded from the conversation section
+        widget_msgs = {
+            f"My feeling level today is {feeling}/10.",
+            "Yes, I have pain today.",
+            "No, I don't have any pain today.",
+            "I'm not sure of the exact location.",
+            "No symptoms from the checklist today.",
+        }
+        if locations:
+            widget_msgs.add("Pain locations: " + ", ".join(locations) + ".")
+        if symptoms:
+            widget_msgs.add("Symptoms today: " + "; ".join(symptoms) + ".")
+
+        pain_str = "Yes" if pain is True else ("No" if pain is False else "—")
+        feeling_display = f"{feeling}/10" if feeling is not None else "—"
+
+        sym_html = "".join(f'<span class="tag">{s}</span>' for s in symptoms) if symptoms else "<span style='color:rgba(0,0,0,0.4)'>None reported</span>"
+        loc_html = "".join(f'<span class="tag">{l}</span>' for l in locations) if locations else "<span style='color:rgba(0,0,0,0.4)'>None / N/A</span>"
+
+        conv_rows = ""
+        for m in st.session_state.messages:
+            role    = m.get("role", "")
+            txt     = m.get("content", "")
+            if txt in widget_msgs:
+                continue
+            if role == "patient":
+                conv_rows += f'<div class="chat-turn"><div class="chat-turn-label">You</div><div class="chat-turn-text">{txt}</div></div>'
+            elif role == "doctor":
+                conv_rows += f'<div class="chat-turn"><div class="chat-turn-label">Assistant</div><div class="chat-turn-text">{txt}</div></div>'
+        conv_cell = conv_rows if conv_rows else "<span style='color:rgba(0,0,0,0.4)'>No additional conversation</span>"
+
+        st.markdown("""
+<style>
+.summary-wrap{background:linear-gradient(135deg,#f0f7ff,#eaf3ff);border:1.5px solid rgba(31,122,255,0.15);border-radius:20px;padding:28px 24px 20px;margin-top:8px;box-shadow:0 4px 20px rgba(31,122,255,0.08);}
+.summary-title{font-size:20px;font-weight:700;color:#1a2540;margin-bottom:4px;}
+.summary-sub{font-size:13px;color:rgba(0,0,0,0.45);margin-bottom:20px;}
+.summary-table{width:100%;border-collapse:collapse;font-size:15px;}
+.summary-table tr{border-bottom:1px solid rgba(200,215,240,0.6);}
+.summary-table tr:last-child{border-bottom:none;}
+.summary-table td{padding:11px 8px;vertical-align:top;}
+.summary-table td:first-child{font-weight:600;color:#4a6080;width:36%;white-space:nowrap;}
+.summary-table td:last-child{color:#1a2540;}
+.chat-turn{margin-bottom:8px;}
+.chat-turn-label{font-size:10px;font-weight:700;letter-spacing:0.07em;text-transform:uppercase;color:rgba(31,122,255,0.55);margin-bottom:2px;}
+.chat-turn-text{font-size:14px;color:#1a2540;line-height:1.5;}
+.tag{display:inline-block;background:rgba(31,122,255,0.09);color:#1f5acc;border-radius:20px;padding:3px 10px;font-size:13px;margin:3px 4px 3px 0;}
+.submitted-badge{display:inline-block;background:#22c55e;color:white;border-radius:20px;padding:4px 14px;font-size:13px;font-weight:700;margin-bottom:16px;}
+</style>
+""", unsafe_allow_html=True)
+
+        st.markdown(f"""
+<div class="summary-wrap">
+  <div class="submitted-badge">✅ Submitted</div>
+  <div class="summary-title">Check-In Summary — {name}</div>
+  <div class="summary-sub">Your care team will review this shortly.</div>
+  <table class="summary-table">
+    <tr><td>Patient name</td><td>{name}</td></tr>
+    <tr><td>Feeling level</td><td>{feeling_display}</td></tr>
+    <tr><td>Pain today</td><td>{pain_str}</td></tr>
+    <tr><td>Pain locations</td><td>{loc_html}</td></tr>
+    <tr><td>Symptoms</td><td>{sym_html}</td></tr>
+    <tr><td>Conversation</td><td>{conv_cell}</td></tr>
+  </table>
+</div>""", unsafe_allow_html=True)
     else:
         st.markdown(
             '<div class="panel">'
