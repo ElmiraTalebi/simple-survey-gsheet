@@ -511,13 +511,14 @@ if stage == 0:
     scale_cols = st.columns(11)
     for i in range(11):
         with scale_cols[i]:
-            if st.button(str(i), key=f"feeling_{i}", use_container_width=True):
+            label = f"✓ {i}" if st.session_state.feeling_level == i else str(i)
+            if st.button(label, key=f"feeling_{i}", use_container_width=True):
                 st.session_state.feeling_level = i
                 st.rerun()
 
     if st.session_state.feeling_level is not None:
         st.markdown(
-            f"<div style='font-size:18px;margin-top:8px;'>Selected: <b>{st.session_state.feeling_level}/10</b></div>",
+            f"<div style='font-size:16px; margin-top:10px;'>Selected: <b>{st.session_state.feeling_level} / 10</b></div>",
             unsafe_allow_html=True
         )
 
