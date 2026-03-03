@@ -488,9 +488,9 @@ if not st.session_state.submitted:
     with cols[1]:
         # st.audio_input exists in newer Streamlit; fall back gracefully if missing.
         if hasattr(st, "audio_input"):
-            audio_value = st.audio_input("🎙️", key="mic_input")
+            audio_value = st.audio_input("", key="mic_input")
         else:
-            st.caption("🎙️ Upgrade Streamlit for voice")
+            st.caption("Upgrade Streamlit for voice")
 
     # Typed text
     if user_text:
@@ -515,7 +515,7 @@ if not st.session_state.submitted:
                 transcribed = transcribe_audio(audio_bytes)
 
             if transcribed and not transcribed.startswith("(Transcription failed"):
-                st.info(f'🎙️ Heard: "{transcribed}"')
+                st.info(f'Heard: "{transcribed}"')
                 add_patient(transcribed)
                 with st.spinner("Assistant is thinking…"):
                     reply = get_gpt_reply()
