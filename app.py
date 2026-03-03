@@ -694,33 +694,30 @@ elif stage == 4:
         sym_html = "".join(f'<span class="tag">{s}</span>' for s in symptoms) if symptoms else "<span style='color:rgba(0,0,0,0.4)'>None reported</span>"
         loc_html = "".join(f'<span class="tag">{l}</span>' for l in locations) if locations else "<span style='color:rgba(0,0,0,0.4)'>None / N/A</span>"
 
-        # Build transcript of non-widget messages for GPT to summarise
-        transcript_lines = []
+        # Collect only what the patient typed/voiced (exclude auto-generated widget messages)
+        patient_lines = []
         for m in st.session_state.messages:
             role = m.get("role", "")
             txt  = m.get("content", "")
-            if txt in widget_msgs:
-                continue
-            if role == "patient":
-                transcript_lines.append(f"Patient: {txt}")
-            elif role == "doctor":
-                transcript_lines.append(f"Assistant: {txt}")
+            if role == "patient" and txt not in widget_msgs:
+                patient_lines.append(txt)
 
-        if transcript_lines and _openai_ready():
-            transcript_text = "\n".join(transcript_lines)
+        if patient_lines and _openai_ready():
+            patient_text = "\n".join(f"- {l}" for l in patient_lines)
             try:
                 summary_response = openai_client.chat.completions.create(
                     model=_secret("openai_model", default="gpt-4o-mini"),
                     messages=[
                         {"role": "system", "content": (
                             "You are a clinical notes assistant. "
-                            "From the conversation below, extract ONLY the medically relevant information the patient mentioned — "
-                            "such as pain details, symptom descriptions, severity, duration, what makes it better or worse, mood, appetite, sleep, or any other health-related details. "
-                            "Format your output as a clean bullet-point list. "
-                            "Be concise. Do not include greetings, filler, or assistant questions — only facts the patient provided. "
-                            "If there is nothing clinically relevant beyond what the widgets already captured, reply with exactly: None"
+                            "Below are free-text messages typed or spoken by a cancer patient during a symptom check-in. "
+                            "Extract ONLY medically relevant facts: pain details, severity, duration, "
+                            "what helps or worsens it, mood, appetite, sleep, energy, or other health details. "
+                            "Output a clean bullet-point list, one fact per line. "
+                            "Remove greetings, filler, and repetition. "
+                            "If nothing clinically relevant beyond the widgets, reply exactly: None"
                         )},
-                        {"role": "user", "content": transcript_text}
+                        {"role": "user", "content": patient_text}
                     ],
                     max_tokens=300,
                     temperature=0.2,
