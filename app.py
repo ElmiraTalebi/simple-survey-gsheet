@@ -453,14 +453,29 @@ if st.session_state.stage == -1:
             past = st.session_state.past_checkins
             if past:
                 last = past[-1]
+                fl   = last.get('feeling_level', '?')
+                pn   = 'yes' if last.get('pain') else 'no'
+                ploc = ', '.join(last.get('pain_locations', [])) or 'none'
+                sym  = ', '.join(last.get('symptoms', [])) or 'none'
+                ts   = last.get('timestamp', 'last visit')
+                # Build a specific follow-up question target based on what was worst
+                if last.get('symptoms'):
+                    followup_target = f"specifically ask how their {sym} have been"
+                elif last.get('pain') and last.get('pain_locations'):
+                    followup_target = f"specifically ask about their {ploc} pain"
+                elif fl != '?' and int(fl) <= 4:
+                    followup_target = f"specifically ask what contributed to their low feeling score of {fl}/10"
+                else:
+                    followup_target = "ask how they have been feeling overall"
                 context = (
-                    f"Most recent visit: {last.get('timestamp','?')}. "
-                    f"Feeling:{last.get('feeling_level','?')}/10, "
-                    f"pain:{'yes' if last.get('pain') else 'no'}, "
-                    f"locations:{', '.join(last.get('pain_locations',[])) or 'none'}, "
-                    f"symptoms:{', '.join(last.get('symptoms',[])) or 'none'}. "
-                    f"Greet {name_input.strip()} by name, summarise their last visit in 1-2 sentences, "
-                    f"then ask ONE follow-up question. No filler phrases."
+                    f"The patient's last visit was on {ts}. "
+                    f"They reported: feeling level {fl}/10, pain: {pn}, "
+                    f"pain locations: {ploc}, symptoms: {sym}. "
+                    f"Greet {name_input.strip()} by name. "
+                    f"In your greeting, explicitly mention their specific data from last time "
+                    f"(e.g. mention the actual symptom names or pain locations or feeling score). "
+                    f"Then {followup_target}. "
+                    f"Be specific, not generic. No filler phrases."
                 )
                 with st.spinner("Getting your assistant ready…"):
                     opening = get_gpt_reply(extra_context=context)
@@ -494,24 +509,28 @@ render_chat_window()
 if stage == 0:
     history_ctx = (
         "Patient is replying about how they have been since last visit. "
-        "Ask ONE clinical follow-up if warranted. Do NOT start structured questions yet. No filler."
+        "Ask ONE specific clinical follow-up question if warranted — reference their actual data. "
+        "Do NOT start structured check-in questions yet. No filler."
     )
     st.markdown('<div class="panel">', unsafe_allow_html=True)
     st.markdown('<div class="panel-title">💬 Catching up from your last visit</div>', unsafe_allow_html=True)
 
-    # Always show the opening GPT message inline
+    # Always render inline messages (GPT question + any patient replies so far)
     render_inline_stage_messages(stage_id=0)
 
-    if not is_answered(0):
-        # Input row for initial answer
-        render_text_mic_row(stage_id=0, extra_context=history_ctx,
-                            placeholder="How have you been since your last visit?")
-    else:
-        # Show follow-up input if GPT still has budget
-        if can_followup(0):
+    # Determine if the last message in this stage is from the doctor (needs a reply)
+    stage0_msgs = [m for m in st.session_state.messages if m.get("stage") == 0]
+    last_is_doctor = stage0_msgs and stage0_msgs[-1].get("role") == "doctor"
+
+    if last_is_doctor:
+        # Always show input when doctor just asked something
+        if not is_answered(0):
+            render_text_mic_row(stage_id=0, extra_context=history_ctx,
+                                placeholder="Type your reply…")
+        else:
             render_followup_input(stage_id=0, extra_context=history_ctx)
 
-        # Next button — always available once answered
+    if is_answered(0):
         st.markdown("<hr class='divider'>", unsafe_allow_html=True)
         render_next_button("Start today's check-in →")
 
@@ -563,12 +582,10 @@ elif stage == 1:
                             placeholder="Or describe how you feel in your own words…")
 
     else:
-        # Answered — show inline follow-up conversation
         render_inline_stage_messages(stage_id=1)
-
-        if can_followup(1):
+        stage1_msgs = [m for m in st.session_state.messages if m.get("stage") == 1]
+        if stage1_msgs and stage1_msgs[-1].get("role") == "doctor":
             render_followup_input(stage_id=1, extra_context=feeling_ctx)
-
         st.markdown("<hr class='divider'>", unsafe_allow_html=True)
         render_next_button("Next question →")
 
@@ -616,10 +633,9 @@ elif stage == 2:
 
     else:
         render_inline_stage_messages(stage_id=2)
-
-        if can_followup(2):
+        stage2_msgs = [m for m in st.session_state.messages if m.get("stage") == 2]
+        if stage2_msgs and stage2_msgs[-1].get("role") == "doctor":
             render_followup_input(stage_id=2, extra_context=pain_ctx)
-
         st.markdown("<hr class='divider'>", unsafe_allow_html=True)
         render_next_button("Next question →")
 
@@ -678,10 +694,9 @@ elif stage == 3:
 
     else:
         render_inline_stage_messages(stage_id=3)
-
-        if can_followup(3):
+        stage3_msgs = [m for m in st.session_state.messages if m.get("stage") == 3]
+        if stage3_msgs and stage3_msgs[-1].get("role") == "doctor":
             render_followup_input(stage_id=3, extra_context=location_ctx)
-
         st.markdown("<hr class='divider'>", unsafe_allow_html=True)
         render_next_button("Next question →")
 
@@ -740,10 +755,9 @@ elif stage == 4:
 
     else:
         render_inline_stage_messages(stage_id=4)
-
-        if can_followup(4):
+        stage4_msgs = [m for m in st.session_state.messages if m.get("stage") == 4]
+        if stage4_msgs and stage4_msgs[-1].get("role") == "doctor":
             render_followup_input(stage_id=4, extra_context=symptom_ctx)
-
         st.markdown("<hr class='divider'>", unsafe_allow_html=True)
         render_next_button("Finish check-in →")
 
