@@ -308,6 +308,7 @@ DEFAULTS = {
     "mic_key_counter": 0,
     "followup_counts": {},
     "stage_answered": {},
+    "current_stage_prompt": {},
 }
 
 for key, value in DEFAULTS.items():
@@ -338,6 +339,21 @@ def stage_answered(stage_id: int) -> bool:
 
 def mark_stage_answered(stage_id: int):
     st.session_state.stage_answered[stage_id] = True
+
+
+
+def set_stage_prompt(stage_id: int, text: str):
+    st.session_state.current_stage_prompt[stage_id] = text
+
+
+
+def get_stage_prompt(stage_id: int) -> str:
+    return st.session_state.current_stage_prompt.get(stage_id, "")
+
+
+
+def complete_followups(stage_id: int):
+    st.session_state.followup_counts[stage_id] = MAX_FOLLOWUPS.get(stage_id, 0)
 
 
 
@@ -391,8 +407,14 @@ def submit_stage_response(patient_text: str, stage_id: int, extra_context: str =
     if can_ask_followup(stage_id):
         record_followup(stage_id)
         with st.spinner("Writing the next question…"):
-            reply = get_gpt_reply(extra_context=extra_context)
-        add_doctor(reply)
+            reply = get_gpt_reply(extra_context=extra_context).strip()
+
+        if reply == "READY_TO_CONTINUE":
+            complete_followups(stage_id)
+            st.session_state.current_stage_prompt.pop(stage_id, None)
+        elif reply:
+            add_doctor(reply)
+            set_stage_prompt(stage_id, reply)
 
 
 
@@ -440,6 +462,22 @@ def render_chat_window():
 
 
 
+
+
+def render_inline_followup(stage_id: int):
+    prompt = get_stage_prompt(stage_id)
+    if not prompt:
+        return
+    st.markdown(
+        f'<div class="row-left" style="margin-top:10px;"><div class="avatar">🩺</div><div class="bubble-doc" style="max-width:100%;">{prompt}</div></div>',
+        unsafe_allow_html=True,
+    )
+
+
+def render_structured_history():
+    with st.expander("Show conversation so far", expanded=False):
+        render_chat_window()
+
 def render_type_or_speak(stage_id: int, extra_context: str, placeholder: str):
     text_col, send_col, mic_col = st.columns([5, 1, 1], gap="small")
     with text_col:
@@ -476,7 +514,7 @@ def render_stage_footer(stage_id: int, next_label: str, allow_skip_while_followu
     ready_for_next = (not can_ask_followup(stage_id)) or allow_skip_while_followups_remain
 
     if can_ask_followup(stage_id):
-        st.markdown('<div class="small-note">You can reply to the question above, or continue when you are ready.</div>', unsafe_allow_html=True)
+        st.markdown('<div class="small-note">You can answer the question above, or continue when you are ready.</div>', unsafe_allow_html=True)
     else:
         st.markdown("<div class='small-note'>You're ready for the next step.</div>", unsafe_allow_html=True)
 
@@ -566,7 +604,8 @@ if st.session_state.stage == -1:
 
 
 stage = st.session_state.stage
-render_chat_window()
+if stage in (0, 5):
+    render_chat_window()
 
 
 # ============================================================
@@ -597,7 +636,8 @@ if stage == 0:
 elif stage == 1:
     feeling_ctx = (
         "The patient just answered the 0-10 feeling question. "
-        "Ask one focused follow-up question about what is driving the score."
+        "Ask one focused follow-up question about what is driving the score only if more detail is still needed. "
+        "If you already have enough information for this stage, respond exactly READY_TO_CONTINUE."
     )
     st.markdown('<div class="panel">', unsafe_allow_html=True)
     st.markdown('<div class="panel-title">How are you feeling overall today?</div>', unsafe_allow_html=True)
@@ -625,10 +665,18 @@ elif stage == 1:
                 )
                 st.rerun()
 
-    st.markdown('<div class="divider">— or type / speak your answer —</div>', unsafe_allow_html=True)
+    if stage_answered(1):
+        render_inline_followup(1)
+        if can_ask_followup(1):
+            st.markdown('<div class="divider">— answer the question above, or type / speak here —</div>', unsafe_allow_html=True)
+        else:
+            st.markdown('<div class="divider">— you can add more detail, or continue below —</div>', unsafe_allow_html=True)
+    else:
+        st.markdown('<div class="divider">— or type / speak your answer —</div>', unsafe_allow_html=True)
     render_type_or_speak(1, feeling_ctx, "Describe how you're feeling today…")
     st.markdown("</div>", unsafe_allow_html=True)
-    render_stage_footer(1, "Continue →", allow_skip_while_followups_remain=False)
+    render_structured_history()
+    render_stage_footer(1, "Next question →", allow_skip_while_followups_remain=False)
 
 
 # ============================================================
@@ -637,7 +685,8 @@ elif stage == 1:
 elif stage == 2:
     pain_ctx = (
         "The patient just answered whether they have pain today. "
-        "Ask one adaptive follow-up question. If they said yes, focus on pain details. If they said no, confirm whether they have any other physical discomfort worth noting."
+        "Ask one adaptive follow-up question only if more detail is still needed. If they said yes, focus on pain details. If they said no, confirm whether they have any other physical discomfort worth noting. "
+        "If you already have enough information for this stage, respond exactly READY_TO_CONTINUE."
     )
     st.markdown('<div class="panel">', unsafe_allow_html=True)
     st.markdown('<div class="panel-title">Are you having any pain today?</div>', unsafe_allow_html=True)
@@ -655,10 +704,18 @@ elif stage == 2:
             submit_stage_response("No, I do not have pain today.", 2, pain_ctx)
             st.rerun()
 
-    st.markdown('<div class="divider">— or type / speak your answer —</div>', unsafe_allow_html=True)
+    if stage_answered(2):
+        render_inline_followup(2)
+        if can_ask_followup(2):
+            st.markdown('<div class="divider">— answer the question above, or type / speak here —</div>', unsafe_allow_html=True)
+        else:
+            st.markdown('<div class="divider">— you can add more detail, or continue below —</div>', unsafe_allow_html=True)
+    else:
+        st.markdown('<div class="divider">— or type / speak your answer —</div>', unsafe_allow_html=True)
     render_type_or_speak(2, pain_ctx, "Type or speak your answer…")
     st.markdown("</div>", unsafe_allow_html=True)
-    render_stage_footer(2, "Continue →", allow_skip_while_followups_remain=False)
+    render_structured_history()
+    render_stage_footer(2, "Next question →", allow_skip_while_followups_remain=False)
 
 
 # ============================================================
@@ -667,7 +724,8 @@ elif stage == 2:
 elif stage == 3:
     location_ctx = (
         "The patient just identified where the pain is located. "
-        "Ask one focused follow-up question about those locations, such as severity, duration, pattern, or triggers."
+        "Ask one focused follow-up question about those locations, such as severity, duration, pattern, or triggers, only if more detail is still needed. "
+        "If you already have enough information for this stage, respond exactly READY_TO_CONTINUE."
     )
     st.markdown('<div class="panel">', unsafe_allow_html=True)
     st.markdown('<div class="panel-title">Where is the pain located?</div>', unsafe_allow_html=True)
@@ -696,10 +754,18 @@ elif stage == 3:
             submit_stage_response(f"Pain location: {selected_text}.", 3, location_ctx)
             st.rerun()
 
-    st.markdown('<div class="divider">— or type / speak your answer —</div>', unsafe_allow_html=True)
+    if stage_answered(3):
+        render_inline_followup(3)
+        if can_ask_followup(3):
+            st.markdown('<div class="divider">— answer the question above, or type / speak here —</div>', unsafe_allow_html=True)
+        else:
+            st.markdown('<div class="divider">— you can add more detail, or continue below —</div>', unsafe_allow_html=True)
+    else:
+        st.markdown('<div class="divider">— or type / speak your answer —</div>', unsafe_allow_html=True)
     render_type_or_speak(3, location_ctx, "Describe where the pain is…")
     st.markdown("</div>", unsafe_allow_html=True)
-    render_stage_footer(3, "Continue →", allow_skip_while_followups_remain=False)
+    render_structured_history()
+    render_stage_footer(3, "Next question →", allow_skip_while_followups_remain=False)
 
 
 # ============================================================
@@ -708,7 +774,8 @@ elif stage == 3:
 elif stage == 4:
     symptom_ctx = (
         "The patient just submitted symptom information. "
-        "Ask one focused follow-up question about the most important symptom mentioned."
+        "Ask one focused follow-up question about the most important symptom mentioned only if more detail is still needed. "
+        "If you already have enough information for this stage, respond exactly READY_TO_CONTINUE."
     )
     symptom_options = [
         "Fatigue / low energy",
@@ -752,9 +819,17 @@ elif stage == 4:
             submit_stage_response(f"Symptoms today: {symptoms_text}.", 4, symptom_ctx)
             st.rerun()
 
-    st.markdown('<div class="divider">— or type / speak your answer —</div>', unsafe_allow_html=True)
+    if stage_answered(4):
+        render_inline_followup(4)
+        if can_ask_followup(4):
+            st.markdown('<div class="divider">— answer the question above, or type / speak here —</div>', unsafe_allow_html=True)
+        else:
+            st.markdown('<div class="divider">— you can add more detail, or continue below —</div>', unsafe_allow_html=True)
+    else:
+        st.markdown('<div class="divider">— or type / speak your answer —</div>', unsafe_allow_html=True)
     render_type_or_speak(4, symptom_ctx, "Describe any symptoms you want to mention…")
     st.markdown("</div>", unsafe_allow_html=True)
+    render_structured_history()
     render_stage_footer(4, "Continue to final notes →", allow_skip_while_followups_remain=False)
 
 
