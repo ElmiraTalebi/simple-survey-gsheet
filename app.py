@@ -405,13 +405,15 @@ div[data-testid="stStatusWidget"] {
     visibility: hidden !important;
     position: absolute !important;
 }
-/* Hide the Streamlit top bar / connection status bar */
-.stApp > div:first-child,
+/* Hide the Streamlit top bar / connection status bar / iframe bar */
 .stApp [data-testid="stHeader"],
 .stApp [data-testid="stStatusWidget"],
 [data-testid="collapsedControl"],
 .stApp iframe[title="streamlitApp"],
-.stAppHeader, .stHeader {
+.stAppHeader, .stHeader,
+iframe[title="streamlitApp"],
+[data-testid="stAppIframe"],
+div:has(> iframe[title="streamlitApp"]) {
     display: none !important;
     height: 0 !important;
     min-height: 0 !important;
@@ -419,6 +421,47 @@ div[data-testid="stStatusWidget"] {
     padding: 0 !important;
     margin: 0 !important;
     overflow: hidden !important;
+}
+/* Catch any remaining top chrome — iframe bar, running indicator */
+.stApp > div:first-child:not(:has([data-testid="stMainBlockContainer"])) {
+    display: none !important;
+    height: 0 !important;
+}
+/* NUCLEAR: hide any white bar at top that contains "streamlitApp" badge */
+.stApp [data-testid="stBottom"] ~ div,
+[data-testid="manage-app-button"],
+.stApp [data-baseweb="tag"],
+.stApp a[href*="streamlit"],
+[data-testid="stRunningManWidget"],
+[data-testid="stConnectionStatus"],
+[data-testid="manage-app-button"],
+.reportview-container .main > div:first-child {
+    display: none !important;
+    height: 0 !important;
+}
+/* Hide the absolute top bar (white strip) that Streamlit Cloud injects */
+.stApp::before { display: none !important; }
+.stApp > div:first-child {
+    min-height: 0 !important;
+}
+.stApp > div:first-child > div:first-child:not([data-testid="stMainBlockContainer"]):not(:has([data-testid="stMainBlockContainer"])) {
+    display: none !important;
+    height: 0 !important;
+    max-height: 0 !important;
+    overflow: hidden !important;
+}
+/* Last resort: any fixed bar at top of the viewport */
+.stApp > header,
+.stApp > div > header,
+.stApp > div:first-child > div:first-child > div:first-child:empty,
+[data-testid="stAppViewBlockContainer"] > div:first-child:empty {
+    display: none !important; height: 0 !important;
+}
+/* Pill badge / "streamlitApp" label */
+.stApp [data-baseweb="tag"],
+.stApp [data-baseweb="badge"],
+.stApp span:first-child:only-child[style*="background"] {
+    display: none !important;
 }
 
 /* ── App header ── */
@@ -487,8 +530,8 @@ div[data-testid="stStatusWidget"] {
 .panel {
     background: transparent;
     border: none;
-    border-radius: var(--r-lg);
-    padding: 6px 0 10px;
+    border-radius: 0;
+    padding: 0 0 10px;
     box-shadow: none;
     animation: fadeUp 0.28s ease both;
 }
@@ -501,20 +544,23 @@ div[data-testid="stStatusWidget"] {
     animation: fadeUp 0.28s ease both;
 }
 .panel-title {
-    display: flex; align-items: flex-start; gap: 10px;
+    display: flex; align-items: flex-end; gap: 9px;
     margin-bottom: 14px;
+    /* Reset — ensure no heading-like styling leaks */
+    font-family: 'Nunito', sans-serif !important;
+    font-size: 14px; font-weight: 400;
 }
 .panel-title-avatar {
-    width: 32px; height: 32px; border-radius: 50%; flex-shrink: 0;
+    width: 30px; height: 30px; border-radius: 50%; flex-shrink: 0;
     display: flex; align-items: center; justify-content: center;
-    font-size: 15px;
+    font-size: 14px;
     background: var(--accent-lt); border: 1.5px solid var(--accent-md);
 }
 .panel-title-bubble {
     background: var(--surface); border: 1.5px solid var(--border);
     border-radius: var(--r-md); border-bottom-left-radius: 4px;
     padding: 10px 15px; box-shadow: var(--shadow-sm);
-    font-family: 'Nunito', sans-serif;
+    font-family: 'Nunito', sans-serif !important;
     font-size: 15px; font-weight: 600; color: var(--text);
     line-height: 1.5; max-width: 82%;
     animation: fadeUp 0.22s ease both;
