@@ -208,7 +208,7 @@ def transcribe_audio(audio_bytes: bytes) -> str:
     except Exception as e: return f"(Transcription failed: {e})"
 
 # ── CSS ─────────────────────────────────────────────────────
-st.markdown("""
+st.html("""
 <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700;800&family=Lora:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -496,7 +496,7 @@ html, body, [data-testid="stAppViewContainer"] {
 #MainMenu, footer, [data-testid="stToolbar"] { display: none !important; }
 [data-testid="stSidebarNav"] { display: none !important; }
 </style>
-""", unsafe_allow_html=True)
+""")
 
 # ── Session state ───────────────────────────────────────────
 # Stages:
