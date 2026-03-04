@@ -396,57 +396,31 @@ html, body, [data-testid="stAppViewContainer"] {
     box-shadow: 0 4px 18px rgba(42,157,143,0.45) !important;
 }
 
-/* ── Mic widget — clean icon button matching the ↑ Send button ── */
+/* ── Mic widget ── */
 [data-testid="stAudioInput"] { margin: 0 !important; padding: 0 !important; }
 [data-testid="stAudioInput"] > label { display: none !important; }
-
-/* Outer wrapper */
 [data-testid="stAudioInput"] > div {
     height: 38px !important; min-height: 38px !important; max-height: 38px !important;
-    width: 100% !important;
     border-radius: 12px !important;
     border: 1.5px solid var(--border) !important;
+    display: flex !important; align-items: center !important; justify-content: center !important;
     background: var(--surface) !important;
     box-shadow: var(--shadow-sm) !important;
-    transition: border-color 0.15s, background 0.15s !important;
+    transition: border-color 0.15s !important;
     overflow: hidden !important;
-    display: flex !important; align-items: center !important; justify-content: center !important;
-    cursor: pointer !important;
-    position: relative !important;
 }
 [data-testid="stAudioInput"] > div:hover {
     border-color: var(--accent) !important;
-    background: var(--accent-lt) !important;
 }
-
-/* Inner row — flex center */
+/* Hide the timer text, keep only the mic icon */
+[data-testid="stAudioInput"] > div > div > span,
+[data-testid="stAudioInput"] > div > div > p,
+[data-testid="stAudioInput"] span { display: none !important; }
 [data-testid="stAudioInput"] > div > div {
     display: flex !important; align-items: center !important;
-    justify-content: center !important;
-    width: 100% !important; height: 100% !important;
-    gap: 0 !important; padding: 0 !important;
+    justify-content: center !important; width: 100% !important;
+    overflow: hidden !important;
 }
-
-/* Hide only the timer text (it lives in a <p> or bare text span next to the button) */
-[data-testid="stAudioInput"] p { display: none !important; }
-[data-testid="stAudioInput"] > div > div > span { display: none !important; }
-
-/* Mic icon button itself — just size it nicely */
-[data-testid="stAudioInput"] button {
-    background: transparent !important;
-    border: none !important;
-    box-shadow: none !important;
-    padding: 0 !important;
-    display: flex !important; align-items: center !important; justify-content: center !important;
-    width: 100% !important; height: 100% !important;
-    cursor: pointer !important;
-}
-[data-testid="stAudioInput"] svg {
-    width: 18px !important; height: 18px !important;
-    color: var(--text-muted) !important;
-    flex-shrink: 0 !important;
-}
-[data-testid="stAudioInput"] > div:hover svg { color: var(--accent) !important; }
 
 /* ── Text inputs ── */
 [data-testid="stTextInput"] > div > div > input {
