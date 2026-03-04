@@ -1284,10 +1284,14 @@ elif stage == 4:
     else:
         render_inline_stage_messages(stage_id=4, extra_context=symptom_ctx)
         stage4_msgs = [m for m in st.session_state.messages if m.get("stage") == 4]
-        if stage4_msgs and stage4_msgs[-1].get("role") == "doctor":
+        last_is_doctor = stage4_msgs and stage4_msgs[-1].get("role") == "doctor"
+        if last_is_doctor:
+            # Doctor asked a follow-up — let patient reply
             render_followup_input(stage_id=4, extra_context=symptom_ctx)
-        st.markdown("<hr class='divider'>", unsafe_allow_html=True)
-        render_next_button("Finish check-in →")
+        else:
+            # Patient replied and no more follow-up was generated — move on
+            advance_stage()
+            st.rerun()
 
     st.markdown("</div>", unsafe_allow_html=True)
 
