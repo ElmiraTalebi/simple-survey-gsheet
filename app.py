@@ -87,7 +87,7 @@ def build_system_prompt(extra_context: str = "") -> str:
     symptoms = st.session_state.get("symptoms", [])
 
     lines = []
-    if feeling  is not None: lines.append(f"- Feeling: {feeling}/10")
+    if feeling  is not None: lines.append(f"- Feeling: {feeling}")
     if pain     is not None: lines.append(f"- Pain: {'yes' if pain else 'no'}")
     if locs:                 lines.append(f"- Pain locations: {', '.join(locs)}")
     if symptoms:             lines.append(f"- Symptoms: {', '.join(symptoms)}")
@@ -567,25 +567,34 @@ if stage == 0:
 # ════════════════════════════════════════════════════════════
 elif stage == 1:
     feeling_ctx = (
-        "Patient answered the 0–10 feeling scale. "
-        "Ask ONE specific follow-up about what is driving that score. No filler. Just the question."
+        "Patient answered how they are feeling today using the PROMIS 5-point scale (excellent/very good/good/fair/poor). "
+        "Ask ONE specific follow-up about what is driving that feeling. No filler. Just the question."
     )
     st.markdown('<div class="panel">', unsafe_allow_html=True)
     st.markdown('<div class="panel-title">How are you feeling today?</div>', unsafe_allow_html=True)
 
+    # PROMIS Global Health 5-point scale — standard in oncology patient-reported outcomes
+    FEELING_OPTIONS = [
+        ("Excellent", "excellent"),
+        ("Very Good",  "very good"),
+        ("Good",      "good"),
+        ("Fair",      "fair"),
+        ("Poor",      "poor"),
+    ]
+
     if not is_answered(1):
         # Show opening GPT message (tagged stage=1) inline
         render_inline_stage_messages(stage_id=1)
-        st.markdown('<div class="small-note">Tap a number (0 = worst · 10 = best) or type / speak below</div>',
+        st.markdown('<div class="small-note">Choose how you feel, or describe in your own words below</div>',
                     unsafe_allow_html=True)
 
-        # Number buttons row
-        scale_cols = st.columns(11, gap="small")
-        for i in range(11):
-            with scale_cols[i]:
-                label = f"✓{i}" if st.session_state.feeling_level == i else str(i)
-                if st.button(label, key=f"feel_{i}", use_container_width=True):
-                    st.session_state.feeling_level = i
+        # 5 buttons in a single row
+        opt_cols = st.columns(5, gap="small")
+        for idx, (label, value) in enumerate(FEELING_OPTIONS):
+            with opt_cols[idx]:
+                btn_label = f"✓ {label}" if st.session_state.feeling_level == value else label
+                if st.button(btn_label, key=f"feel_{idx}", use_container_width=True):
+                    st.session_state.feeling_level = value
                     st.rerun()
 
         # Selected indicator + Send
@@ -593,12 +602,12 @@ elif stage == 1:
             c_sel, c_send = st.columns([5, 2], gap="small")
             with c_sel:
                 st.markdown(f"<div style='padding:5px 2px;font-size:14px;'>"
-                            f"Selected: <b>{st.session_state.feeling_level}/10</b></div>",
+                            f"Selected: <b>{st.session_state.feeling_level}</b></div>",
                             unsafe_allow_html=True)
             with c_send:
                 if st.button("Send ➜", key="send_feeling", use_container_width=True):
                     on_patient_answer(
-                        f"My feeling level today is {st.session_state.feeling_level}/10.",
+                        f"I'm feeling {st.session_state.feeling_level} today.",
                         1, feeling_ctx)
                     st.rerun()
 
@@ -810,7 +819,7 @@ elif stage == 5:
         if locations: widget_msgs.add(f"Pain locations: {', '.join(locations)}.")
         if symptoms:  widget_msgs.add(f"Symptoms today: {'; '.join(symptoms)}.")
 
-        feeling_display = f"{feeling}/10" if feeling is not None else "—"
+        feeling_display = feeling if feeling is not None else "—"
         pain_str  = "Yes" if pain is True else ("No" if pain is False else "—")
         sym_html  = "".join(f'<span class="tag">{s}</span>' for s in symptoms) or "<span style='opacity:.4'>None</span>"
         loc_html  = "".join(f'<span class="tag">{l}</span>' for l in locations) or "<span style='opacity:.4'>N/A</span>"
