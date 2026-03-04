@@ -547,18 +547,23 @@ html, body, [data-testid="stAppViewContainer"] {
 [data-testid="stTextInput"] > label { display: none !important; }
 
 /* ── Embedded send button (↑ inside text input) ── */
-/* Target: a button container that immediately follows a text-input container
-   inside a column — this only matches our chat input rows. */
 [data-testid="stColumn"] [data-testid="stVerticalBlock"]
   > [data-testid="stElementContainer"]:has([data-testid="stTextInput"])
   + [data-testid="stElementContainer"]:has(.stButton) {
     margin-top: -42px !important;
     height: 0 !important;
     overflow: visible !important;
-    text-align: right !important;
-    padding-right: 5px !important;
     position: relative !important;
     z-index: 2 !important;
+    display: flex !important;
+    justify-content: flex-end !important;
+    padding-right: 6px !important;
+}
+[data-testid="stColumn"] [data-testid="stVerticalBlock"]
+  > [data-testid="stElementContainer"]:has([data-testid="stTextInput"])
+  + [data-testid="stElementContainer"]:has(.stButton) .stButton {
+    display: flex !important;
+    justify-content: flex-end !important;
 }
 [data-testid="stColumn"] [data-testid="stVerticalBlock"]
   > [data-testid="stElementContainer"]:has([data-testid="stTextInput"])
@@ -578,6 +583,7 @@ html, body, [data-testid="stAppViewContainer"] {
     align-items: center !important;
     justify-content: center !important;
     transition: all 0.14s ease !important;
+    margin-left: auto !important;
 }
 [data-testid="stColumn"] [data-testid="stVerticalBlock"]
   > [data-testid="stElementContainer"]:has([data-testid="stTextInput"])
