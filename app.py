@@ -523,8 +523,11 @@ html, body, [data-testid="stAppViewContainer"] {
     border: 1.5px solid var(--border) !important;
     display: flex !important; align-items: center !important; justify-content: center !important;
     background: var(--surface) !important; box-shadow: var(--shadow-sm) !important;
+    width: 100% !important; min-width: 0 !important;
+    overflow: hidden !important;
 }
 [data-testid="stAudioInput"] > div:hover { border-color: var(--accent) !important; }
+[data-testid="stAudioInput"] > div > * { transform: scale(0.88); transform-origin: center; }
 
 /* ── Text inputs ── */
 [data-testid="stTextInput"] > div > div > input {
@@ -764,7 +767,7 @@ def render_followup_input(stage_id: int, extra_context: str = ""):
     Compact text + mic row for answering follow-up questions inline in the panel.
     Only shown when the stage has been answered AND GPT still has follow-up budget.
     """
-    c_txt, c_send, c_mic = st.columns([6, 1, 1], gap="small")
+    c_txt, c_send, c_mic = st.columns([5, 1, 2.5], gap="small")
     with c_txt:
         typed = st.text_input("", placeholder="Reply…",
                               key=f"fu_txt_{stage_id}_{followup_count(stage_id)}",
@@ -795,7 +798,7 @@ def render_text_mic_row(stage_id: int, extra_context: str = "",
     Primary answer row: [text input ────] [↑ Send] [🎤]
     Used as the free-text alternative alongside widget buttons.
     """
-    c_txt, c_send, c_mic = st.columns([6, 1, 1], gap="small")
+    c_txt, c_send, c_mic = st.columns([5, 1, 2.5], gap="small")
     with c_txt:
         typed = st.text_input("", placeholder=placeholder,
                               key=f"txt_{stage_id}", label_visibility="collapsed")
@@ -997,7 +1000,7 @@ elif stage == 2:
                     unsafe_allow_html=True)
 
         # [Yes] [No] [text ────] [↑] [🎤] all on one row
-        c1, c2, c_txt, c_send, c_mic = st.columns([1.7, 1.7, 4, 1, 1], gap="small")
+        c1, c2, c_txt, c_send, c_mic = st.columns([1.7, 1.7, 3, 1, 2.5], gap="small")
         with c1:
             if st.button("✅ Yes, pain", use_container_width=True, key="pain_yes"):
                 st.session_state.pain_yesno = True
@@ -1060,7 +1063,7 @@ elif stage == 3:
                 + (", ".join(sorted(st.session_state.selected_parts)) or "None") + "</div>",
                 unsafe_allow_html=True)
 
-        c_txt3, c_send3a, c_mic3, c_send3b = st.columns([4, 1, 1, 2], gap="small")
+        c_txt3, c_send3a, c_mic3, c_send3b = st.columns([3, 1, 2.5, 2], gap="small")
         with c_txt3:
             typed_loc = st.text_input("", placeholder="Or describe where you feel pain…",
                                       key="txt_3", label_visibility="collapsed")
@@ -1121,7 +1124,7 @@ elif stage == 4:
                     else: st.session_state.symptoms.append(symptom)
                     st.rerun()
 
-        c_txt4, c_send4a, c_mic4, c_send4b = st.columns([4, 1, 1, 2], gap="small")
+        c_txt4, c_send4a, c_mic4, c_send4b = st.columns([3, 1, 2.5, 2], gap="small")
         with c_txt4:
             typed_sym = st.text_input("", placeholder="Or describe your symptoms…",
                                       key="txt_4", label_visibility="collapsed")
@@ -1259,7 +1262,7 @@ elif stage == 5:
                         st.rerun()
 
         # Text input + mic + submit row
-        c_txt5, c_send5, c_mic5 = st.columns([6, 1, 1], gap="small")
+        c_txt5, c_send5, c_mic5 = st.columns([5, 1, 2.5], gap="small")
         with c_txt5:
             typed_5 = st.text_input("", placeholder="Type anything else to share…",
                                     key="txt_stage5", label_visibility="collapsed")
