@@ -413,12 +413,18 @@ html, body, [data-testid="stAppViewContainer"] {
     border-color: var(--accent) !important;
     box-shadow: 0 3px 12px rgba(42,157,143,0.25) !important;
 }
-/* Hide the timer, keep only the mic icon */
+/* Hide timer, waveform — keep only the mic button icon */
+[data-testid="stAudioInput"] > div > div:not(:first-child) { display: none !important; }
 [data-testid="stAudioInput"] span[data-testid="stAudioInputWaveform"],
-[data-testid="stAudioInput"] .stAudioInputWaveformTimeCode,
-[data-testid="stAudioInput"] div[class*="timeCode"],
-[data-testid="stAudioInput"] div[class*="waveform"] {
-    display: none !important;
+[data-testid="stAudioInput"] [class*="waveform"],
+[data-testid="stAudioInput"] [class*="timeCode"],
+[data-testid="stAudioInput"] [class*="timer"],
+[data-testid="stAudioInput"] [class*="time"],
+[data-testid="stAudioInput"] p { display: none !important; }
+/* Force outer container to be a tight circle matching the ↑ button */
+[data-testid="stAudioInput"] > div {
+    width: 38px !important; min-width: 38px !important;
+    max-width: 38px !important;
 }
 
 /* ── Text inputs ── */
