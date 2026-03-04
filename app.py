@@ -208,24 +208,25 @@ def transcribe_audio(audio_bytes: bytes) -> str:
     except Exception as e: return f"(Transcription failed: {e})"
 
 # ── CSS ─────────────────────────────────────────────────────
-st.html("""
-<link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700;800&family=Lora:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
+st.markdown("""
 <style>
+@import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700;800&family=Lora:ital,wght@0,400;0,600;1,400&display=swap');
+
 :root {
     --bg:        #f5f3ef;
     --surface:   #ffffff;
-    --border:    rgba(180,170,155,0.35);
+    --border:    rgba(180,170,155,0.30);
     --accent:    #2a9d8f;
-    --accent-lt: rgba(42,157,143,0.10);
+    --accent-lt: rgba(42,157,143,0.09);
     --accent-md: rgba(42,157,143,0.22);
     --patient:   #264653;
     --text:      #2c2c2c;
-    --text-muted:#888079;
+    --muted:     #8a8075;
     --shadow-sm: 0 2px 10px rgba(0,0,0,0.06);
     --shadow-md: 0 4px 24px rgba(0,0,0,0.09);
-    --r-sm: 14px;
-    --r-md: 20px;
-    --r-lg: 26px;
+    --r-sm: 12px;
+    --r-md: 18px;
+    --r-lg: 24px;
 }
 
 /* ── Base ── */
@@ -237,230 +238,164 @@ html, body, [data-testid="stAppViewContainer"] {
     content: '';
     position: fixed; inset: 0; z-index: -1;
     background:
-        radial-gradient(ellipse 70% 50% at 90% 10%, rgba(42,157,143,0.10) 0%, transparent 70%),
-        radial-gradient(ellipse 60% 40% at 10% 90%, rgba(38,70,83,0.07) 0%, transparent 70%),
+        radial-gradient(ellipse 70% 50% at 88% 8%, rgba(42,157,143,0.12) 0%, transparent 65%),
+        radial-gradient(ellipse 55% 40% at 8% 92%, rgba(38,70,83,0.08) 0%, transparent 65%),
         #f5f3ef;
 }
-[data-testid="stHeader"]{ background:transparent !important; }
-[data-testid="stDecoration"]{ display:none !important; }
-[data-testid="stMainBlockContainer"]{ padding-top: 2rem !important; }
-.block-container{ max-width: 680px !important; padding: 0 1.2rem 3rem !important; }
+[data-testid="stHeader"]  { background: transparent !important; }
+[data-testid="stDecoration"] { display: none !important; }
+[data-testid="stMainBlockContainer"] { padding-top: 2rem !important; }
+.block-container { max-width: 680px !important; padding: 0 1.2rem 3rem !important; }
+#MainMenu, footer, [data-testid="stToolbar"] { display: none !important; }
 
-/* ── Page header ── */
+/* ── App header ── */
 .app-header {
     display: flex; align-items: center; gap: 14px;
-    margin-bottom: 28px; padding-bottom: 20px;
+    margin-bottom: 26px; padding-bottom: 18px;
     border-bottom: 1.5px solid var(--border);
 }
 .app-header-icon {
-    width: 48px; height: 48px; border-radius: 14px;
-    background: linear-gradient(135deg, var(--accent), #21867a);
+    width: 46px; height: 46px; border-radius: 13px;
+    background: linear-gradient(135deg, var(--accent) 0%, #1d7a6e 100%);
     display: flex; align-items: center; justify-content: center;
-    font-size: 22px; box-shadow: var(--shadow-sm);
+    font-size: 21px; box-shadow: 0 3px 12px rgba(42,157,143,0.30);
     flex-shrink: 0;
 }
 .app-header-title {
-    font-family: 'Lora', serif; font-size: 22px; font-weight: 600;
+    font-family: 'Lora', serif; font-size: 21px; font-weight: 600;
     color: var(--text); line-height: 1.2; letter-spacing: -0.3px;
 }
 .app-header-sub {
-    font-size: 12px; color: var(--text-muted); font-weight: 500;
-    letter-spacing: 0.04em; text-transform: uppercase; margin-top: 2px;
+    font-size: 11px; color: var(--muted); font-weight: 600;
+    letter-spacing: 0.08em; text-transform: uppercase; margin-top: 3px;
 }
 
-/* ── Chat history window ── */
+/* ── Chat history ── */
 .chat-window {
     max-height: 38vh; overflow-y: auto;
-    padding: 16px 14px; border-radius: var(--r-lg);
+    padding: 14px; border-radius: var(--r-lg);
     background: var(--surface);
     border: 1.5px solid var(--border);
     box-shadow: var(--shadow-sm);
-    margin-bottom: 16px;
+    margin-bottom: 14px;
     scrollbar-width: thin;
-    scrollbar-color: rgba(0,0,0,0.12) transparent;
+    scrollbar-color: rgba(0,0,0,0.10) transparent;
 }
-.chat-window::-webkit-scrollbar { width: 4px; }
-.chat-window::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.12); border-radius: 4px; }
+.chat-window::-webkit-scrollbar { width: 3px; }
+.chat-window::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.10); border-radius: 3px; }
 
-.row-left  { display:flex; justify-content:flex-start; align-items:flex-end; margin:8px 0; gap:10px; }
-.row-right { display:flex; justify-content:flex-end;   align-items:flex-end; margin:8px 0; gap:10px; }
+.row-left  { display:flex; justify-content:flex-start; align-items:flex-end; margin:7px 0; gap:9px; }
+.row-right { display:flex; justify-content:flex-end;   align-items:flex-end; margin:7px 0; gap:9px; }
 
 .avatar {
-    width: 32px; height: 32px; border-radius: 50%;
+    width: 30px; height: 30px; border-radius: 50%;
     display: flex; align-items: center; justify-content: center;
-    font-size: 15px; flex-shrink: 0;
-    background: var(--accent-lt);
-    border: 1.5px solid var(--accent-md);
+    font-size: 14px; flex-shrink: 0;
+    background: var(--accent-lt); border: 1.5px solid var(--accent-md);
 }
-
 .bubble-doc {
-    background: var(--surface);
-    border: 1.5px solid var(--border);
-    border-radius: var(--r-md); border-bottom-left-radius: 5px;
+    background: var(--surface); border: 1.5px solid var(--border);
+    border-radius: var(--r-md); border-bottom-left-radius: 4px;
     padding: 10px 14px; max-width: 78%;
     box-shadow: var(--shadow-sm);
     font-size: 14px; line-height: 1.6; color: var(--text);
-    white-space: pre-wrap;
-    animation: fadeUp 0.25s ease both;
+    white-space: pre-wrap; animation: fadeUp 0.22s ease both;
 }
 .bubble-pat {
-    background: var(--patient);
-    border-radius: var(--r-md); border-bottom-right-radius: 5px;
+    background: var(--patient); color: #fff;
+    border-radius: var(--r-md); border-bottom-right-radius: 4px;
     padding: 10px 14px; max-width: 78%;
     box-shadow: var(--shadow-sm);
-    font-size: 14px; line-height: 1.6; color: #fff;
-    white-space: pre-wrap;
-    animation: fadeUp 0.25s ease both;
+    font-size: 14px; line-height: 1.6;
+    white-space: pre-wrap; animation: fadeUp 0.22s ease both;
 }
 
-/* ── Active stage panel ── */
+/* ── Panel (active stage card) ── */
 .panel {
     background: var(--surface);
     border: 1.5px solid var(--border);
     border-radius: var(--r-lg);
     padding: 22px 20px 18px;
     box-shadow: var(--shadow-md);
-    margin-top: 0;
-    animation: fadeUp 0.3s ease both;
+    animation: fadeUp 0.28s ease both;
 }
 .panel-title {
     font-family: 'Lora', serif;
-    font-size: 17px; font-weight: 600;
-    color: var(--text); margin-bottom: 14px;
-    line-height: 1.3; letter-spacing: -0.2px;
+    font-size: 17px; font-weight: 600; letter-spacing: -0.2px;
+    color: var(--text); margin-bottom: 12px; line-height: 1.3;
 }
 .small-note {
-    font-size: 12px; color: var(--text-muted);
-    font-weight: 500; margin: 0 0 10px 0;
-    letter-spacing: 0.02em;
+    font-size: 12px; color: var(--muted); font-weight: 500;
+    margin: 0 0 10px; letter-spacing: 0.02em;
 }
-.divider {
-    border: none;
-    border-top: 1.5px solid var(--border);
-    margin: 16px 0 12px;
-}
+.divider { border: none; border-top: 1.5px solid var(--border); margin: 14px 0 12px; }
 
-/* ── Inline follow-up messages inside panel ── */
+/* ── Inline follow-up messages ── */
 .inline-followup {
-    background: var(--accent-lt);
-    border-left: 3px solid var(--accent);
+    background: var(--accent-lt); border-left: 3px solid var(--accent);
     border-radius: 0 var(--r-sm) var(--r-sm) 0;
     padding: 11px 14px; margin: 12px 0 8px;
     font-size: 14px; line-height: 1.6; color: var(--text);
-    animation: fadeUp 0.25s ease both;
+    animation: fadeUp 0.22s ease both;
 }
 .inline-patient {
     background: rgba(38,70,83,0.07);
     border-radius: var(--r-sm) var(--r-sm) 0 var(--r-sm);
-    padding: 9px 13px; margin: 6px 0;
+    padding: 9px 13px; margin: 6px 0; text-align: right;
     font-size: 14px; line-height: 1.6; color: var(--text);
-    text-align: right;
-    animation: fadeUp 0.2s ease both;
+    animation: fadeUp 0.18s ease both;
 }
 
-/* ── Buttons — all uniform, pill-shaped ── */
+/* ── Buttons ── */
 .stButton > button {
     font-family: 'Nunito', sans-serif !important;
-    border-radius: 12px !important;
+    border-radius: var(--r-sm) !important;
     padding: 0.45rem 1rem !important;
-    font-size: 14px !important;
-    font-weight: 600 !important;
+    font-size: 14px !important; font-weight: 600 !important;
     border: 1.5px solid var(--border) !important;
-    background: var(--surface) !important;
-    color: var(--text) !important;
+    background: var(--surface) !important; color: var(--text) !important;
     box-shadow: var(--shadow-sm) !important;
-    transition: all 0.15s ease !important;
-    white-space: nowrap !important;
-    letter-spacing: 0.01em !important;
+    transition: all 0.14s ease !important; white-space: nowrap !important;
 }
 .stButton > button:hover {
-    border-color: var(--accent) !important;
-    color: var(--accent) !important;
+    border-color: var(--accent) !important; color: var(--accent) !important;
     background: var(--accent-lt) !important;
     box-shadow: 0 2px 12px rgba(42,157,143,0.18) !important;
     transform: translateY(-1px) !important;
 }
-/* Primary (Next) button */
 .stButton > button[kind="primary"] {
-    background: linear-gradient(135deg, var(--accent), #21867a) !important;
-    color: white !important;
-    border-color: transparent !important;
-    box-shadow: 0 3px 14px rgba(42,157,143,0.35) !important;
-    font-size: 15px !important;
-    padding: 0.55rem 1rem !important;
+    background: linear-gradient(135deg, var(--accent) 0%, #1d7a6e 100%) !important;
+    color: #fff !important; border-color: transparent !important;
+    box-shadow: 0 3px 14px rgba(42,157,143,0.32) !important;
+    font-size: 15px !important; padding: 0.55rem 1rem !important;
 }
 .stButton > button[kind="primary"]:hover {
-    background: linear-gradient(135deg, #33b09f, #1d7269) !important;
-    color: white !important;
-    transform: translateY(-1px) !important;
-    box-shadow: 0 4px 18px rgba(42,157,143,0.45) !important;
+    background: linear-gradient(135deg, #30ada0 0%, #1a6e64 100%) !important;
+    color: #fff !important; transform: translateY(-1px) !important;
+    box-shadow: 0 4px 18px rgba(42,157,143,0.42) !important;
 }
 
-/* ── Mic widget — clean icon button matching the ↑ Send button ── */
+/* ── Mic widget ── */
 [data-testid="stAudioInput"] { margin: 0 !important; padding: 0 !important; }
 [data-testid="stAudioInput"] > label { display: none !important; }
-
-/* Outer wrapper */
 [data-testid="stAudioInput"] > div {
-    height: 38px !important; min-height: 38px !important; max-height: 38px !important;
-    width: 100% !important;
-    border-radius: 12px !important;
+    height: 38px !important; min-height: 38px !important;
+    border-radius: var(--r-sm) !important;
     border: 1.5px solid var(--border) !important;
-    background: var(--surface) !important;
-    box-shadow: var(--shadow-sm) !important;
-    transition: border-color 0.15s, background 0.15s !important;
-    overflow: hidden !important;
     display: flex !important; align-items: center !important; justify-content: center !important;
-    cursor: pointer !important;
-    position: relative !important;
+    background: var(--surface) !important; box-shadow: var(--shadow-sm) !important;
 }
-[data-testid="stAudioInput"] > div:hover {
-    border-color: var(--accent) !important;
-    background: var(--accent-lt) !important;
-}
-
-/* Inner row — flex center */
-[data-testid="stAudioInput"] > div > div {
-    display: flex !important; align-items: center !important;
-    justify-content: center !important;
-    width: 100% !important; height: 100% !important;
-    gap: 0 !important; padding: 0 !important;
-}
-
-/* Hide only the timer text (it lives in a <p> or bare text span next to the button) */
-[data-testid="stAudioInput"] p { display: none !important; }
-[data-testid="stAudioInput"] > div > div > span { display: none !important; }
-
-/* Mic icon button itself — just size it nicely */
-[data-testid="stAudioInput"] button {
-    background: transparent !important;
-    border: none !important;
-    box-shadow: none !important;
-    padding: 0 !important;
-    display: flex !important; align-items: center !important; justify-content: center !important;
-    width: 100% !important; height: 100% !important;
-    cursor: pointer !important;
-}
-[data-testid="stAudioInput"] svg {
-    width: 18px !important; height: 18px !important;
-    color: var(--text-muted) !important;
-    flex-shrink: 0 !important;
-}
-[data-testid="stAudioInput"] > div:hover svg { color: var(--accent) !important; }
+[data-testid="stAudioInput"] > div:hover { border-color: var(--accent) !important; }
 
 /* ── Text inputs ── */
 [data-testid="stTextInput"] > div > div > input {
     font-family: 'Nunito', sans-serif !important;
-    border-radius: 12px 0 0 12px !important;
+    border-radius: var(--r-sm) !important;
     border: 1.5px solid var(--border) !important;
-    border-right: none !important;
-    padding: 8px 16px !important;
-    font-size: 14px !important;
-    background: var(--surface) !important;
-    height: 38px !important;
-    box-shadow: var(--shadow-sm) !important;
-    color: var(--text) !important;
-    transition: border-color 0.15s !important;
+    padding: 7px 14px !important; font-size: 14px !important;
+    background: var(--surface) !important; height: 38px !important;
+    box-shadow: var(--shadow-sm) !important; color: var(--text) !important;
+    transition: border-color 0.14s !important;
 }
 [data-testid="stTextInput"] > div > div > input:focus {
     border-color: var(--accent) !important;
@@ -468,96 +403,52 @@ html, body, [data-testid="stAppViewContainer"] {
     outline: none !important;
 }
 [data-testid="stTextInput"] > label { display: none !important; }
-/* Send button fused to the right of text input */
-[data-testid="stTextInput"] + div [data-testid="stBaseButton-secondary"] > button,
-div:has(+ div [data-testid="stTextInput"]) { gap: 0 !important; }
-/* Target the ↑ send buttons specifically — flat left edge, rounded right */
-[data-testid="column"]:has([data-testid="stTextInput"]) + [data-testid="column"] > div > [data-testid="stBaseButton-secondary"] button {
-    border-radius: 0 12px 12px 0 !important;
-    border-left: none !important;
-    border-color: var(--border) !important;
-    height: 38px !important;
-    box-shadow: var(--shadow-sm) !important;
-    margin-left: -1px !important;
-}
-
-/* Flush the text+send column pair — no gap between them */
-[data-testid="stHorizontalBlock"]:has([data-testid="stTextInput"]) {
-    gap: 0 !important;
-    align-items: center !important;
-}
-/* Restore gap AFTER the send column (before mic) */
-[data-testid="stHorizontalBlock"]:has([data-testid="stTextInput"]) > [data-testid="column"]:nth-child(3) {
-    margin-left: 6px !important;
-}
-[data-testid="stHorizontalBlock"]:has([data-testid="stTextInput"]) > [data-testid="column"]:nth-child(4) {
-    margin-left: 6px !important;
-}
-[data-testid="stChatInput"] textarea {
-    font-family: 'Nunito', sans-serif !important;
-    border-radius: 12px !important;
-    border: 1.5px solid var(--border) !important;
-    background: var(--surface) !important;
-}
 
 /* ── Summary card ── */
 .summary-wrap {
-    background: var(--surface);
-    border: 1.5px solid var(--border);
-    border-radius: var(--r-lg);
-    padding: 28px 24px 22px;
-    box-shadow: var(--shadow-md);
-    animation: fadeUp 0.4s ease both;
+    background: var(--surface); border: 1.5px solid var(--border);
+    border-radius: var(--r-lg); padding: 26px 22px 20px;
+    box-shadow: var(--shadow-md); animation: fadeUp 0.35s ease both;
 }
 .summary-title {
-    font-family: 'Lora', serif;
-    font-size: 20px; font-weight: 600;
-    color: var(--text); margin-bottom: 4px;
-    letter-spacing: -0.3px;
+    font-family: 'Lora', serif; font-size: 20px; font-weight: 600;
+    color: var(--text); margin-bottom: 4px; letter-spacing: -0.3px;
 }
 .summary-sub {
-    font-size: 12px; color: var(--text-muted);
-    font-weight: 500; margin-bottom: 20px;
-    letter-spacing: 0.04em; text-transform: uppercase;
+    font-size: 11px; color: var(--muted); font-weight: 600;
+    letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 18px;
 }
 .summary-table { width: 100%; border-collapse: collapse; font-size: 14px; }
 .summary-table tr { border-bottom: 1.5px solid var(--border); }
 .summary-table tr:last-child { border-bottom: none; }
 .summary-table td { padding: 11px 8px; vertical-align: top; line-height: 1.5; }
 .summary-table td:first-child {
-    font-weight: 700; color: var(--text-muted);
-    width: 36%; font-size: 12px; text-transform: uppercase;
-    letter-spacing: 0.06em; padding-top: 14px;
+    font-weight: 700; color: var(--muted); width: 36%;
+    font-size: 11px; text-transform: uppercase;
+    letter-spacing: 0.07em; padding-top: 14px;
 }
 .tag {
     display: inline-block;
-    background: var(--accent-lt);
-    color: var(--accent);
-    border: 1px solid var(--accent-md);
-    border-radius: 8px;
+    background: var(--accent-lt); color: var(--accent);
+    border: 1px solid var(--accent-md); border-radius: 8px;
     padding: 2px 10px; font-size: 13px; font-weight: 600;
     margin: 2px 3px 2px 0;
 }
 .submitted-badge {
     display: inline-flex; align-items: center; gap: 6px;
     background: #d1fae5; color: #065f46;
-    border: 1.5px solid #6ee7b7;
-    border-radius: 10px; padding: 5px 14px;
-    font-size: 13px; font-weight: 700;
+    border: 1.5px solid #6ee7b7; border-radius: 10px;
+    padding: 5px 14px; font-size: 13px; font-weight: 700;
     margin-bottom: 16px; letter-spacing: 0.02em;
 }
 
 /* ── Animations ── */
 @keyframes fadeUp {
-    from { opacity: 0; transform: translateY(10px); }
+    from { opacity: 0; transform: translateY(8px); }
     to   { opacity: 1; transform: translateY(0); }
 }
-
-/* ── Streamlit chrome cleanup ── */
-#MainMenu, footer, [data-testid="stToolbar"] { display: none !important; }
-[data-testid="stSidebarNav"] { display: none !important; }
 </style>
-""")
+""", unsafe_allow_html=True)
 
 # ── Session state ───────────────────────────────────────────
 # Stages:
@@ -1136,7 +1027,7 @@ elif stage == 5:
         else:
             conv_cell = "<span style='opacity:.4'>No additional details shared</span>"
 
-        # Summary styles already defined in main CSS block
+        # Summary styles defined in main CSS
 
         st.markdown(f"""
 <div class="summary-wrap">
