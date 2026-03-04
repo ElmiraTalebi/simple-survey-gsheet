@@ -148,7 +148,7 @@ def build_system_prompt(extra_context: str = "") -> str:
     if pain is not None:
         today_lines.append(f"- Pain: {'yes' if pain else 'no'}")
     if locations:
-        today_lines.append(f"- Pain locations: {', '.join(locations)}")
+        today_lines.append(f"- Pain location: {', '.join(locations)}")
     if symptoms:
         today_lines.append(f"- Symptoms: {', '.join(symptoms)}")
     today_summary = "\n".join(today_lines) if today_lines else "Nothing collected yet."
@@ -238,8 +238,9 @@ def transcribe_audio(audio_bytes: bytes) -> str:
 st.markdown(
     """
 <style>
-[data-testid="stAppViewContainer"]{ background:linear-gradient(135deg,#eef4ff,#f6fbff); }
-.header{ font-size:24px; font-weight:700; margin:8px 0 14px 0; }
+[data-testid="stAppViewContainer"]{ background:linear-gradient(135deg,#eef4ff,#f8fbff); }
+.header{ font-size:26px; font-weight:700; margin:8px 0 6px 0; }
+.subheader{ color:#61708a; font-size:14px; margin-bottom:14px; }
 .chat-window{
     max-height:50vh; overflow-y:auto; padding:16px 14px; border-radius:18px;
     background:rgba(255,255,255,0.55); border:1px solid rgba(200,210,230,0.55);
@@ -265,15 +266,15 @@ st.markdown(
     background:rgba(255,255,255,0.7); border:1px solid rgba(200,210,230,0.6);
     backdrop-filter:blur(10px);
 }
-.panel-title{ font-weight:700; font-size:15px; margin-bottom:12px; }
-.small-note{ color:rgba(0,0,0,0.45); font-size:12px; margin-top:4px; }
-.divider{ color:#6b7a90; font-size:12px; text-align:center; margin:14px 0 8px 0; }
+.panel-title{ font-weight:700; font-size:16px; margin-bottom:10px; }
+.small-note{ color:#627089; font-size:12px; margin-top:4px; line-height:1.45; }
+.divider{ color:#6b7a90; font-size:12px; text-align:center; margin:14px 0 8px 0; font-weight:600; }
 .stButton>button{
     border-radius:20px !important; padding:0.45rem 1rem !important;
     font-size:14px !important; border:1px solid rgba(180,195,220,0.8) !important;
     background:white !important; color:#1a2540 !important;
     box-shadow:0 1px 4px rgba(0,0,0,0.06) !important;
-    transition: all 0.15s ease !important;
+    transition: all 0.15s ease !important; min-height:42px !important;
 }
 .stButton>button:hover{ background:#f0f6ff !important; border-color:#1f7aff !important; }
 [data-testid="stAudioInput"]{ margin:0 !important; padding:0 !important; }
@@ -389,7 +390,7 @@ def submit_stage_response(patient_text: str, stage_id: int, extra_context: str =
 
     if can_ask_followup(stage_id):
         record_followup(stage_id)
-        with st.spinner("Assistant is thinking…"):
+        with st.spinner("Writing the next question…"):
             reply = get_gpt_reply(extra_context=extra_context)
         add_doctor(reply)
 
@@ -409,7 +410,7 @@ def handle_audio(audio_value, stage_id: int, extra_context: str = "") -> bool:
 
     st.session_state.last_audio_hash = audio_hash
     st.session_state.mic_key_counter += 1
-    with st.spinner("Transcribing…"):
+    with st.spinner("Transcribing your recording…"):
         transcript = transcribe_audio(audio_bytes)
 
     if transcript and not transcript.startswith("(Transcription failed"):
@@ -417,7 +418,7 @@ def handle_audio(audio_value, stage_id: int, extra_context: str = "") -> bool:
         submit_stage_response(transcript, stage_id, extra_context)
         return True
 
-    st.warning("Could not transcribe. Please try again.")
+    st.warning("I couldn't transcribe that. Please try again.")
     return False
 
 
@@ -475,9 +476,9 @@ def render_stage_footer(stage_id: int, next_label: str, allow_skip_while_followu
     ready_for_next = (not can_ask_followup(stage_id)) or allow_skip_while_followups_remain
 
     if can_ask_followup(stage_id):
-        st.markdown('<div class="small-note">You can answer the assistant above.</div>', unsafe_allow_html=True)
+        st.markdown('<div class="small-note">You can reply to the question above, or continue when you are ready.</div>', unsafe_allow_html=True)
     else:
-        st.markdown('<div class="small-note">Follow-up complete.</div>', unsafe_allow_html=True)
+        st.markdown("<div class='small-note'>You're ready for the next step.</div>", unsafe_allow_html=True)
 
     if ready_for_next:
         if st.button(next_label, use_container_width=True, type="primary", key=f"next_{stage_id}"):
@@ -512,24 +513,25 @@ _init_sheets()
 if sheets_init_error:
     st.warning(f"Sheets not ready: {sheets_init_error}")
 
-st.markdown('<div class="header">🩺 Cancer Symptom Check-In</div>', unsafe_allow_html=True)
+st.markdown('<div class="header">🩺 Cancer Symptom Check-In</div><div class="subheader">A quick daily check-in to help your care team understand how you are feeling today.</div>', unsafe_allow_html=True)
 
 
 # ============================================================
 # Stage -1 — Name entry
 # ============================================================
 if st.session_state.stage == -1:
-    st.markdown('<div class="panel"><div class="panel-title">Welcome · Please enter your name</div>', unsafe_allow_html=True)
-    name_input = st.text_input("Your name:", value=st.session_state.patient_name)
+    st.markdown('<div class="panel"><div class="panel-title">Welcome</div>', unsafe_allow_html=True)
+    st.markdown("<div class='small-note'>Please enter the name you would like used for today's check-in.</div>", unsafe_allow_html=True)
+    name_input = st.text_input("Your name", value=st.session_state.patient_name, placeholder="Enter your name")
 
-    if st.button("Start Check-In"):
+    if st.button("Begin check-in", use_container_width=True, type="primary"):
         if not name_input.strip():
             st.warning("Please enter your name to continue.")
             st.stop()
 
         clean_name = name_input.strip()
         st.session_state.patient_name = clean_name
-        with st.spinner("Loading your history…"):
+        with st.spinner("Loading recent check-ins…"):
             st.session_state.past_checkins = load_past_checkins(clean_name)
 
         past = st.session_state.past_checkins
@@ -543,7 +545,7 @@ if st.session_state.stage == -1:
                 f"Symptoms: {', '.join(last.get('symptoms', [])) or 'none'}. "
                 f"Briefly summarize the last visit, then ask one follow-up question about how they have been since then."
             )
-            with st.spinner("Getting your assistant ready…"):
+            with st.spinner("Preparing your check-in…"):
                 opening = get_gpt_reply(extra_context=context)
             add_doctor(opening)
             st.session_state.stage = 0
@@ -551,10 +553,10 @@ if st.session_state.stage == -1:
             context = (
                 f"This is {clean_name}'s first check-in. Introduce the check-in briefly and say you will ask a few quick questions."
             )
-            with st.spinner("Getting your assistant ready…"):
+            with st.spinner("Preparing your check-in…"):
                 opening = get_gpt_reply(extra_context=context)
             if not opening or opening.startswith("("):
-                opening = f"Hi {clean_name}. I will ask a few quick questions for today’s check-in."
+                opening = f"Hi {clean_name}. I'll ask a few quick questions for today's check-in."
             add_doctor(opening)
             st.session_state.stage = 1
         st.rerun()
@@ -576,15 +578,15 @@ if stage == 0:
         "Ask at most one focused follow-up question. Do not begin today's structured questionnaire yet."
     )
     st.markdown('<div class="panel">', unsafe_allow_html=True)
-    st.markdown('<div class="panel-title">💬 How have you been since your last visit?</div>', unsafe_allow_html=True)
-    render_type_or_speak(0, history_ctx, "Type your reply…")
+    st.markdown('<div class="panel-title">💬 Since your last check-in, how have you been feeling?</div>', unsafe_allow_html=True)
+    render_type_or_speak(0, history_ctx, "Type or speak your update…")
     st.markdown("</div>", unsafe_allow_html=True)
 
     if stage_answered(0):
         label = "Start today\'s check-in →" if not can_ask_followup(0) else "Skip to check-in →"
         render_stage_footer(0, label, allow_skip_while_followups_remain=True)
     else:
-        if st.button("Skip to check-in →", use_container_width=True, type="primary", key="skip_stage_0"):
+        if st.button("Skip to today's questions →", use_container_width=True, type="primary", key="skip_stage_0"):
             advance_stage()
             st.rerun()
 
@@ -598,8 +600,8 @@ elif stage == 1:
         "Ask one focused follow-up question about what is driving the score."
     )
     st.markdown('<div class="panel">', unsafe_allow_html=True)
-    st.markdown('<div class="panel-title">How are you feeling today?</div>', unsafe_allow_html=True)
-    st.markdown('<div class="small-note">Tap a number first, or answer in your own words below.</div>', unsafe_allow_html=True)
+    st.markdown('<div class="panel-title">How are you feeling overall today?</div>', unsafe_allow_html=True)
+    st.markdown('<div class="small-note">Choose a number, or answer in your own words below.</div>', unsafe_allow_html=True)
 
     scale_cols = st.columns(11)
     for i in range(11):
@@ -611,11 +613,11 @@ elif stage == 1:
 
     if st.session_state.feeling_level is not None:
         st.markdown(
-            f"<div class='small-note'>Selected feeling score: <b>{st.session_state.feeling_level}/10</b></div>",
+            f"<div class='small-note'>Selected score: <b>{st.session_state.feeling_level}/10</b></div>",
             unsafe_allow_html=True,
         )
         if not stage_answered(1):
-            if st.button("Send selected score ➜", use_container_width=True, key="send_feeling_score"):
+            if st.button("Use this score ➜", use_container_width=True, key="send_feeling_score"):
                 submit_stage_response(
                     f"My feeling level today is {st.session_state.feeling_level}/10.",
                     1,
@@ -624,9 +626,9 @@ elif stage == 1:
                 st.rerun()
 
     st.markdown('<div class="divider">— or type / speak your answer —</div>', unsafe_allow_html=True)
-    render_type_or_speak(1, feeling_ctx, "Describe how you feel today…")
+    render_type_or_speak(1, feeling_ctx, "Describe how you're feeling today…")
     st.markdown("</div>", unsafe_allow_html=True)
-    render_stage_footer(1, "Next question →", allow_skip_while_followups_remain=False)
+    render_stage_footer(1, "Continue →", allow_skip_while_followups_remain=False)
 
 
 # ============================================================
@@ -638,17 +640,17 @@ elif stage == 2:
         "Ask one adaptive follow-up question. If they said yes, focus on pain details. If they said no, confirm whether they have any other physical discomfort worth noting."
     )
     st.markdown('<div class="panel">', unsafe_allow_html=True)
-    st.markdown('<div class="panel-title">Do you have any pain today?</div>', unsafe_allow_html=True)
-    st.markdown('<div class="small-note">Choose an option first, or answer in your own words below.</div>', unsafe_allow_html=True)
+    st.markdown('<div class="panel-title">Are you having any pain today?</div>', unsafe_allow_html=True)
+    st.markdown('<div class="small-note">Choose an option, or answer in your own words below.</div>', unsafe_allow_html=True)
 
     c1, c2 = st.columns(2)
     with c1:
-        if st.button("✅ Yes, pain", use_container_width=True, key="pain_yes"):
+        if st.button("✅ Yes", use_container_width=True, key="pain_yes"):
             st.session_state.pain_yesno = True
             submit_stage_response("Yes, I have pain today.", 2, pain_ctx)
             st.rerun()
     with c2:
-        if st.button("🙂 No pain", use_container_width=True, key="pain_no"):
+        if st.button("🙂 No", use_container_width=True, key="pain_no"):
             st.session_state.pain_yesno = False
             submit_stage_response("No, I do not have pain today.", 2, pain_ctx)
             st.rerun()
@@ -656,7 +658,7 @@ elif stage == 2:
     st.markdown('<div class="divider">— or type / speak your answer —</div>', unsafe_allow_html=True)
     render_type_or_speak(2, pain_ctx, "Type or speak your answer…")
     st.markdown("</div>", unsafe_allow_html=True)
-    render_stage_footer(2, "Next question →", allow_skip_while_followups_remain=False)
+    render_stage_footer(2, "Continue →", allow_skip_while_followups_remain=False)
 
 
 # ============================================================
@@ -668,36 +670,36 @@ elif stage == 3:
         "Ask one focused follow-up question about those locations, such as severity, duration, pattern, or triggers."
     )
     st.markdown('<div class="panel">', unsafe_allow_html=True)
-    st.markdown('<div class="panel-title">Where do you feel pain?</div>', unsafe_allow_html=True)
-    st.markdown('<div class="small-note">Select body areas first, or describe the location below.</div>', unsafe_allow_html=True)
+    st.markdown('<div class="panel-title">Where is the pain located?</div>', unsafe_allow_html=True)
+    st.markdown('<div class="small-note">Select body areas, or describe the location below.</div>', unsafe_allow_html=True)
 
     left, right = st.columns([1, 1])
     with left:
         st.markdown(body_svg(st.session_state.selected_parts), unsafe_allow_html=True)
     with right:
-        st.markdown("**Toggle regions:**")
+        st.markdown("**Select body areas:**")
         for part in ["Head", "Chest", "Abdomen", "Left Arm", "Right Arm", "Left Leg", "Right Leg"]:
             label = f"✓ {part}" if part in st.session_state.selected_parts else part
             if st.button(label, key=f"toggle_{part}", use_container_width=True):
                 toggle_body_part(part)
                 st.rerun()
         st.markdown(
-            '<div class="small-note">Selected: '
+            '<div class="small-note">Current selection: '
             + (", ".join(sorted(st.session_state.selected_parts)) or "None")
             + "</div>",
             unsafe_allow_html=True,
         )
 
     if not stage_answered(3):
-        if st.button("Send selected locations ➜", use_container_width=True, key="send_locations"):
+        if st.button("Use these locations ➜", use_container_width=True, key="send_locations"):
             selected_text = ", ".join(sorted(st.session_state.selected_parts)) or "I am not sure where the pain is"
-            submit_stage_response(f"Pain locations: {selected_text}.", 3, location_ctx)
+            submit_stage_response(f"Pain location: {selected_text}.", 3, location_ctx)
             st.rerun()
 
     st.markdown('<div class="divider">— or type / speak your answer —</div>', unsafe_allow_html=True)
-    render_type_or_speak(3, location_ctx, "Describe where you feel pain…")
+    render_type_or_speak(3, location_ctx, "Describe where the pain is…")
     st.markdown("</div>", unsafe_allow_html=True)
-    render_stage_footer(3, "Next question →", allow_skip_while_followups_remain=False)
+    render_stage_footer(3, "Continue →", allow_skip_while_followups_remain=False)
 
 
 # ============================================================
@@ -724,8 +726,8 @@ elif stage == 4:
     ]
 
     st.markdown('<div class="panel">', unsafe_allow_html=True)
-    st.markdown('<div class="panel-title">Any of these symptoms today?</div>', unsafe_allow_html=True)
-    st.markdown('<div class="small-note">Tap all that apply, then send. You can also describe symptoms below.</div>', unsafe_allow_html=True)
+    st.markdown('<div class="panel-title">Are you having any of these symptoms today?</div>', unsafe_allow_html=True)
+    st.markdown('<div class="small-note">Choose any that apply, then continue. You can also describe symptoms below.</div>', unsafe_allow_html=True)
 
     cols_symp = st.columns(2)
     for idx, symptom in enumerate(symptom_options):
@@ -740,20 +742,20 @@ elif stage == 4:
 
     if st.session_state.symptoms:
         st.markdown(
-            '<div class="small-note">Selected symptoms: ' + "; ".join(st.session_state.symptoms) + "</div>",
+            '<div class="small-note">Current selection: ' + "; ".join(st.session_state.symptoms) + "</div>",
             unsafe_allow_html=True,
         )
 
     if not stage_answered(4):
-        if st.button("Send selected symptoms ➜", use_container_width=True, key="send_symptoms"):
+        if st.button("Use these symptoms ➜", use_container_width=True, key="send_symptoms"):
             symptoms_text = "; ".join(st.session_state.symptoms) if st.session_state.symptoms else "no symptoms from the checklist"
             submit_stage_response(f"Symptoms today: {symptoms_text}.", 4, symptom_ctx)
             st.rerun()
 
     st.markdown('<div class="divider">— or type / speak your answer —</div>', unsafe_allow_html=True)
-    render_type_or_speak(4, symptom_ctx, "Describe any symptoms…")
+    render_type_or_speak(4, symptom_ctx, "Describe any symptoms you want to mention…")
     st.markdown("</div>", unsafe_allow_html=True)
-    render_stage_footer(4, "Finish check-in →", allow_skip_while_followups_remain=False)
+    render_stage_footer(4, "Continue to final notes →", allow_skip_while_followups_remain=False)
 
 
 # ============================================================
@@ -771,7 +773,7 @@ elif stage == 5:
             f"My feeling level today is {feeling}/10.",
             "Yes, I have pain today.",
             "No, I do not have pain today.",
-            f"Pain locations: {', '.join(locations)}." if locations else "",
+            f"Pain location: {', '.join(locations)}." if locations else "",
             f"Symptoms today: {'; '.join(symptoms)}." if symptoms else "Symptoms today: no symptoms from the checklist.",
         }
 
@@ -810,7 +812,7 @@ elif stage == 5:
                 f"<li style='margin-bottom:4px;font-size:14px;color:#1a2540'>{item}</li>" for item in items
             ) + "</ul>"
         else:
-            conv_cell = "<span style='opacity:.4'>No additional details shared</span>"
+            conv_cell = "<span style='opacity:.4'>No additional details provided</span>"
 
         feeling_display = f"{feeling}/10" if feeling is not None else "—"
         pain_display = "Yes" if pain is True else ("No" if pain is False else "—")
@@ -820,14 +822,14 @@ elif stage == 5:
         st.markdown(
             f"""
 <div class="panel">
-  <div class="panel-title">✅ Check-In Summary — {name}</div>
+  <div class="panel-title">✅ Check-in summary — {name}</div>
   <table style="width:100%;border-collapse:collapse;font-size:14px;">
-    <tr><td style="padding:8px 6px;font-weight:600;width:36%;">Patient name</td><td style="padding:8px 6px;">{name}</td></tr>
-    <tr><td style="padding:8px 6px;font-weight:600;">Feeling level</td><td style="padding:8px 6px;">{feeling_display}</td></tr>
+    <tr><td style="padding:8px 6px;font-weight:600;width:36%;">Name</td><td style="padding:8px 6px;">{name}</td></tr>
+    <tr><td style="padding:8px 6px;font-weight:600;">Feeling score</td><td style="padding:8px 6px;">{feeling_display}</td></tr>
     <tr><td style="padding:8px 6px;font-weight:600;">Pain today</td><td style="padding:8px 6px;">{pain_display}</td></tr>
-    <tr><td style="padding:8px 6px;font-weight:600;">Pain locations</td><td style="padding:8px 6px;">{locations_html}</td></tr>
+    <tr><td style="padding:8px 6px;font-weight:600;">Pain location</td><td style="padding:8px 6px;">{locations_html}</td></tr>
     <tr><td style="padding:8px 6px;font-weight:600;">Symptoms</td><td style="padding:8px 6px;">{symptoms_html}</td></tr>
-    <tr><td style="padding:8px 6px;font-weight:600;vertical-align:top;">Conversation notes</td><td style="padding:8px 6px;">{conv_cell}</td></tr>
+    <tr><td style="padding:8px 6px;font-weight:600;vertical-align:top;">Additional notes</td><td style="padding:8px 6px;">{conv_cell}</td></tr>
   </table>
 </div>
 """,
@@ -835,12 +837,12 @@ elif stage == 5:
         )
     else:
         st.markdown(
-            '<div class="panel"><div class="panel-title">💬 Anything else to share?</div><div class="small-note">Chat with the assistant, or submit when ready.</div></div>',
+            "<div class='panel'><div class='panel-title'>💬 Is there anything else you would like to share?</div><div class='small-note'>You can add any final details here, then submit when you are ready.</div></div>",
             unsafe_allow_html=True,
         )
         cols = st.columns([5, 1], vertical_alignment="bottom")
         with cols[0]:
-            user_text = st.chat_input("Anything else to mention…", key="chat_input_5")
+            user_text = st.chat_input("Type any final details…", key="chat_input_5")
         with cols[1]:
             audio_5 = None
             if hasattr(st, "audio_input"):
@@ -848,7 +850,7 @@ elif stage == 5:
 
         if user_text:
             add_patient(user_text)
-            with st.spinner("Assistant is thinking…"):
+            with st.spinner("Writing the next question…"):
                 reply = get_gpt_reply()
             add_doctor(reply)
             st.rerun()
@@ -864,22 +866,22 @@ elif stage == 5:
             if audio_bytes and audio_hash and audio_hash != st.session_state.last_audio_hash:
                 st.session_state.last_audio_hash = audio_hash
                 st.session_state.mic_key_counter += 1
-                with st.spinner("Transcribing…"):
+                with st.spinner("Transcribing your recording…"):
                     transcript = transcribe_audio(audio_bytes)
                 if transcript and not transcript.startswith("(Transcription failed"):
                     st.info(f'Heard: "{transcript}"')
                     add_patient(transcript)
-                    with st.spinner("Assistant is thinking…"):
+                    with st.spinner("Writing the next question…"):
                         reply = get_gpt_reply()
                     add_doctor(reply)
                     st.rerun()
                 else:
-                    st.warning("Could not transcribe. Please try again.")
+                    st.warning("I couldn't transcribe that. Please try again.")
 
-        if st.button("✅ Submit Check-In", use_container_width=True, type="primary"):
+        if st.button("✅ Submit today's check-in", use_container_width=True, type="primary"):
             try:
                 save_to_sheet()
                 st.session_state.submitted = True
                 st.rerun()
             except Exception as exc:
-                st.error(f"Failed to save: {exc}")
+                st.error(f"Could not save the check-in: {exc}")
