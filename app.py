@@ -197,145 +197,6 @@ def get_gpt_reply(extra_context: str = "") -> str:
     except Exception as e:
         return f"(Error: {e})"
 
-def get_gpt_reply_with_suggestions(extra_context: str = ""):
-    """
-    Like get_gpt_reply but asks GPT to also provide 2-3 likely patient answers.
-    Returns (question_text, suggestions_list).
-    """
-    if not _openai_ready():
-        return "(Assistant unavailable — check OpenAI API key.)", []
-
-    # Build messages exactly like get_gpt_reply but with structured output instruction
-    suggestion_instruction = (
-        "\n\nRESPONSE FORMAT — you MUST reply with ONLY valid JSON, no markdown fences:\n"
-        '{"question": "Your single follow-up question here", '
-        '"suggested_answers": ["short answer 1", "short answer 2", "short answer 3"]}\n'
-        "The suggested_answers MUST be 2-3 very brief patient responses — MAX 4 words each. "
-        "Examples: \"Much better\", \"About the same\", \"Worse than before\", \"Yes, a little\", \"No, not really\". "
-        "Keep them short enough to fit on a button. Range from positive to concerning. "
-        "Output ONLY the JSON object — no extra text, no code fences."
-    )
-    system_prompt = build_system_prompt(extra_context) + suggestion_instruction
-
-    msgs = [{"role": "system", "content": system_prompt}]
-    for p in st.session_state.get("past_checkins", []):
-        ts = p.get("timestamp","?"); fl = p.get("feeling_level","?")
-        pn = "yes" if p.get("pain") else "no"
-        locs = ", ".join(p.get("pain_locations",[])) or "none"
-        syms = ", ".join(p.get("symptoms",[])) or "none"
-        msgs.append({"role":"user",      "content": f"[Past visit {ts}] Feeling:{fl}/10. Pain:{pn}. Locations:{locs}. Symptoms:{syms}."})
-        msgs.append({"role":"assistant", "content": f"Noted your check-in from {ts}."})
-    for m in st.session_state.messages[-20:]:
-        msgs.append({"role": "assistant" if m.get("role")=="doctor" else "user",
-                     "content": m.get("content","")})
-    try:
-        r = openai_client.chat.completions.create(
-            model=_secret("openai_model", default="gpt-4o-mini"),
-            messages=msgs, max_tokens=200, temperature=0.5,
-        )
-        raw = (r.choices[0].message.content or "").strip()
-        # Strip markdown code fences if present
-        cleaned = raw
-        if cleaned.startswith("```"):
-            cleaned = cleaned.split("\n", 1)[-1] if "\n" in cleaned else cleaned[3:]
-        if cleaned.endswith("```"):
-            cleaned = cleaned[:-3].strip()
-        if cleaned.startswith("json"):
-            cleaned = cleaned[4:].strip()
-
-        parsed = json.loads(cleaned)
-        question = parsed.get("question", "").strip()
-        suggestions = parsed.get("suggested_answers", [])
-        # Validate
-        if not question:
-            return raw, []
-        if not isinstance(suggestions, list):
-            suggestions = []
-        # Ensure suggestions are strings and reasonable length
-        suggestions = [str(s).strip() for s in suggestions if str(s).strip()][:3]
-        return question, suggestions
-    except (json.JSONDecodeError, KeyError, TypeError):
-        # Fallback: GPT didn't return valid JSON — use raw text, no suggestions
-        return raw if raw else "(No response)", []
-    except Exception as e:
-        return f"(Error: {e})", []
-
-def get_opening_message_with_suggestions(last: Dict, name: str):
-    """
-    Like get_opening_message but also returns suggested answer buttons.
-    Returns (message_text, suggestions_list).
-    """
-    if not _openai_ready():
-        return (f"Hi {name}! Good to see you again. How have you been since your last visit?",
-                ["Doing better", "About the same", "Not so good"])
-
-    fl   = last.get("feeling_level", "?")
-    pn   = "yes" if last.get("pain") else "no"
-    ploc = ", ".join(last.get("pain_locations", [])) or "none"
-    sym  = ", ".join(last.get("symptoms", [])) or "none"
-    ts   = last.get("timestamp", "your last visit")
-
-    if last.get("symptoms"):
-        focus = f"ask specifically how their {sym} have been — better, worse, or the same?"
-    elif last.get("pain") and last.get("pain_locations"):
-        focus = f"ask specifically about their {ploc} pain — is it still there, how severe?"
-    elif fl not in ("?", None) and str(fl).isdigit() and int(fl) <= 4:
-        focus = f"ask what was contributing to their low feeling score of {fl}/10 and whether it has changed"
-    else:
-        focus = f"ask how they have been feeling since then"
-
-    system = (
-        "You are a warm, empathetic virtual symptom-intake assistant for a cancer care clinic. "
-        "Write a short opening message (2–3 sentences max). "
-        "Sentence 1: greet the patient by name and briefly mention their SPECIFIC data from last time "
-        "(name the actual symptoms, pain locations, or feeling score — do NOT be generic). "
-        "Sentence 2-3: " + focus + ". "
-        "Do NOT say 'Thank you', 'Great', 'I see', or any filler. Be warm but direct.\n\n"
-        "RESPONSE FORMAT — you MUST reply with ONLY valid JSON, no markdown fences:\n"
-        '{"question": "Your full opening message here", '
-        '"suggested_answers": ["short answer 1", "short answer 2", "short answer 3"]}\n'
-        "The suggested_answers MUST be 2-3 very brief patient responses — MAX 4 words each. "
-        "Examples: \"Much better now\", \"About the same\", \"Gotten worse\". "
-        "Keep them short enough to fit on a button. Range from positive to concerning. "
-        "Output ONLY the JSON object."
-    )
-    try:
-        r = openai_client.chat.completions.create(
-            model=_secret("openai_model", default="gpt-4o-mini"),
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user",   "content": f"Patient name: {name}. Last visit: {ts}. "
-                                               f"Feeling: {fl}/10. Pain: {pn}. "
-                                               f"Locations: {ploc}. Symptoms: {sym}."}
-            ],
-            max_tokens=200, temperature=0.5,
-        )
-        raw = (r.choices[0].message.content or "").strip()
-        cleaned = raw
-        if cleaned.startswith("```"):
-            cleaned = cleaned.split("\n", 1)[-1] if "\n" in cleaned else cleaned[3:]
-        if cleaned.endswith("```"):
-            cleaned = cleaned[:-3].strip()
-        if cleaned.startswith("json"):
-            cleaned = cleaned[4:].strip()
-
-        parsed = json.loads(cleaned)
-        question = parsed.get("question", "").strip()
-        suggestions = parsed.get("suggested_answers", [])
-        if not question:
-            return raw, []
-        if not isinstance(suggestions, list):
-            suggestions = []
-        suggestions = [str(s).strip() for s in suggestions if str(s).strip()][:3]
-        return question, suggestions
-    except (json.JSONDecodeError, KeyError, TypeError):
-        return (raw if raw else f"Hi {name}! How have you been since your last visit?",
-                ["Doing better", "About the same", "Not so good"])
-    except Exception as e:
-        return (f"Hi {name}! Last time you reported {sym if sym != 'none' else 'some symptoms'}. "
-                f"How have things been since then?",
-                ["Doing better", "About the same", "Not so good"])
-
 def transcribe_audio(audio_bytes: bytes) -> str:
     if not _openai_ready(): return "(Transcription unavailable.)"
     try:
@@ -381,45 +242,11 @@ html, body, [data-testid="stAppViewContainer"] {
         radial-gradient(ellipse 55% 40% at 8% 92%, rgba(38,70,83,0.08) 0%, transparent 65%),
         #f5f3ef;
 }
-[data-testid="stHeader"]  { display: none !important; height: 0 !important; }
-[data-testid="stDecoration"] { display: none !important; height: 0 !important; }
-[data-testid="stStatusWidget"] { display: none !important; height: 0 !important; }
-[data-testid="stToolbar"] { display: none !important; height: 0 !important; }
-[data-testid="stMainBlockContainer"] { padding-top: 1rem !important; }
+[data-testid="stHeader"]  { background: transparent !important; }
+[data-testid="stDecoration"] { display: none !important; }
+[data-testid="stMainBlockContainer"] { padding-top: 2rem !important; }
 .block-container { max-width: 680px !important; padding: 0 1.2rem 3rem !important; }
-#MainMenu, footer, header, [data-testid="stToolbar"],
-[data-testid="stAppDeployButton"], [data-testid="stStatusWidget"],
-.stDeployButton, .stApp > header,
-iframe[title="streamlitApp"] { display: none !important; }
-/* Kill any fixed/sticky bars at top */
-.stApp > header, .stApp > div:first-child > header {
-    display: none !important;
-}
-header[data-testid="stHeader"],
-div[data-testid="stDecoration"],
-div[data-testid="stStatusWidget"] {
-    display: none !important;
-    height: 0 !important;
-    max-height: 0 !important;
-    overflow: hidden !important;
-    visibility: hidden !important;
-    position: absolute !important;
-}
-/* Hide the Streamlit top bar / connection status bar */
-.stApp > div:first-child,
-.stApp [data-testid="stHeader"],
-.stApp [data-testid="stStatusWidget"],
-[data-testid="collapsedControl"],
-.stApp iframe[title="streamlitApp"],
-.stAppHeader, .stHeader {
-    display: none !important;
-    height: 0 !important;
-    min-height: 0 !important;
-    max-height: 0 !important;
-    padding: 0 !important;
-    margin: 0 !important;
-    overflow: hidden !important;
-}
+#MainMenu, footer, [data-testid="stToolbar"] { display: none !important; }
 
 /* ── App header ── */
 .app-header {
@@ -485,14 +312,6 @@ div[data-testid="stStatusWidget"] {
 
 /* ── Panel (active stage card) ── */
 .panel {
-    background: transparent;
-    border: none;
-    border-radius: var(--r-lg);
-    padding: 6px 0 10px;
-    box-shadow: none;
-    animation: fadeUp 0.28s ease both;
-}
-.panel-card {
     background: var(--surface);
     border: 1.5px solid var(--border);
     border-radius: var(--r-lg);
@@ -501,23 +320,9 @@ div[data-testid="stStatusWidget"] {
     animation: fadeUp 0.28s ease both;
 }
 .panel-title {
-    display: flex; align-items: flex-start; gap: 10px;
-    margin-bottom: 14px;
-}
-.panel-title-avatar {
-    width: 32px; height: 32px; border-radius: 50%; flex-shrink: 0;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 15px;
-    background: var(--accent-lt); border: 1.5px solid var(--accent-md);
-}
-.panel-title-bubble {
-    background: var(--surface); border: 1.5px solid var(--border);
-    border-radius: var(--r-md); border-bottom-left-radius: 4px;
-    padding: 10px 15px; box-shadow: var(--shadow-sm);
-    font-family: 'Nunito', sans-serif;
-    font-size: 15px; font-weight: 600; color: var(--text);
-    line-height: 1.5; max-width: 82%;
-    animation: fadeUp 0.22s ease both;
+    font-family: 'Lora', serif;
+    font-size: 17px; font-weight: 600; letter-spacing: -0.2px;
+    color: var(--text); margin-bottom: 12px; line-height: 1.3;
 }
 .small-note {
     font-size: 12px; color: var(--muted); font-weight: 500;
@@ -579,11 +384,8 @@ div[data-testid="stStatusWidget"] {
     border: 1.5px solid var(--border) !important;
     display: flex !important; align-items: center !important; justify-content: center !important;
     background: var(--surface) !important; box-shadow: var(--shadow-sm) !important;
-    width: 100% !important; min-width: 0 !important;
-    overflow: hidden !important;
 }
 [data-testid="stAudioInput"] > div:hover { border-color: var(--accent) !important; }
-[data-testid="stAudioInput"] > div > * { transform: scale(0.88); transform-origin: center; }
 
 /* ── Text inputs ── */
 [data-testid="stTextInput"] > div > div > input {
@@ -601,54 +403,6 @@ div[data-testid="stStatusWidget"] {
     outline: none !important;
 }
 [data-testid="stTextInput"] > label { display: none !important; }
-
-/* ── Embedded send button (↑ inside text input) ── */
-/* The column contains a text input followed by a button.
-   We overlay the button on top of the input, aligned right. */
-[data-testid="stColumn"]:has([data-testid="stTextInput"]):has(.stButton) {
-    position: relative !important;
-}
-[data-testid="stColumn"]:has([data-testid="stTextInput"]):has(.stButton)
-  [data-testid="stElementContainer"]:has(.stButton) {
-    position: absolute !important;
-    right: 8px !important;
-    top: 4px !important;
-    z-index: 2 !important;
-    width: auto !important;
-}
-[data-testid="stColumn"]:has([data-testid="stTextInput"]):has(.stButton)
-  .stButton {
-    display: flex !important;
-    justify-content: flex-end !important;
-}
-[data-testid="stColumn"]:has([data-testid="stTextInput"]):has(.stButton)
-  .stButton button {
-    width: 30px !important;
-    height: 30px !important;
-    min-height: 30px !important;
-    padding: 0 !important;
-    border-radius: 50% !important;
-    background: linear-gradient(135deg, var(--accent) 0%, #1d7a6e 100%) !important;
-    color: #fff !important;
-    border: none !important;
-    font-size: 15px !important;
-    font-weight: 700 !important;
-    box-shadow: 0 2px 8px rgba(42,157,143,0.28) !important;
-    display: inline-flex !important;
-    align-items: center !important;
-    justify-content: center !important;
-    transition: all 0.14s ease !important;
-}
-[data-testid="stColumn"]:has([data-testid="stTextInput"]):has(.stButton)
-  .stButton button:hover {
-    background: linear-gradient(135deg, #30ada0 0%, #1a6e64 100%) !important;
-    transform: scale(1.08) !important;
-    box-shadow: 0 3px 12px rgba(42,157,143,0.40) !important;
-}
-/* Add right padding to text inputs in columns so text doesn't go under the button */
-[data-testid="stColumn"]:has(.stButton) [data-testid="stTextInput"] > div > div > input {
-    padding-right: 42px !important;
-}
 
 /* ── Summary card ── */
 .summary-wrap {
@@ -721,12 +475,9 @@ for k, v in defaults.items():
     if k not in st.session_state: st.session_state[k] = v
 
 # ── Core helpers ────────────────────────────────────────────
-def add_doctor(text, stage=None, suggestions=None):
+def add_doctor(text, stage=None):
     s = stage if stage is not None else st.session_state.get("stage", -1)
-    msg = {"role":"doctor","content":text,"stage":s}
-    if suggestions:
-        msg["suggestions"] = suggestions
-    st.session_state.messages.append(msg)
+    st.session_state.messages.append({"role":"doctor","content":text,"stage":s})
 
 def add_patient(text, stage=None):
     s = stage if stage is not None else st.session_state.get("stage", -1)
@@ -763,8 +514,8 @@ def on_patient_answer(text: str, stage_id: int, extra_context: str = ""):
     if can_followup(stage_id):
         record_followup(stage_id)
         with st.spinner("Assistant is thinking…"):
-            reply, suggestions = get_gpt_reply_with_suggestions(extra_context=extra_context)
-        add_doctor(reply, stage=stage_id, suggestions=suggestions)
+            reply = get_gpt_reply(extra_context=extra_context)
+        add_doctor(reply, stage=stage_id)
     # NOTE: we do NOT auto-advance — patient clicks Next when ready
 
 def on_followup_reply(text: str, stage_id: int, extra_context: str = ""):
@@ -776,8 +527,8 @@ def on_followup_reply(text: str, stage_id: int, extra_context: str = ""):
     if can_followup(stage_id):
         record_followup(stage_id)
         with st.spinner("Assistant is thinking…"):
-            reply, suggestions = get_gpt_reply_with_suggestions(extra_context=extra_context)
-        add_doctor(reply, stage=stage_id, suggestions=suggestions)
+            reply = get_gpt_reply(extra_context=extra_context)
+        add_doctor(reply, stage=stage_id)
 
 def handle_voice(audio_value, stage_id: int, extra_context: str = "",
                  is_followup: bool = False) -> bool:
@@ -818,66 +569,33 @@ def render_chat_window():
                         f'<div class="avatar">🙂</div></div>', unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
-def render_inline_stage_messages(stage_id: int, extra_context: str = ""):
+def render_inline_stage_messages(stage_id: int):
     """
     Render messages from the current stage inline inside the panel.
     Doctor messages = left-aligned card. Patient messages = right-aligned.
-    Suggestion buttons are shown ONLY on the very last doctor message if it has them
-    and the patient hasn't replied yet.
     """
     stage_msgs = [m for m in st.session_state.messages if m.get("stage") == stage_id]
-    for i, msg in enumerate(stage_msgs):
-        is_last = (i == len(stage_msgs) - 1)
+    for msg in stage_msgs:
         if msg.get("role") == "doctor":
             st.markdown(f'<div class="inline-followup">🩺 {msg.get("content","")}</div>',
                         unsafe_allow_html=True)
-            # Show suggestion buttons only on the last doctor message
-            # (i.e. the one awaiting a patient reply)
-            if is_last and msg.get("suggestions"):
-                render_suggestion_buttons(
-                    msg["suggestions"], stage_id,
-                    is_followup=is_answered(stage_id),
-                    extra_context=extra_context
-                )
         else:
             st.markdown(f'<div class="inline-patient">{msg.get("content","")} 🙂</div>',
                         unsafe_allow_html=True)
-
-def render_suggestion_buttons(suggestions: list, stage_id: int,
-                               is_followup: bool = False,
-                               extra_context: str = ""):
-    """
-    Render 2-3 GPT-suggested patient answers as clickable buttons.
-    """
-    if not suggestions:
-        return
-    st.markdown('<div class="small-note" style="margin-top:8px;">Quick replies:</div>',
-                unsafe_allow_html=True)
-    n = len(suggestions)
-    cols = st.columns(n, gap="small")
-    fu_count = followup_count(stage_id)
-    for idx, sug in enumerate(suggestions):
-        with cols[idx]:
-            if st.button(sug, key=f"sug_{stage_id}_{fu_count}_{idx}",
-                         use_container_width=True):
-                if is_followup:
-                    on_followup_reply(sug, stage_id, extra_context)
-                else:
-                    on_patient_answer(sug, stage_id, extra_context)
-                st.rerun()
 
 def render_followup_input(stage_id: int, extra_context: str = ""):
     """
     Compact text + mic row for answering follow-up questions inline in the panel.
     Only shown when the stage has been answered AND GPT still has follow-up budget.
-    Send button is embedded inside the text input via CSS.
     """
-    c_main, c_mic = st.columns([7, 2.5], gap="small")
-    with c_main:
+    c_txt, c_send, c_mic = st.columns([6, 1, 1], gap="small")
+    with c_txt:
         typed = st.text_input("", placeholder="Reply…",
                               key=f"fu_txt_{stage_id}_{followup_count(stage_id)}",
                               label_visibility="collapsed")
-        send_clicked = st.button("↑", key=f"fu_send_{stage_id}_{followup_count(stage_id)}")
+    with c_send:
+        send_clicked = st.button("↑", key=f"fu_send_{stage_id}_{followup_count(stage_id)}",
+                                 use_container_width=True)
     with c_mic:
         audio_val = None
         if hasattr(st, "audio_input"):
@@ -898,14 +616,15 @@ def render_next_button(label="Next →"):
 def render_text_mic_row(stage_id: int, extra_context: str = "",
                         placeholder: str = "Or type your answer…"):
     """
-    Primary answer row: [text input + ↑ Send] [🎤]
-    Send button is embedded inside the text input via CSS.
+    Primary answer row: [text input ────] [↑ Send] [🎤]
+    Used as the free-text alternative alongside widget buttons.
     """
-    c_main, c_mic = st.columns([7, 2.5], gap="small")
-    with c_main:
+    c_txt, c_send, c_mic = st.columns([6, 1, 1], gap="small")
+    with c_txt:
         typed = st.text_input("", placeholder=placeholder,
                               key=f"txt_{stage_id}", label_visibility="collapsed")
-        send_clicked = st.button("↑", key=f"txtsend_{stage_id}")
+    with c_send:
+        send_clicked = st.button("↑", key=f"txtsend_{stage_id}", use_container_width=True)
     with c_mic:
         audio_val = None
         if hasattr(st, "audio_input"):
@@ -949,7 +668,7 @@ st.markdown('''
 # STAGE -1 — Name entry
 # ════════════════════════════════════════════════════════════
 if st.session_state.stage == -1:
-    st.markdown('<div class="panel-card"><div class="panel-title"><div class="panel-title-avatar">🩺</div><div class="panel-title-bubble">Welcome · Please enter your name</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="panel"><div class="panel-title">Welcome · Please enter your name</div>', unsafe_allow_html=True)
     name_input = st.text_input("Your name:", value=st.session_state.patient_name)
     if st.button("Start Check-In"):
         if name_input.strip():
@@ -960,8 +679,8 @@ if st.session_state.stage == -1:
             if past:
                 last = past[-1]
                 with st.spinner("Getting your assistant ready…"):
-                    opening, opening_suggestions = get_opening_message_with_suggestions(last, name_input.strip())
-                add_doctor(opening, stage=0, suggestions=opening_suggestions)
+                    opening = get_opening_message(last, name_input.strip())
+                add_doctor(opening, stage=0)
                 st.session_state.stage = 0
             else:
                 context = (
@@ -995,10 +714,10 @@ if stage == 0:
         "Do NOT start structured check-in questions yet. No filler."
     )
     st.markdown('<div class="panel">', unsafe_allow_html=True)
-    st.markdown('<div class="panel-title"><div class="panel-title-avatar">🩺</div><div class="panel-title-bubble">💬 Catching up from your last visit</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="panel-title">💬 Catching up from your last visit</div>', unsafe_allow_html=True)
 
     # Always render inline messages (GPT question + any patient replies so far)
-    render_inline_stage_messages(stage_id=0, extra_context=history_ctx)
+    render_inline_stage_messages(stage_id=0)
 
     # Determine if the last message in this stage is from the doctor (needs a reply)
     stage0_msgs = [m for m in st.session_state.messages if m.get("stage") == 0]
@@ -1027,7 +746,7 @@ elif stage == 1:
         "Ask ONE specific follow-up about what is driving that feeling. No filler. Just the question."
     )
     st.markdown('<div class="panel">', unsafe_allow_html=True)
-    st.markdown('<div class="panel-title"><div class="panel-title-avatar">🩺</div><div class="panel-title-bubble">How are you feeling today?</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="panel-title">How are you feeling today?</div>', unsafe_allow_html=True)
 
     # PROMIS Global Health 5-point scale — standard in oncology patient-reported outcomes
     FEELING_OPTIONS = [
@@ -1040,7 +759,7 @@ elif stage == 1:
 
     if not is_answered(1):
         # Show opening GPT message (tagged stage=1) inline
-        render_inline_stage_messages(stage_id=1, extra_context=feeling_ctx)
+        render_inline_stage_messages(stage_id=1)
         st.markdown('<div class="small-note">Choose how you feel, or describe in your own words below</div>',
                     unsafe_allow_html=True)
 
@@ -1073,7 +792,7 @@ elif stage == 1:
                             placeholder="Or describe how you feel in your own words…")
 
     else:
-        render_inline_stage_messages(stage_id=1, extra_context=feeling_ctx)
+        render_inline_stage_messages(stage_id=1)
         stage1_msgs = [m for m in st.session_state.messages if m.get("stage") == 1]
         if stage1_msgs and stage1_msgs[-1].get("role") == "doctor":
             render_followup_input(stage_id=1, extra_context=feeling_ctx)
@@ -1094,15 +813,15 @@ elif stage == 2:
         "No filler."
     )
     st.markdown('<div class="panel">', unsafe_allow_html=True)
-    st.markdown('<div class="panel-title"><div class="panel-title-avatar">🩺</div><div class="panel-title-bubble">Do you have any pain today?</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="panel-title">Do you have any pain today?</div>', unsafe_allow_html=True)
 
     if not is_answered(2):
-        render_inline_stage_messages(stage_id=2, extra_context=pain_ctx)
+        render_inline_stage_messages(stage_id=2)
         st.markdown('<div class="small-note">Choose an option or describe in your own words</div>',
                     unsafe_allow_html=True)
 
-        # [Yes] [No] [text + ↑] [🎤]
-        c1, c2, c_main, c_mic = st.columns([1.7, 1.7, 4, 2.5], gap="small")
+        # [Yes] [No] [text ────] [↑] [🎤] all on one row
+        c1, c2, c_txt, c_send, c_mic = st.columns([1.7, 1.7, 4, 1, 1], gap="small")
         with c1:
             if st.button("✅ Yes, pain", use_container_width=True, key="pain_yes"):
                 st.session_state.pain_yesno = True
@@ -1111,10 +830,11 @@ elif stage == 2:
             if st.button("🙂 No pain", use_container_width=True, key="pain_no"):
                 st.session_state.pain_yesno = False
                 on_patient_answer("No, I don't have any pain today.", 2, pain_ctx); st.rerun()
-        with c_main:
+        with c_txt:
             typed_pain = st.text_input("", placeholder="Or describe…",
                                        key="txt_2", label_visibility="collapsed")
-            send_pain = st.button("↑", key="txtsend_2")
+        with c_send:
+            send_pain = st.button("↑", key="txtsend_2", use_container_width=True)
         with c_mic:
             audio_pain = None
             if hasattr(st, "audio_input"):
@@ -1125,7 +845,7 @@ elif stage == 2:
         if handle_voice(audio_pain, 2, pain_ctx): st.rerun()
 
     else:
-        render_inline_stage_messages(stage_id=2, extra_context=pain_ctx)
+        render_inline_stage_messages(stage_id=2)
         stage2_msgs = [m for m in st.session_state.messages if m.get("stage") == 2]
         if stage2_msgs and stage2_msgs[-1].get("role") == "doctor":
             render_followup_input(stage_id=2, extra_context=pain_ctx)
@@ -1143,10 +863,10 @@ elif stage == 3:
         "Ask ONE follow-up about those locations (severity, duration, character). No filler."
     )
     st.markdown('<div class="panel">', unsafe_allow_html=True)
-    st.markdown('<div class="panel-title"><div class="panel-title-avatar">🩺</div><div class="panel-title-bubble">Where do you feel pain?</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="panel-title">Where do you feel pain?</div>', unsafe_allow_html=True)
 
     if not is_answered(3):
-        render_inline_stage_messages(stage_id=3, extra_context=location_ctx)
+        render_inline_stage_messages(stage_id=3)
         st.markdown('<div class="small-note">Select areas on the map, or describe below</div>',
                     unsafe_allow_html=True)
 
@@ -1164,11 +884,12 @@ elif stage == 3:
                 + (", ".join(sorted(st.session_state.selected_parts)) or "None") + "</div>",
                 unsafe_allow_html=True)
 
-        c_main3, c_mic3, c_send3b = st.columns([4, 2.5, 2], gap="small")
-        with c_main3:
+        c_txt3, c_send3a, c_mic3, c_send3b = st.columns([4, 1, 1, 2], gap="small")
+        with c_txt3:
             typed_loc = st.text_input("", placeholder="Or describe where you feel pain…",
                                       key="txt_3", label_visibility="collapsed")
-            send_txt3 = st.button("↑", key="txtsend_3")
+        with c_send3a:
+            send_txt3 = st.button("↑", key="txtsend_3", use_container_width=True)
         with c_mic3:
             audio_loc = None
             if hasattr(st, "audio_input"):
@@ -1185,7 +906,7 @@ elif stage == 3:
             on_patient_answer(f"Pain locations: {loc_txt}.", 3, location_ctx); st.rerun()
 
     else:
-        render_inline_stage_messages(stage_id=3, extra_context=location_ctx)
+        render_inline_stage_messages(stage_id=3)
         stage3_msgs = [m for m in st.session_state.messages if m.get("stage") == 3]
         if stage3_msgs and stage3_msgs[-1].get("role") == "doctor":
             render_followup_input(stage_id=3, extra_context=location_ctx)
@@ -1208,10 +929,10 @@ elif stage == 4:
         "Fever / chills","Constipation","Diarrhea","Sleep problems","Anxiety / low mood",
     ]
     st.markdown('<div class="panel">', unsafe_allow_html=True)
-    st.markdown('<div class="panel-title"><div class="panel-title-avatar">🩺</div><div class="panel-title-bubble">Any of these symptoms today?</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="panel-title">Any of these symptoms today?</div>', unsafe_allow_html=True)
 
     if not is_answered(4):
-        render_inline_stage_messages(stage_id=4, extra_context=symptom_ctx)
+        render_inline_stage_messages(stage_id=4)
         st.markdown('<div class="small-note">Tap to select all that apply, then click Send — or describe below</div>',
                     unsafe_allow_html=True)
 
@@ -1224,11 +945,12 @@ elif stage == 4:
                     else: st.session_state.symptoms.append(symptom)
                     st.rerun()
 
-        c_main4, c_mic4, c_send4b = st.columns([4, 2.5, 2], gap="small")
-        with c_main4:
+        c_txt4, c_send4a, c_mic4, c_send4b = st.columns([4, 1, 1, 2], gap="small")
+        with c_txt4:
             typed_sym = st.text_input("", placeholder="Or describe your symptoms…",
                                       key="txt_4", label_visibility="collapsed")
-            send_txt4 = st.button("↑", key="txtsend_4")
+        with c_send4a:
+            send_txt4 = st.button("↑", key="txtsend_4", use_container_width=True)
         with c_mic4:
             audio_sym = None
             if hasattr(st, "audio_input"):
@@ -1245,7 +967,7 @@ elif stage == 4:
             on_patient_answer(f"Symptoms today: {sym_txt}.", 4, symptom_ctx); st.rerun()
 
     else:
-        render_inline_stage_messages(stage_id=4, extra_context=symptom_ctx)
+        render_inline_stage_messages(stage_id=4)
         stage4_msgs = [m for m in st.session_state.messages if m.get("stage") == 4]
         if stage4_msgs and stage4_msgs[-1].get("role") == "doctor":
             render_followup_input(stage_id=4, extra_context=symptom_ctx)
@@ -1335,50 +1057,23 @@ elif stage == 5:
                             f'<div class="avatar">🙂</div></div>', unsafe_allow_html=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
-        st.markdown('<div class="panel"><div class="panel-title"><div class="panel-title-avatar">🩺</div><div class="panel-title-bubble">💬 Anything else to share?</div></div>'
-                    '<div class="small-note">Chat with the assistant, or submit when ready.</div>',
+        st.markdown('<div class="panel"><div class="panel-title">💬 Anything else to share?</div>'
+                    '<div class="small-note">Chat with the assistant, or submit when ready.</div></div>',
                     unsafe_allow_html=True)
 
-        # Show suggestion buttons from the last doctor message in stage 5
-        stage5_msgs = [m for m in st.session_state.messages if m.get("stage") == 5]
-        last_doc_msg = None
-        for m in reversed(stage5_msgs):
-            if m.get("role") == "doctor":
-                last_doc_msg = m
-                break
-        if last_doc_msg and last_doc_msg.get("suggestions"):
-            sugs = last_doc_msg["suggestions"]
-            n = len(sugs)
-            sug_cols = st.columns(n, gap="small")
-            msg_count = len(stage5_msgs)
-            for idx, sug in enumerate(sugs):
-                with sug_cols[idx]:
-                    if st.button(sug, key=f"sug5_{msg_count}_{idx}", use_container_width=True):
-                        add_patient(sug, stage=5)
-                        with st.spinner("Assistant is thinking…"):
-                            reply, new_sugs = get_gpt_reply_with_suggestions()
-                        add_doctor(reply, stage=5, suggestions=new_sugs)
-                        st.rerun()
-
-        # Text input + mic row
-        c_main5, c_mic5 = st.columns([7, 2.5], gap="small")
-        with c_main5:
-            typed_5 = st.text_input("", placeholder="Type anything else to share…",
-                                    key="txt_stage5", label_visibility="collapsed")
-            send_5 = st.button("↑", key="txtsend_5")
-        with c_mic5:
+        cols = st.columns([5,1], vertical_alignment="bottom")
+        with cols[0]:
+            user_text_5 = st.chat_input("Anything else to mention…", key="chat_input_5")
+        with cols[1]:
             audio_5 = None
-            if hasattr(st, "audio_input"):
+            if hasattr(st,"audio_input"):
                 audio_5 = st.audio_input("", key=f"mic_5_{st.session_state.mic_key_counter}",
                                          label_visibility="collapsed")
-
-        if send_5 and typed_5 and typed_5.strip():
-            add_patient(typed_5.strip(), stage=5)
+        if user_text_5:
+            add_patient(user_text_5, stage=5)
             with st.spinner("Assistant is thinking…"):
-                reply, new_sugs = get_gpt_reply_with_suggestions()
-            add_doctor(reply, stage=5, suggestions=new_sugs)
-            st.rerun()
-
+                reply = get_gpt_reply()
+            add_doctor(reply, stage=5); st.rerun()
         if audio_5 is not None:
             try: ab=audio_5.getvalue(); ah=hashlib.sha1(ab).hexdigest()
             except: ab=ah=None
@@ -1388,13 +1083,8 @@ elif stage == 5:
                 if t and not t.startswith("(Transcription failed"):
                     st.info(f'Heard: "{t}"')
                     add_patient(t, stage=5)
-                    with st.spinner("Assistant is thinking…"):
-                        reply, new_sugs = get_gpt_reply_with_suggestions()
-                    add_doctor(reply, stage=5, suggestions=new_sugs)
-                    st.rerun()
-
-        st.markdown("</div>", unsafe_allow_html=True)
-
-        if st.button("✅ Submit Check-In", use_container_width=True, type="primary"):
+                    with st.spinner("Assistant is thinking…"): reply=get_gpt_reply()
+                    add_doctor(reply, stage=5); st.rerun()
+        if st.button("✅ Submit Check-In", use_container_width=True):
             try: save_to_sheet(); st.session_state.submitted=True; st.rerun()
             except Exception as e: st.error(f"Failed to save: {e}")
