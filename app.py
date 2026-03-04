@@ -547,27 +547,19 @@ html, body, [data-testid="stAppViewContainer"] {
 [data-testid="stTextInput"] > label { display: none !important; }
 
 /* ── Embedded send button (↑ inside text input) ── */
-[data-testid="stColumn"] [data-testid="stVerticalBlock"]
-  > [data-testid="stElementContainer"]:has([data-testid="stTextInput"])
-  + [data-testid="stElementContainer"]:has(.stButton) {
-    margin-top: -42px !important;
-    height: 0 !important;
-    overflow: visible !important;
+/* Target any column that contains both a text input and a button */
+[data-testid="stColumn"]:has([data-testid="stTextInput"]):has(.stButton) {
     position: relative !important;
+}
+[data-testid="stColumn"]:has([data-testid="stTextInput"]):has(.stButton)
+  .stButton {
+    position: absolute !important;
+    right: 8px !important;
+    top: 4px !important;
     z-index: 2 !important;
-    display: flex !important;
-    justify-content: flex-end !important;
-    padding-right: 6px !important;
 }
-[data-testid="stColumn"] [data-testid="stVerticalBlock"]
-  > [data-testid="stElementContainer"]:has([data-testid="stTextInput"])
-  + [data-testid="stElementContainer"]:has(.stButton) .stButton {
-    display: flex !important;
-    justify-content: flex-end !important;
-}
-[data-testid="stColumn"] [data-testid="stVerticalBlock"]
-  > [data-testid="stElementContainer"]:has([data-testid="stTextInput"])
-  + [data-testid="stElementContainer"]:has(.stButton) button {
+[data-testid="stColumn"]:has([data-testid="stTextInput"]):has(.stButton)
+  .stButton button {
     width: 30px !important;
     height: 30px !important;
     min-height: 30px !important;
@@ -583,11 +575,9 @@ html, body, [data-testid="stAppViewContainer"] {
     align-items: center !important;
     justify-content: center !important;
     transition: all 0.14s ease !important;
-    margin-left: auto !important;
 }
-[data-testid="stColumn"] [data-testid="stVerticalBlock"]
-  > [data-testid="stElementContainer"]:has([data-testid="stTextInput"])
-  + [data-testid="stElementContainer"]:has(.stButton) button:hover {
+[data-testid="stColumn"]:has([data-testid="stTextInput"]):has(.stButton)
+  .stButton button:hover {
     background: linear-gradient(135deg, #30ada0 0%, #1a6e64 100%) !important;
     transform: scale(1.08) !important;
     box-shadow: 0 3px 12px rgba(42,157,143,0.40) !important;
