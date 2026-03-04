@@ -546,6 +546,51 @@ html, body, [data-testid="stAppViewContainer"] {
 }
 [data-testid="stTextInput"] > label { display: none !important; }
 
+/* ── Embedded send button (↑ inside text input) ── */
+/* Target: a button container that immediately follows a text-input container
+   inside a column — this only matches our chat input rows. */
+[data-testid="stColumn"] [data-testid="stVerticalBlock"]
+  > [data-testid="stElementContainer"]:has([data-testid="stTextInput"])
+  + [data-testid="stElementContainer"]:has(.stButton) {
+    margin-top: -42px !important;
+    height: 0 !important;
+    overflow: visible !important;
+    text-align: right !important;
+    padding-right: 5px !important;
+    position: relative !important;
+    z-index: 2 !important;
+}
+[data-testid="stColumn"] [data-testid="stVerticalBlock"]
+  > [data-testid="stElementContainer"]:has([data-testid="stTextInput"])
+  + [data-testid="stElementContainer"]:has(.stButton) button {
+    width: 30px !important;
+    height: 30px !important;
+    min-height: 30px !important;
+    padding: 0 !important;
+    border-radius: 50% !important;
+    background: linear-gradient(135deg, var(--accent) 0%, #1d7a6e 100%) !important;
+    color: #fff !important;
+    border: none !important;
+    font-size: 15px !important;
+    font-weight: 700 !important;
+    box-shadow: 0 2px 8px rgba(42,157,143,0.28) !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    transition: all 0.14s ease !important;
+}
+[data-testid="stColumn"] [data-testid="stVerticalBlock"]
+  > [data-testid="stElementContainer"]:has([data-testid="stTextInput"])
+  + [data-testid="stElementContainer"]:has(.stButton) button:hover {
+    background: linear-gradient(135deg, #30ada0 0%, #1a6e64 100%) !important;
+    transform: scale(1.08) !important;
+    box-shadow: 0 3px 12px rgba(42,157,143,0.40) !important;
+}
+/* Add right padding to text inputs in columns so text doesn't go under the button */
+[data-testid="stColumn"] [data-testid="stTextInput"] > div > div > input {
+    padding-right: 42px !important;
+}
+
 /* ── Summary card ── */
 .summary-wrap {
     background: var(--surface); border: 1.5px solid var(--border);
@@ -766,15 +811,14 @@ def render_followup_input(stage_id: int, extra_context: str = ""):
     """
     Compact text + mic row for answering follow-up questions inline in the panel.
     Only shown when the stage has been answered AND GPT still has follow-up budget.
+    Send button is embedded inside the text input via CSS.
     """
-    c_txt, c_send, c_mic = st.columns([5, 1, 2.5], gap="small")
-    with c_txt:
+    c_main, c_mic = st.columns([7, 2.5], gap="small")
+    with c_main:
         typed = st.text_input("", placeholder="Reply…",
                               key=f"fu_txt_{stage_id}_{followup_count(stage_id)}",
                               label_visibility="collapsed")
-    with c_send:
-        send_clicked = st.button("↑", key=f"fu_send_{stage_id}_{followup_count(stage_id)}",
-                                 use_container_width=True)
+        send_clicked = st.button("↑", key=f"fu_send_{stage_id}_{followup_count(stage_id)}")
     with c_mic:
         audio_val = None
         if hasattr(st, "audio_input"):
@@ -795,15 +839,14 @@ def render_next_button(label="Next →"):
 def render_text_mic_row(stage_id: int, extra_context: str = "",
                         placeholder: str = "Or type your answer…"):
     """
-    Primary answer row: [text input ────] [↑ Send] [🎤]
-    Used as the free-text alternative alongside widget buttons.
+    Primary answer row: [text input + ↑ Send] [🎤]
+    Send button is embedded inside the text input via CSS.
     """
-    c_txt, c_send, c_mic = st.columns([5, 1, 2.5], gap="small")
-    with c_txt:
+    c_main, c_mic = st.columns([7, 2.5], gap="small")
+    with c_main:
         typed = st.text_input("", placeholder=placeholder,
                               key=f"txt_{stage_id}", label_visibility="collapsed")
-    with c_send:
-        send_clicked = st.button("↑", key=f"txtsend_{stage_id}", use_container_width=True)
+        send_clicked = st.button("↑", key=f"txtsend_{stage_id}")
     with c_mic:
         audio_val = None
         if hasattr(st, "audio_input"):
@@ -999,8 +1042,8 @@ elif stage == 2:
         st.markdown('<div class="small-note">Choose an option or describe in your own words</div>',
                     unsafe_allow_html=True)
 
-        # [Yes] [No] [text ────] [↑] [🎤] all on one row
-        c1, c2, c_txt, c_send, c_mic = st.columns([1.7, 1.7, 3, 1, 2.5], gap="small")
+        # [Yes] [No] [text + ↑] [🎤]
+        c1, c2, c_main, c_mic = st.columns([1.7, 1.7, 4, 2.5], gap="small")
         with c1:
             if st.button("✅ Yes, pain", use_container_width=True, key="pain_yes"):
                 st.session_state.pain_yesno = True
@@ -1009,11 +1052,10 @@ elif stage == 2:
             if st.button("🙂 No pain", use_container_width=True, key="pain_no"):
                 st.session_state.pain_yesno = False
                 on_patient_answer("No, I don't have any pain today.", 2, pain_ctx); st.rerun()
-        with c_txt:
+        with c_main:
             typed_pain = st.text_input("", placeholder="Or describe…",
                                        key="txt_2", label_visibility="collapsed")
-        with c_send:
-            send_pain = st.button("↑", key="txtsend_2", use_container_width=True)
+            send_pain = st.button("↑", key="txtsend_2")
         with c_mic:
             audio_pain = None
             if hasattr(st, "audio_input"):
@@ -1063,12 +1105,11 @@ elif stage == 3:
                 + (", ".join(sorted(st.session_state.selected_parts)) or "None") + "</div>",
                 unsafe_allow_html=True)
 
-        c_txt3, c_send3a, c_mic3, c_send3b = st.columns([3, 1, 2.5, 2], gap="small")
-        with c_txt3:
+        c_main3, c_mic3, c_send3b = st.columns([4, 2.5, 2], gap="small")
+        with c_main3:
             typed_loc = st.text_input("", placeholder="Or describe where you feel pain…",
                                       key="txt_3", label_visibility="collapsed")
-        with c_send3a:
-            send_txt3 = st.button("↑", key="txtsend_3", use_container_width=True)
+            send_txt3 = st.button("↑", key="txtsend_3")
         with c_mic3:
             audio_loc = None
             if hasattr(st, "audio_input"):
@@ -1124,12 +1165,11 @@ elif stage == 4:
                     else: st.session_state.symptoms.append(symptom)
                     st.rerun()
 
-        c_txt4, c_send4a, c_mic4, c_send4b = st.columns([3, 1, 2.5, 2], gap="small")
-        with c_txt4:
+        c_main4, c_mic4, c_send4b = st.columns([4, 2.5, 2], gap="small")
+        with c_main4:
             typed_sym = st.text_input("", placeholder="Or describe your symptoms…",
                                       key="txt_4", label_visibility="collapsed")
-        with c_send4a:
-            send_txt4 = st.button("↑", key="txtsend_4", use_container_width=True)
+            send_txt4 = st.button("↑", key="txtsend_4")
         with c_mic4:
             audio_sym = None
             if hasattr(st, "audio_input"):
@@ -1261,13 +1301,12 @@ elif stage == 5:
                         add_doctor(reply, stage=5, suggestions=new_sugs)
                         st.rerun()
 
-        # Text input + mic + submit row
-        c_txt5, c_send5, c_mic5 = st.columns([5, 1, 2.5], gap="small")
-        with c_txt5:
+        # Text input + mic row
+        c_main5, c_mic5 = st.columns([7, 2.5], gap="small")
+        with c_main5:
             typed_5 = st.text_input("", placeholder="Type anything else to share…",
                                     key="txt_stage5", label_visibility="collapsed")
-        with c_send5:
-            send_5 = st.button("↑", key="txtsend_5", use_container_width=True)
+            send_5 = st.button("↑", key="txtsend_5")
         with c_mic5:
             audio_5 = None
             if hasattr(st, "audio_input"):
