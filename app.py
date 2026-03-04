@@ -70,12 +70,11 @@ def save_to_sheet():
         datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         st.session_state.get("patient_name", "Unknown"),
         json.dumps({
-            "feeling_level":    st.session_state.feeling_level,
-            "pain":             st.session_state.pain_yesno,
-            "pain_locations":   sorted(list(st.session_state.selected_parts)),
-            "symptoms":         st.session_state.symptoms,
-            "conversation":     st.session_state.messages,
-            "interaction_mode": st.session_state.get("interaction_mode", "hybrid"),
+            "feeling_level":  st.session_state.feeling_level,
+            "pain":           st.session_state.pain_yesno,
+            "pain_locations": sorted(list(st.session_state.selected_parts)),
+            "symptoms":       st.session_state.symptoms,
+            "conversation":   st.session_state.messages,
         })
     ])
 
@@ -201,26 +200,23 @@ def get_gpt_reply(extra_context: str = "") -> str:
 def get_gpt_reply_with_suggestions(extra_context: str = ""):
     """
     Like get_gpt_reply but asks GPT to also provide 2-3 likely patient answers.
-    Returns (question_text, [suggested_answer_1, ...]).
-    Falls back gracefully to (plain_text, []) on any failure.
+    Returns (question_text, suggestions_list).
     """
     if not _openai_ready():
         return "(Assistant unavailable — check OpenAI API key.)", []
 
-    base_prompt = build_system_prompt(extra_context)
-    # Replace the output rules section to request JSON
-    structured_prompt = base_prompt + """
+    # Build messages exactly like get_gpt_reply but with structured output instruction
+    suggestion_instruction = (
+        "\n\nRESPONSE FORMAT — you MUST reply with ONLY valid JSON, no markdown fences:\n"
+        '{"question": "Your single follow-up question here", '
+        '"suggested_answers": ["likely answer 1", "likely answer 2", "likely answer 3"]}\n'
+        "The suggested_answers should be 2-3 short, realistic patient responses (5-12 words each) "
+        "that a cancer patient would likely give to YOUR question. Make them range from positive to concerning. "
+        "Output ONLY the JSON object — no extra text, no code fences."
+    )
+    system_prompt = build_system_prompt(extra_context) + suggestion_instruction
 
-ADDITIONAL OUTPUT FORMAT:
-You MUST respond with ONLY valid JSON (no markdown fences, no extra text) in this exact format:
-{"question": "<your single short follow-up question>", "suggested_answers": ["<answer1>", "<answer2>", "<answer3>"]}
-- suggested_answers: provide 2 to 3 short, realistic patient answers (each under 10 words).
-- These should be the most likely things a cancer patient would say in response.
-- Always make one option more positive, one neutral, and one concerning — when appropriate.
-- Do NOT include an 'other' or 'type your own' option — that is handled by the UI.
-"""
-
-    msgs = [{"role": "system", "content": structured_prompt}]
+    msgs = [{"role": "system", "content": system_prompt}]
     for p in st.session_state.get("past_checkins", []):
         ts = p.get("timestamp","?"); fl = p.get("feeling_level","?")
         pn = "yes" if p.get("pain") else "no"
@@ -237,24 +233,105 @@ You MUST respond with ONLY valid JSON (no markdown fences, no extra text) in thi
             messages=msgs, max_tokens=200, temperature=0.5,
         )
         raw = (r.choices[0].message.content or "").strip()
-        # Try to parse JSON
-        raw_clean = raw.strip()
-        if raw_clean.startswith("```"):
-            raw_clean = raw_clean.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-        parsed = json.loads(raw_clean)
+        # Strip markdown code fences if present
+        cleaned = raw
+        if cleaned.startswith("```"):
+            cleaned = cleaned.split("\n", 1)[-1] if "\n" in cleaned else cleaned[3:]
+        if cleaned.endswith("```"):
+            cleaned = cleaned[:-3].strip()
+        if cleaned.startswith("json"):
+            cleaned = cleaned[4:].strip()
+
+        parsed = json.loads(cleaned)
+        question = parsed.get("question", "").strip()
+        suggestions = parsed.get("suggested_answers", [])
+        # Validate
+        if not question:
+            return raw, []
+        if not isinstance(suggestions, list):
+            suggestions = []
+        # Ensure suggestions are strings and reasonable length
+        suggestions = [str(s).strip() for s in suggestions if str(s).strip()][:3]
+        return question, suggestions
+    except (json.JSONDecodeError, KeyError, TypeError):
+        # Fallback: GPT didn't return valid JSON — use raw text, no suggestions
+        return raw if raw else "(No response)", []
+    except Exception as e:
+        return f"(Error: {e})", []
+
+def get_opening_message_with_suggestions(last: Dict, name: str):
+    """
+    Like get_opening_message but also returns suggested answer buttons.
+    Returns (message_text, suggestions_list).
+    """
+    if not _openai_ready():
+        return (f"Hi {name}! Good to see you again. How have you been since your last visit?",
+                ["Doing better", "About the same", "Not so good"])
+
+    fl   = last.get("feeling_level", "?")
+    pn   = "yes" if last.get("pain") else "no"
+    ploc = ", ".join(last.get("pain_locations", [])) or "none"
+    sym  = ", ".join(last.get("symptoms", [])) or "none"
+    ts   = last.get("timestamp", "your last visit")
+
+    if last.get("symptoms"):
+        focus = f"ask specifically how their {sym} have been — better, worse, or the same?"
+    elif last.get("pain") and last.get("pain_locations"):
+        focus = f"ask specifically about their {ploc} pain — is it still there, how severe?"
+    elif fl not in ("?", None) and str(fl).isdigit() and int(fl) <= 4:
+        focus = f"ask what was contributing to their low feeling score of {fl}/10 and whether it has changed"
+    else:
+        focus = f"ask how they have been feeling since then"
+
+    system = (
+        "You are a warm, empathetic virtual symptom-intake assistant for a cancer care clinic. "
+        "Write a short opening message (2–3 sentences max). "
+        "Sentence 1: greet the patient by name and briefly mention their SPECIFIC data from last time "
+        "(name the actual symptoms, pain locations, or feeling score — do NOT be generic). "
+        "Sentence 2-3: " + focus + ". "
+        "Do NOT say 'Thank you', 'Great', 'I see', or any filler. Be warm but direct.\n\n"
+        "RESPONSE FORMAT — you MUST reply with ONLY valid JSON, no markdown fences:\n"
+        '{"question": "Your full opening message here", '
+        '"suggested_answers": ["likely answer 1", "likely answer 2", "likely answer 3"]}\n'
+        "The suggested_answers should be 2-3 short, realistic patient responses (5-12 words each) "
+        "that range from positive to concerning. Output ONLY the JSON object."
+    )
+    try:
+        r = openai_client.chat.completions.create(
+            model=_secret("openai_model", default="gpt-4o-mini"),
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user",   "content": f"Patient name: {name}. Last visit: {ts}. "
+                                               f"Feeling: {fl}/10. Pain: {pn}. "
+                                               f"Locations: {ploc}. Symptoms: {sym}."}
+            ],
+            max_tokens=200, temperature=0.5,
+        )
+        raw = (r.choices[0].message.content or "").strip()
+        cleaned = raw
+        if cleaned.startswith("```"):
+            cleaned = cleaned.split("\n", 1)[-1] if "\n" in cleaned else cleaned[3:]
+        if cleaned.endswith("```"):
+            cleaned = cleaned[:-3].strip()
+        if cleaned.startswith("json"):
+            cleaned = cleaned[4:].strip()
+
+        parsed = json.loads(cleaned)
         question = parsed.get("question", "").strip()
         suggestions = parsed.get("suggested_answers", [])
         if not question:
             return raw, []
-        # Ensure suggestions are strings and reasonable length
+        if not isinstance(suggestions, list):
+            suggestions = []
         suggestions = [str(s).strip() for s in suggestions if str(s).strip()][:3]
         return question, suggestions
-    except (json.JSONDecodeError, KeyError):
-        # Fallback: GPT returned plain text, use it as-is with no suggestions
-        return raw, []
+    except (json.JSONDecodeError, KeyError, TypeError):
+        return (raw if raw else f"Hi {name}! How have you been since your last visit?",
+                ["Doing better", "About the same", "Not so good"])
     except Exception as e:
-        return f"(Error: {e})", []
-
+        return (f"Hi {name}! Last time you reported {sym if sym != 'none' else 'some symptoms'}. "
+                f"How have things been since then?",
+                ["Doing better", "About the same", "Not so good"])
 
 def transcribe_audio(audio_bytes: bytes) -> str:
     if not _openai_ready(): return "(Transcription unavailable.)"
@@ -501,40 +578,6 @@ html, body, [data-testid="stAppViewContainer"] {
     margin-bottom: 16px; letter-spacing: 0.02em;
 }
 
-/* ── Mode selection cards ── */
-.mode-card {
-    background: var(--surface);
-    border: 1.5px solid var(--border);
-    border-radius: var(--r-md);
-    padding: 20px 14px 16px;
-    text-align: center;
-    transition: all 0.18s ease;
-    min-height: 150px;
-    display: flex; flex-direction: column;
-    align-items: center; justify-content: center; gap: 6px;
-}
-.mode-card:hover {
-    border-color: var(--accent);
-    box-shadow: 0 4px 18px rgba(42,157,143,0.16);
-    transform: translateY(-2px);
-}
-.mode-icon { font-size: 32px; margin-bottom: 4px; }
-.mode-label {
-    font-family: 'Lora', serif; font-size: 15px;
-    font-weight: 600; color: var(--text); letter-spacing: -0.2px;
-}
-.mode-desc {
-    font-size: 12px; color: var(--muted); line-height: 1.5;
-    font-weight: 500;
-}
-.mode-badge {
-    display: inline-flex; align-items: center; gap: 6px;
-    background: var(--accent-lt); color: var(--accent);
-    border: 1.5px solid var(--accent-md); border-radius: 10px;
-    padding: 4px 12px; font-size: 12px; font-weight: 700;
-    margin-bottom: 10px; letter-spacing: 0.02em;
-}
-
 /* ── Animations ── */
 @keyframes fadeUp {
     from { opacity: 0; transform: translateY(8px); }
@@ -563,16 +606,17 @@ defaults = {
     "symptoms": [], "submitted": False, "past_checkins": [],
     "last_audio_hash": None, "mic_key_counter": 0,
     "followup_counts": {}, "stage_answered": {},
-    "interaction_mode": None,          # None | "simple" | "hybrid" | "conversational"
-    "pending_suggestions": {},         # stage_id -> list of suggested answer strings
 }
 for k, v in defaults.items():
     if k not in st.session_state: st.session_state[k] = v
 
 # ── Core helpers ────────────────────────────────────────────
-def add_doctor(text, stage=None):
+def add_doctor(text, stage=None, suggestions=None):
     s = stage if stage is not None else st.session_state.get("stage", -1)
-    st.session_state.messages.append({"role":"doctor","content":text,"stage":s})
+    msg = {"role":"doctor","content":text,"stage":s}
+    if suggestions:
+        msg["suggestions"] = suggestions
+    st.session_state.messages.append(msg)
 
 def add_patient(text, stage=None):
     s = stage if stage is not None else st.session_state.get("stage", -1)
@@ -582,18 +626,10 @@ def toggle_body_part(part):
     if part in st.session_state.selected_parts: st.session_state.selected_parts.remove(part)
     else: st.session_state.selected_parts.add(part)
 
-MAX_FOLLOWUPS_BY_MODE = {
-    "simple":         {0:1, 1:1, 2:1, 3:1, 4:1},
-    "hybrid":         {0:1, 1:3, 2:3, 3:3, 4:3},
-    "conversational": {0:2, 1:4, 2:4, 3:4, 4:4},
-}
-
-def _get_max_followups():
-    mode = st.session_state.get("interaction_mode", "hybrid")
-    return MAX_FOLLOWUPS_BY_MODE.get(mode, MAX_FOLLOWUPS_BY_MODE["hybrid"])
+MAX_FOLLOWUPS = {0:1, 1:3, 2:3, 3:3, 4:3}
 
 def followup_count(sid): return st.session_state.followup_counts.get(sid, 0)
-def can_followup(sid):   return followup_count(sid) < _get_max_followups().get(sid, 0)
+def can_followup(sid):   return followup_count(sid) < MAX_FOLLOWUPS.get(sid, 0)
 def record_followup(sid): st.session_state.followup_counts[sid] = followup_count(sid)+1
 def is_answered(sid):    return st.session_state.stage_answered.get(sid, False)
 def mark_answered(sid):  st.session_state.stage_answered[sid] = True
@@ -614,17 +650,11 @@ def on_patient_answer(text: str, stage_id: int, extra_context: str = ""):
     """
     add_patient(text, stage=stage_id)
     mark_answered(stage_id)
-    mode = st.session_state.get("interaction_mode", "hybrid")
     if can_followup(stage_id):
         record_followup(stage_id)
         with st.spinner("Assistant is thinking…"):
-            if mode in ("simple", "conversational"):
-                reply, suggestions = get_gpt_reply_with_suggestions(extra_context=extra_context)
-                if suggestions:
-                    st.session_state.pending_suggestions[stage_id] = suggestions
-            else:
-                reply = get_gpt_reply(extra_context=extra_context)
-        add_doctor(reply, stage=stage_id)
+            reply, suggestions = get_gpt_reply_with_suggestions(extra_context=extra_context)
+        add_doctor(reply, stage=stage_id, suggestions=suggestions)
     # NOTE: we do NOT auto-advance — patient clicks Next when ready
 
 def on_followup_reply(text: str, stage_id: int, extra_context: str = ""):
@@ -633,19 +663,11 @@ def on_followup_reply(text: str, stage_id: int, extra_context: str = ""):
     Same budget logic, but we distinguish from the initial answer.
     """
     add_patient(text, stage=stage_id)
-    # Clear any previous suggestions for this stage
-    st.session_state.pending_suggestions.pop(stage_id, None)
-    mode = st.session_state.get("interaction_mode", "hybrid")
     if can_followup(stage_id):
         record_followup(stage_id)
         with st.spinner("Assistant is thinking…"):
-            if mode in ("simple", "conversational"):
-                reply, suggestions = get_gpt_reply_with_suggestions(extra_context=extra_context)
-                if suggestions:
-                    st.session_state.pending_suggestions[stage_id] = suggestions
-            else:
-                reply = get_gpt_reply(extra_context=extra_context)
-        add_doctor(reply, stage=stage_id)
+            reply, suggestions = get_gpt_reply_with_suggestions(extra_context=extra_context)
+        add_doctor(reply, stage=stage_id, suggestions=suggestions)
 
 def handle_voice(audio_value, stage_id: int, extra_context: str = "",
                  is_followup: bool = False) -> bool:
@@ -686,41 +708,59 @@ def render_chat_window():
                         f'<div class="avatar">🙂</div></div>', unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
-def render_inline_stage_messages(stage_id: int):
+def render_inline_stage_messages(stage_id: int, extra_context: str = ""):
     """
     Render messages from the current stage inline inside the panel.
     Doctor messages = left-aligned card. Patient messages = right-aligned.
+    Suggestion buttons are shown ONLY on the very last doctor message if it has them
+    and the patient hasn't replied yet.
     """
     stage_msgs = [m for m in st.session_state.messages if m.get("stage") == stage_id]
-    for msg in stage_msgs:
+    for i, msg in enumerate(stage_msgs):
+        is_last = (i == len(stage_msgs) - 1)
         if msg.get("role") == "doctor":
             st.markdown(f'<div class="inline-followup">🩺 {msg.get("content","")}</div>',
                         unsafe_allow_html=True)
+            # Show suggestion buttons only on the last doctor message
+            # (i.e. the one awaiting a patient reply)
+            if is_last and msg.get("suggestions"):
+                render_suggestion_buttons(
+                    msg["suggestions"], stage_id,
+                    is_followup=is_answered(stage_id),
+                    extra_context=extra_context
+                )
         else:
             st.markdown(f'<div class="inline-patient">{msg.get("content","")} 🙂</div>',
                         unsafe_allow_html=True)
+
+def render_suggestion_buttons(suggestions: list, stage_id: int,
+                               is_followup: bool = False,
+                               extra_context: str = ""):
+    """
+    Render 2-3 GPT-suggested patient answers as clickable buttons.
+    """
+    if not suggestions:
+        return
+    st.markdown('<div class="small-note" style="margin-top:8px;">Quick replies:</div>',
+                unsafe_allow_html=True)
+    n = len(suggestions)
+    cols = st.columns(n, gap="small")
+    fu_count = followup_count(stage_id)
+    for idx, sug in enumerate(suggestions):
+        with cols[idx]:
+            if st.button(sug, key=f"sug_{stage_id}_{fu_count}_{idx}",
+                         use_container_width=True):
+                if is_followup:
+                    on_followup_reply(sug, stage_id, extra_context)
+                else:
+                    on_patient_answer(sug, stage_id, extra_context)
+                st.rerun()
 
 def render_followup_input(stage_id: int, extra_context: str = ""):
     """
     Compact text + mic row for answering follow-up questions inline in the panel.
     Only shown when the stage has been answered AND GPT still has follow-up budget.
-    Now also renders GPT-suggested answer buttons when available.
     """
-    # ── Render suggested-answer buttons if GPT provided them ──
-    suggestions = st.session_state.pending_suggestions.get(stage_id, [])
-    if suggestions:
-        st.markdown('<div class="small-note">Quick answers — or type your own below</div>',
-                    unsafe_allow_html=True)
-        sug_cols = st.columns(len(suggestions), gap="small")
-        for idx, sug_text in enumerate(suggestions):
-            with sug_cols[idx]:
-                if st.button(sug_text, key=f"sug_{stage_id}_{followup_count(stage_id)}_{idx}",
-                             use_container_width=True):
-                    st.session_state.pending_suggestions.pop(stage_id, None)
-                    on_followup_reply(sug_text, stage_id, extra_context)
-                    st.rerun()
-
-    # ── Text + mic row ──
     c_txt, c_send, c_mic = st.columns([6, 1, 1], gap="small")
     with c_txt:
         typed = st.text_input("", placeholder="Reply…",
@@ -735,11 +775,9 @@ def render_followup_input(stage_id: int, extra_context: str = ""):
             audio_val = st.audio_input("", label_visibility="collapsed",
                                        key=f"fu_mic_{stage_id}_{st.session_state.mic_key_counter}")
     if send_clicked and typed and typed.strip():
-        st.session_state.pending_suggestions.pop(stage_id, None)
         on_followup_reply(typed.strip(), stage_id, extra_context)
         st.rerun()
     if handle_voice(audio_val, stage_id, extra_context, is_followup=True):
-        st.session_state.pending_suggestions.pop(stage_id, None)
         st.rerun()
 
 def render_next_button(label="Next →"):
@@ -748,17 +786,12 @@ def render_next_button(label="Next →"):
                  key=f"next_{st.session_state.stage}", type="primary"):
         advance_stage(); st.rerun()
 
-def _mode(): return st.session_state.get("interaction_mode", "hybrid")
-
 def render_text_mic_row(stage_id: int, extra_context: str = "",
                         placeholder: str = "Or type your answer…"):
     """
     Primary answer row: [text input ────] [↑ Send] [🎤]
     Used as the free-text alternative alongside widget buttons.
-    Hidden in Simple Click mode.
     """
-    if _mode() == "simple":
-        return  # No free-text in simple mode
     c_txt, c_send, c_mic = st.columns([6, 1, 1], gap="small")
     with c_txt:
         typed = st.text_input("", placeholder=placeholder,
@@ -819,8 +852,8 @@ if st.session_state.stage == -1:
             if past:
                 last = past[-1]
                 with st.spinner("Getting your assistant ready…"):
-                    opening = get_opening_message(last, name_input.strip())
-                add_doctor(opening, stage=0)
+                    opening, opening_suggestions = get_opening_message_with_suggestions(last, name_input.strip())
+                add_doctor(opening, stage=0, suggestions=opening_suggestions)
                 st.session_state.stage = 0
             else:
                 context = (
@@ -841,54 +874,7 @@ if st.session_state.stage == -1:
 
 stage = st.session_state.stage
 
-# ════════════════════════════════════════════════════════════
-# MODE SELECTION — shown once, right after name entry
-# ════════════════════════════════════════════════════════════
-if st.session_state.interaction_mode is None and stage >= 0:
-    st.markdown('<div class="panel">', unsafe_allow_html=True)
-    st.markdown('<div class="panel-title">Choose your check-in style</div>', unsafe_allow_html=True)
-    st.markdown('<div class="small-note">Pick the interaction mode that suits you best today</div>',
-                unsafe_allow_html=True)
-
-    mc1, mc2, mc3 = st.columns(3, gap="small")
-    with mc1:
-        st.markdown("""<div class="mode-card">
-            <div class="mode-icon">🖱️</div>
-            <div class="mode-label">Simple Click</div>
-            <div class="mode-desc">Big buttons only.<br>Quick &amp; minimal typing.</div>
-        </div>""", unsafe_allow_html=True)
-        if st.button("Select Simple", key="mode_simple", use_container_width=True):
-            st.session_state.interaction_mode = "simple"
-            st.rerun()
-    with mc2:
-        st.markdown("""<div class="mode-card">
-            <div class="mode-icon">🔀</div>
-            <div class="mode-label">Guided Hybrid</div>
-            <div class="mode-desc">Buttons + typing + voice.<br>Follow-up questions included.</div>
-        </div>""", unsafe_allow_html=True)
-        if st.button("Select Hybrid", key="mode_hybrid", use_container_width=True):
-            st.session_state.interaction_mode = "hybrid"
-            st.rerun()
-    with mc3:
-        st.markdown("""<div class="mode-card">
-            <div class="mode-icon">💬</div>
-            <div class="mode-label">Conversational</div>
-            <div class="mode-desc">Chat-driven check-in.<br>Guided but flexible.</div>
-        </div>""", unsafe_allow_html=True)
-        if st.button("Select Conversational", key="mode_convo", use_container_width=True):
-            st.session_state.interaction_mode = "conversational"
-            st.rerun()
-
-    st.markdown("</div>", unsafe_allow_html=True)
-    st.stop()
-
 # ── Chat window: only past-stage messages ───────────────────
-# Show mode badge
-_mode_labels = {"simple": "🖱️ Simple Click", "hybrid": "🔀 Guided Hybrid", "conversational": "💬 Conversational"}
-_cur_mode_label = _mode_labels.get(st.session_state.interaction_mode, "")
-if _cur_mode_label:
-    st.markdown(f'<div class="mode-badge">{_cur_mode_label} mode</div>', unsafe_allow_html=True)
-
 render_chat_window()
 
 # ════════════════════════════════════════════════════════════
@@ -904,80 +890,23 @@ if stage == 0:
     st.markdown('<div class="panel-title">💬 Catching up from your last visit</div>', unsafe_allow_html=True)
 
     # Always render inline messages (GPT question + any patient replies so far)
-    render_inline_stage_messages(stage_id=0)
+    render_inline_stage_messages(stage_id=0, extra_context=history_ctx)
 
-    if _mode() == "simple":
-        # Simple mode: show GPT-suggested answer buttons for the recap question
-        stage0_msgs = [m for m in st.session_state.messages if m.get("stage") == 0]
-        last_is_doctor = stage0_msgs and stage0_msgs[-1].get("role") == "doctor"
+    # Determine if the last message in this stage is from the doctor (needs a reply)
+    stage0_msgs = [m for m in st.session_state.messages if m.get("stage") == 0]
+    last_is_doctor = stage0_msgs and stage0_msgs[-1].get("role") == "doctor"
 
-        if last_is_doctor and not is_answered(0):
-            # Generate suggestions if we don't have any yet
-            if 0 not in st.session_state.pending_suggestions:
-                with st.spinner("Preparing quick answers…"):
-                    _, suggestions = get_gpt_reply_with_suggestions(extra_context=history_ctx)
-                    if suggestions:
-                        st.session_state.pending_suggestions[0] = suggestions
-                    else:
-                        st.session_state.pending_suggestions[0] = [
-                            "Doing better", "About the same", "Feeling worse"
-                        ]
-                st.rerun()
-
-            suggestions = st.session_state.pending_suggestions.get(0, [])
-            if suggestions:
-                st.markdown('<div class="small-note">Quick answers — or type your own below</div>',
-                            unsafe_allow_html=True)
-                sug_cols = st.columns(len(suggestions), gap="small")
-                for idx, sug_text in enumerate(suggestions):
-                    with sug_cols[idx]:
-                        if st.button(sug_text, key=f"sug_s0_{idx}", use_container_width=True):
-                            st.session_state.pending_suggestions.pop(0, None)
-                            on_patient_answer(sug_text, 0, history_ctx)
-                            st.rerun()
-
-            # Fallback text + voice
-            c_txt, c_send, c_mic = st.columns([6, 1, 1], gap="small")
-            with c_txt:
-                typed_s0 = st.text_input("", placeholder="Or type your reply…",
-                                         key="txt_0_simple", label_visibility="collapsed")
-            with c_send:
-                send_s0 = st.button("↑", key="txtsend_0_simple", use_container_width=True)
-            with c_mic:
-                audio_s0 = None
-                if hasattr(st, "audio_input"):
-                    audio_s0 = st.audio_input("", key=f"mic_0_{st.session_state.mic_key_counter}",
-                                              label_visibility="collapsed")
-            if send_s0 and typed_s0 and typed_s0.strip():
-                st.session_state.pending_suggestions.pop(0, None)
-                on_patient_answer(typed_s0.strip(), 0, history_ctx); st.rerun()
-            if handle_voice(audio_s0, 0, history_ctx):
-                st.session_state.pending_suggestions.pop(0, None)
-                st.rerun()
-
-        if last_is_doctor and is_answered(0):
-            # Show follow-up with suggestions if GPT asked one
+    if last_is_doctor:
+        # Always show input when doctor just asked something
+        if not is_answered(0):
+            render_text_mic_row(stage_id=0, extra_context=history_ctx,
+                                placeholder="Type your reply…")
+        else:
             render_followup_input(stage_id=0, extra_context=history_ctx)
 
-        if is_answered(0):
-            st.markdown("<hr class='divider'>", unsafe_allow_html=True)
-            render_next_button("Start today's check-in →")
-    else:
-        # Determine if the last message in this stage is from the doctor (needs a reply)
-        stage0_msgs = [m for m in st.session_state.messages if m.get("stage") == 0]
-        last_is_doctor = stage0_msgs and stage0_msgs[-1].get("role") == "doctor"
-
-        if last_is_doctor:
-            # Always show input when doctor just asked something
-            if not is_answered(0):
-                render_text_mic_row(stage_id=0, extra_context=history_ctx,
-                                    placeholder="Type your reply…")
-            else:
-                render_followup_input(stage_id=0, extra_context=history_ctx)
-
-        if is_answered(0):
-            st.markdown("<hr class='divider'>", unsafe_allow_html=True)
-            render_next_button("Start today's check-in →")
+    if is_answered(0):
+        st.markdown("<hr class='divider'>", unsafe_allow_html=True)
+        render_next_button("Start today's check-in →")
 
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -1003,7 +932,7 @@ elif stage == 1:
 
     if not is_answered(1):
         # Show opening GPT message (tagged stage=1) inline
-        render_inline_stage_messages(stage_id=1)
+        render_inline_stage_messages(stage_id=1, extra_context=feeling_ctx)
         st.markdown('<div class="small-note">Choose how you feel, or describe in your own words below</div>',
                     unsafe_allow_html=True)
 
@@ -1036,7 +965,7 @@ elif stage == 1:
                             placeholder="Or describe how you feel in your own words…")
 
     else:
-        render_inline_stage_messages(stage_id=1)
+        render_inline_stage_messages(stage_id=1, extra_context=feeling_ctx)
         stage1_msgs = [m for m in st.session_state.messages if m.get("stage") == 1]
         if stage1_msgs and stage1_msgs[-1].get("role") == "doctor":
             render_followup_input(stage_id=1, extra_context=feeling_ctx)
@@ -1060,48 +989,36 @@ elif stage == 2:
     st.markdown('<div class="panel-title">Do you have any pain today?</div>', unsafe_allow_html=True)
 
     if not is_answered(2):
-        render_inline_stage_messages(stage_id=2)
+        render_inline_stage_messages(stage_id=2, extra_context=pain_ctx)
         st.markdown('<div class="small-note">Choose an option or describe in your own words</div>',
                     unsafe_allow_html=True)
 
-        if _mode() == "simple":
-            # Simple mode: big buttons only, no text/voice
-            c1, c2 = st.columns(2, gap="small")
-            with c1:
-                if st.button("✅ Yes, pain", use_container_width=True, key="pain_yes"):
-                    st.session_state.pain_yesno = True
-                    on_patient_answer("Yes, I have pain today.", 2, pain_ctx); st.rerun()
-            with c2:
-                if st.button("🙂 No pain", use_container_width=True, key="pain_no"):
-                    st.session_state.pain_yesno = False
-                    on_patient_answer("No, I don't have any pain today.", 2, pain_ctx); st.rerun()
-        else:
-            # Hybrid / Conversational: [Yes] [No] [text ────] [↑] [🎤] all on one row
-            c1, c2, c_txt, c_send, c_mic = st.columns([1.7, 1.7, 4, 1, 1], gap="small")
-            with c1:
-                if st.button("✅ Yes, pain", use_container_width=True, key="pain_yes"):
-                    st.session_state.pain_yesno = True
-                    on_patient_answer("Yes, I have pain today.", 2, pain_ctx); st.rerun()
-            with c2:
-                if st.button("🙂 No pain", use_container_width=True, key="pain_no"):
-                    st.session_state.pain_yesno = False
-                    on_patient_answer("No, I don't have any pain today.", 2, pain_ctx); st.rerun()
-            with c_txt:
-                typed_pain = st.text_input("", placeholder="Or describe…",
-                                           key="txt_2", label_visibility="collapsed")
-            with c_send:
-                send_pain = st.button("↑", key="txtsend_2", use_container_width=True)
-            with c_mic:
-                audio_pain = None
-                if hasattr(st, "audio_input"):
-                    audio_pain = st.audio_input("", key=f"mic_2_{st.session_state.mic_key_counter}",
-                                                label_visibility="collapsed")
-            if send_pain and typed_pain and typed_pain.strip():
-                on_patient_answer(typed_pain.strip(), 2, pain_ctx); st.rerun()
-            if handle_voice(audio_pain, 2, pain_ctx): st.rerun()
+        # [Yes] [No] [text ────] [↑] [🎤] all on one row
+        c1, c2, c_txt, c_send, c_mic = st.columns([1.7, 1.7, 4, 1, 1], gap="small")
+        with c1:
+            if st.button("✅ Yes, pain", use_container_width=True, key="pain_yes"):
+                st.session_state.pain_yesno = True
+                on_patient_answer("Yes, I have pain today.", 2, pain_ctx); st.rerun()
+        with c2:
+            if st.button("🙂 No pain", use_container_width=True, key="pain_no"):
+                st.session_state.pain_yesno = False
+                on_patient_answer("No, I don't have any pain today.", 2, pain_ctx); st.rerun()
+        with c_txt:
+            typed_pain = st.text_input("", placeholder="Or describe…",
+                                       key="txt_2", label_visibility="collapsed")
+        with c_send:
+            send_pain = st.button("↑", key="txtsend_2", use_container_width=True)
+        with c_mic:
+            audio_pain = None
+            if hasattr(st, "audio_input"):
+                audio_pain = st.audio_input("", key=f"mic_2_{st.session_state.mic_key_counter}",
+                                            label_visibility="collapsed")
+        if send_pain and typed_pain and typed_pain.strip():
+            on_patient_answer(typed_pain.strip(), 2, pain_ctx); st.rerun()
+        if handle_voice(audio_pain, 2, pain_ctx): st.rerun()
 
     else:
-        render_inline_stage_messages(stage_id=2)
+        render_inline_stage_messages(stage_id=2, extra_context=pain_ctx)
         stage2_msgs = [m for m in st.session_state.messages if m.get("stage") == 2]
         if stage2_msgs and stage2_msgs[-1].get("role") == "doctor":
             render_followup_input(stage_id=2, extra_context=pain_ctx)
@@ -1122,7 +1039,7 @@ elif stage == 3:
     st.markdown('<div class="panel-title">Where do you feel pain?</div>', unsafe_allow_html=True)
 
     if not is_answered(3):
-        render_inline_stage_messages(stage_id=3)
+        render_inline_stage_messages(stage_id=3, extra_context=location_ctx)
         st.markdown('<div class="small-note">Select areas on the map, or describe below</div>',
                     unsafe_allow_html=True)
 
@@ -1141,31 +1058,28 @@ elif stage == 3:
                 unsafe_allow_html=True)
 
         c_txt3, c_send3a, c_mic3, c_send3b = st.columns([4, 1, 1, 2], gap="small")
-        if _mode() != "simple":
-            with c_txt3:
-                typed_loc = st.text_input("", placeholder="Or describe where you feel pain…",
-                                          key="txt_3", label_visibility="collapsed")
-            with c_send3a:
-                send_txt3 = st.button("↑", key="txtsend_3", use_container_width=True)
-            with c_mic3:
-                audio_loc = None
-                if hasattr(st, "audio_input"):
-                    audio_loc = st.audio_input("", key=f"mic_3_{st.session_state.mic_key_counter}",
-                                               label_visibility="collapsed")
-        else:
-            typed_loc = None; send_txt3 = False; audio_loc = None
+        with c_txt3:
+            typed_loc = st.text_input("", placeholder="Or describe where you feel pain…",
+                                      key="txt_3", label_visibility="collapsed")
+        with c_send3a:
+            send_txt3 = st.button("↑", key="txtsend_3", use_container_width=True)
+        with c_mic3:
+            audio_loc = None
+            if hasattr(st, "audio_input"):
+                audio_loc = st.audio_input("", key=f"mic_3_{st.session_state.mic_key_counter}",
+                                           label_visibility="collapsed")
         with c_send3b:
             send_locs = st.button("Send locations ➜", key="send_locs", use_container_width=True)
 
         if send_txt3 and typed_loc and typed_loc.strip():
             on_patient_answer(typed_loc.strip(), 3, location_ctx); st.rerun()
-        if _mode() != "simple" and handle_voice(audio_loc, 3, location_ctx): st.rerun()
+        if handle_voice(audio_loc, 3, location_ctx): st.rerun()
         if send_locs:
             loc_txt = ", ".join(sorted(st.session_state.selected_parts)) if st.session_state.selected_parts else "not sure of location"
             on_patient_answer(f"Pain locations: {loc_txt}.", 3, location_ctx); st.rerun()
 
     else:
-        render_inline_stage_messages(stage_id=3)
+        render_inline_stage_messages(stage_id=3, extra_context=location_ctx)
         stage3_msgs = [m for m in st.session_state.messages if m.get("stage") == 3]
         if stage3_msgs and stage3_msgs[-1].get("role") == "doctor":
             render_followup_input(stage_id=3, extra_context=location_ctx)
@@ -1191,7 +1105,7 @@ elif stage == 4:
     st.markdown('<div class="panel-title">Any of these symptoms today?</div>', unsafe_allow_html=True)
 
     if not is_answered(4):
-        render_inline_stage_messages(stage_id=4)
+        render_inline_stage_messages(stage_id=4, extra_context=symptom_ctx)
         st.markdown('<div class="small-note">Tap to select all that apply, then click Send — or describe below</div>',
                     unsafe_allow_html=True)
 
@@ -1205,31 +1119,28 @@ elif stage == 4:
                     st.rerun()
 
         c_txt4, c_send4a, c_mic4, c_send4b = st.columns([4, 1, 1, 2], gap="small")
-        if _mode() != "simple":
-            with c_txt4:
-                typed_sym = st.text_input("", placeholder="Or describe your symptoms…",
-                                          key="txt_4", label_visibility="collapsed")
-            with c_send4a:
-                send_txt4 = st.button("↑", key="txtsend_4", use_container_width=True)
-            with c_mic4:
-                audio_sym = None
-                if hasattr(st, "audio_input"):
-                    audio_sym = st.audio_input("", key=f"mic_4_{st.session_state.mic_key_counter}",
-                                               label_visibility="collapsed")
-        else:
-            typed_sym = None; send_txt4 = False; audio_sym = None
+        with c_txt4:
+            typed_sym = st.text_input("", placeholder="Or describe your symptoms…",
+                                      key="txt_4", label_visibility="collapsed")
+        with c_send4a:
+            send_txt4 = st.button("↑", key="txtsend_4", use_container_width=True)
+        with c_mic4:
+            audio_sym = None
+            if hasattr(st, "audio_input"):
+                audio_sym = st.audio_input("", key=f"mic_4_{st.session_state.mic_key_counter}",
+                                           label_visibility="collapsed")
         with c_send4b:
             send_syms = st.button("Send symptoms ➜", key="send_syms", use_container_width=True)
 
         if send_txt4 and typed_sym and typed_sym.strip():
             on_patient_answer(typed_sym.strip(), 4, symptom_ctx); st.rerun()
-        if _mode() != "simple" and handle_voice(audio_sym, 4, symptom_ctx): st.rerun()
+        if handle_voice(audio_sym, 4, symptom_ctx): st.rerun()
         if send_syms:
             sym_txt = "; ".join(st.session_state.symptoms) if st.session_state.symptoms else "no symptoms from checklist"
             on_patient_answer(f"Symptoms today: {sym_txt}.", 4, symptom_ctx); st.rerun()
 
     else:
-        render_inline_stage_messages(stage_id=4)
+        render_inline_stage_messages(stage_id=4, extra_context=symptom_ctx)
         stage4_msgs = [m for m in st.session_state.messages if m.get("stage") == 4]
         if stage4_msgs and stage4_msgs[-1].get("role") == "doctor":
             render_followup_input(stage_id=4, extra_context=symptom_ctx)
@@ -1307,55 +1218,79 @@ elif stage == 5:
 </div>""", unsafe_allow_html=True)
 
     else:
-        if _mode() == "simple":
-            # Simple mode: no free chat, just show summary of what was collected and Submit
-            st.markdown('<div class="panel"><div class="panel-title">✅ Ready to submit</div>'
-                        '<div class="small-note">Your responses have been recorded. Click below to submit.</div></div>',
-                        unsafe_allow_html=True)
-            if st.button("✅ Submit Check-In", use_container_width=True, type="primary"):
-                try: save_to_sheet(); st.session_state.submitted=True; st.rerun()
-                except Exception as e: st.error(f"Failed to save: {e}")
-        else:
-            # Show all conversation history in the chat window for stage 5
-            st.markdown('<div class="chat-window">', unsafe_allow_html=True)
-            for msg in st.session_state.messages:
-                if msg.get("role") == "doctor":
-                    st.markdown(f'<div class="row-left"><div class="avatar">🩺</div>'
-                                f'<div class="bubble-doc">{msg.get("content","")}</div></div>',
-                                unsafe_allow_html=True)
-                else:
-                    st.markdown(f'<div class="row-right"><div class="bubble-pat">{msg.get("content","")}</div>'
-                                f'<div class="avatar">🙂</div></div>', unsafe_allow_html=True)
-            st.markdown("</div>", unsafe_allow_html=True)
+        # Show all conversation history in the chat window for stage 5
+        st.markdown('<div class="chat-window">', unsafe_allow_html=True)
+        for msg in st.session_state.messages:
+            if msg.get("role") == "doctor":
+                st.markdown(f'<div class="row-left"><div class="avatar">🩺</div>'
+                            f'<div class="bubble-doc">{msg.get("content","")}</div></div>',
+                            unsafe_allow_html=True)
+            else:
+                st.markdown(f'<div class="row-right"><div class="bubble-pat">{msg.get("content","")}</div>'
+                            f'<div class="avatar">🙂</div></div>', unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)
 
-            st.markdown('<div class="panel"><div class="panel-title">💬 Anything else to share?</div>'
-                        '<div class="small-note">Chat with the assistant, or submit when ready.</div></div>',
-                        unsafe_allow_html=True)
+        st.markdown('<div class="panel"><div class="panel-title">💬 Anything else to share?</div>'
+                    '<div class="small-note">Chat with the assistant, or submit when ready.</div>',
+                    unsafe_allow_html=True)
 
-            cols = st.columns([5,1], vertical_alignment="bottom")
-            with cols[0]:
-                user_text_5 = st.chat_input("Anything else to mention…", key="chat_input_5")
-            with cols[1]:
-                audio_5 = None
-                if hasattr(st,"audio_input"):
-                    audio_5 = st.audio_input("", key=f"mic_5_{st.session_state.mic_key_counter}",
-                                             label_visibility="collapsed")
-            if user_text_5:
-                add_patient(user_text_5, stage=5)
-                with st.spinner("Assistant is thinking…"):
-                    reply = get_gpt_reply()
-                add_doctor(reply, stage=5); st.rerun()
-            if audio_5 is not None:
-                try: ab=audio_5.getvalue(); ah=hashlib.sha1(ab).hexdigest()
-                except: ab=ah=None
-                if ab and ah and ah != st.session_state.last_audio_hash:
-                    st.session_state.last_audio_hash=ah; st.session_state.mic_key_counter+=1
-                    with st.spinner("Transcribing…"): t=transcribe_audio(ab)
-                    if t and not t.startswith("(Transcription failed"):
-                        st.info(f'Heard: "{t}"')
-                        add_patient(t, stage=5)
-                        with st.spinner("Assistant is thinking…"): reply=get_gpt_reply()
-                        add_doctor(reply, stage=5); st.rerun()
-            if st.button("✅ Submit Check-In", use_container_width=True):
-                try: save_to_sheet(); st.session_state.submitted=True; st.rerun()
-                except Exception as e: st.error(f"Failed to save: {e}")
+        # Show suggestion buttons from the last doctor message in stage 5
+        stage5_msgs = [m for m in st.session_state.messages if m.get("stage") == 5]
+        last_doc_msg = None
+        for m in reversed(stage5_msgs):
+            if m.get("role") == "doctor":
+                last_doc_msg = m
+                break
+        if last_doc_msg and last_doc_msg.get("suggestions"):
+            sugs = last_doc_msg["suggestions"]
+            n = len(sugs)
+            sug_cols = st.columns(n, gap="small")
+            msg_count = len(stage5_msgs)
+            for idx, sug in enumerate(sugs):
+                with sug_cols[idx]:
+                    if st.button(sug, key=f"sug5_{msg_count}_{idx}", use_container_width=True):
+                        add_patient(sug, stage=5)
+                        with st.spinner("Assistant is thinking…"):
+                            reply, new_sugs = get_gpt_reply_with_suggestions()
+                        add_doctor(reply, stage=5, suggestions=new_sugs)
+                        st.rerun()
+
+        # Text input + mic + submit row
+        c_txt5, c_send5, c_mic5 = st.columns([6, 1, 1], gap="small")
+        with c_txt5:
+            typed_5 = st.text_input("", placeholder="Type anything else to share…",
+                                    key="txt_stage5", label_visibility="collapsed")
+        with c_send5:
+            send_5 = st.button("↑", key="txtsend_5", use_container_width=True)
+        with c_mic5:
+            audio_5 = None
+            if hasattr(st, "audio_input"):
+                audio_5 = st.audio_input("", key=f"mic_5_{st.session_state.mic_key_counter}",
+                                         label_visibility="collapsed")
+
+        if send_5 and typed_5 and typed_5.strip():
+            add_patient(typed_5.strip(), stage=5)
+            with st.spinner("Assistant is thinking…"):
+                reply, new_sugs = get_gpt_reply_with_suggestions()
+            add_doctor(reply, stage=5, suggestions=new_sugs)
+            st.rerun()
+
+        if audio_5 is not None:
+            try: ab=audio_5.getvalue(); ah=hashlib.sha1(ab).hexdigest()
+            except: ab=ah=None
+            if ab and ah and ah != st.session_state.last_audio_hash:
+                st.session_state.last_audio_hash=ah; st.session_state.mic_key_counter+=1
+                with st.spinner("Transcribing…"): t=transcribe_audio(ab)
+                if t and not t.startswith("(Transcription failed"):
+                    st.info(f'Heard: "{t}"')
+                    add_patient(t, stage=5)
+                    with st.spinner("Assistant is thinking…"):
+                        reply, new_sugs = get_gpt_reply_with_suggestions()
+                    add_doctor(reply, stage=5, suggestions=new_sugs)
+                    st.rerun()
+
+        st.markdown("</div>", unsafe_allow_html=True)
+
+        if st.button("✅ Submit Check-In", use_container_width=True, type="primary"):
+            try: save_to_sheet(); st.session_state.submitted=True; st.rerun()
+            except Exception as e: st.error(f"Failed to save: {e}")
