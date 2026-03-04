@@ -400,23 +400,34 @@ html, body, [data-testid="stAppViewContainer"] {
 [data-testid="stAudioInput"] { margin: 0 !important; padding: 0 !important; }
 [data-testid="stAudioInput"] > label { display: none !important; }
 [data-testid="stAudioInput"] > div {
-    height: 38px !important; min-height: 38px !important;
+    height: 38px !important; min-height: 38px !important; max-height: 38px !important;
     border-radius: 12px !important;
     border: 1.5px solid var(--border) !important;
     display: flex !important; align-items: center !important; justify-content: center !important;
     background: var(--surface) !important;
     box-shadow: var(--shadow-sm) !important;
     transition: border-color 0.15s !important;
+    overflow: hidden !important;
 }
 [data-testid="stAudioInput"] > div:hover {
     border-color: var(--accent) !important;
+}
+/* Hide the timer text, keep only the mic icon */
+[data-testid="stAudioInput"] > div > div > span,
+[data-testid="stAudioInput"] > div > div > p,
+[data-testid="stAudioInput"] span { display: none !important; }
+[data-testid="stAudioInput"] > div > div {
+    display: flex !important; align-items: center !important;
+    justify-content: center !important; width: 100% !important;
+    overflow: hidden !important;
 }
 
 /* ── Text inputs ── */
 [data-testid="stTextInput"] > div > div > input {
     font-family: 'Nunito', sans-serif !important;
-    border-radius: 12px !important;
+    border-radius: 12px 0 0 12px !important;
     border: 1.5px solid var(--border) !important;
+    border-right: none !important;
     padding: 8px 16px !important;
     font-size: 14px !important;
     background: var(--surface) !important;
@@ -428,10 +439,34 @@ html, body, [data-testid="stAppViewContainer"] {
 [data-testid="stTextInput"] > div > div > input:focus {
     border-color: var(--accent) !important;
     box-shadow: 0 0 0 3px var(--accent-lt) !important;
+    outline: none !important;
 }
 [data-testid="stTextInput"] > label { display: none !important; }
+/* Send button fused to the right of text input */
+[data-testid="stTextInput"] + div [data-testid="stBaseButton-secondary"] > button,
+div:has(+ div [data-testid="stTextInput"]) { gap: 0 !important; }
+/* Target the ↑ send buttons specifically — flat left edge, rounded right */
+[data-testid="column"]:has([data-testid="stTextInput"]) + [data-testid="column"] > div > [data-testid="stBaseButton-secondary"] button {
+    border-radius: 0 12px 12px 0 !important;
+    border-left: none !important;
+    border-color: var(--border) !important;
+    height: 38px !important;
+    box-shadow: var(--shadow-sm) !important;
+    margin-left: -1px !important;
+}
 
-/* ── Chat input (stage 5) ── */
+/* Flush the text+send column pair — no gap between them */
+[data-testid="stHorizontalBlock"]:has([data-testid="stTextInput"]) {
+    gap: 0 !important;
+    align-items: center !important;
+}
+/* Restore gap AFTER the send column (before mic) */
+[data-testid="stHorizontalBlock"]:has([data-testid="stTextInput"]) > [data-testid="column"]:nth-child(3) {
+    margin-left: 6px !important;
+}
+[data-testid="stHorizontalBlock"]:has([data-testid="stTextInput"]) > [data-testid="column"]:nth-child(4) {
+    margin-left: 6px !important;
+}
 [data-testid="stChatInput"] textarea {
     font-family: 'Nunito', sans-serif !important;
     border-radius: 12px !important;
