@@ -208,330 +208,111 @@ def transcribe_audio(audio_bytes: bytes) -> str:
     except Exception as e: return f"(Transcription failed: {e})"
 
 # ── CSS ─────────────────────────────────────────────────────
-st.html("""
-<link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700;800&family=Lora:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
+st.markdown("""
 <style>
-:root {
-    --bg:        #f5f3ef;
-    --surface:   #ffffff;
-    --border:    rgba(180,170,155,0.35);
-    --accent:    #2a9d8f;
-    --accent-lt: rgba(42,157,143,0.10);
-    --accent-md: rgba(42,157,143,0.22);
-    --patient:   #264653;
-    --text:      #2c2c2c;
-    --text-muted:#888079;
-    --shadow-sm: 0 2px 10px rgba(0,0,0,0.06);
-    --shadow-md: 0 4px 24px rgba(0,0,0,0.09);
-    --r-sm: 14px;
-    --r-md: 20px;
-    --r-lg: 26px;
+[data-testid="stAppViewContainer"]{ background:linear-gradient(135deg,#eef4ff,#f6fbff); }
+.header{ font-size:24px; font-weight:700; margin:8px 0 14px 0; }
+.chat-window{
+    max-height:40vh; overflow-y:auto; padding:14px; border-radius:18px;
+    background:rgba(255,255,255,0.55); border:1px solid rgba(200,210,230,0.55);
+    backdrop-filter:blur(10px); margin-bottom:12px;
 }
-
-/* ── Base ── */
-html, body, [data-testid="stAppViewContainer"] {
-    font-family: 'Nunito', sans-serif !important;
-    background: var(--bg) !important;
+.row-left{ display:flex; justify-content:flex-start; align-items:flex-end; margin:6px 0; gap:8px; }
+.row-right{ display:flex; justify-content:flex-end; align-items:flex-end; margin:6px 0; gap:8px; }
+.avatar{
+    width:30px; height:30px; border-radius:50%; display:flex; justify-content:center;
+    align-items:center; background:rgba(255,255,255,0.9); border:1px solid rgba(210,220,240,0.9);
+    box-shadow:0 1px 6px rgba(0,0,0,0.07); font-size:14px; flex:0 0 auto;
 }
-[data-testid="stAppViewContainer"]::before {
-    content: '';
-    position: fixed; inset: 0; z-index: -1;
-    background:
-        radial-gradient(ellipse 70% 50% at 90% 10%, rgba(42,157,143,0.10) 0%, transparent 70%),
-        radial-gradient(ellipse 60% 40% at 10% 90%, rgba(38,70,83,0.07) 0%, transparent 70%),
-        #f5f3ef;
+.bubble-doc{
+    background:#fff; border:1px solid rgba(220,225,235,0.95); border-radius:14px;
+    padding:9px 12px; max-width:80%; box-shadow:0 1px 6px rgba(0,0,0,0.05); white-space:pre-wrap;
+    font-size:14px; line-height:1.5;
 }
-[data-testid="stHeader"]{ background:transparent !important; }
-[data-testid="stDecoration"]{ display:none !important; }
-[data-testid="stMainBlockContainer"]{ padding-top: 2rem !important; }
-.block-container{ max-width: 680px !important; padding: 0 1.2rem 3rem !important; }
-
-/* ── Page header ── */
-.app-header {
-    display: flex; align-items: center; gap: 14px;
-    margin-bottom: 28px; padding-bottom: 20px;
-    border-bottom: 1.5px solid var(--border);
+.bubble-pat{
+    background:#1f7aff; color:white; border-radius:14px; padding:9px 12px;
+    max-width:80%; box-shadow:0 1px 6px rgba(0,0,0,0.08); white-space:pre-wrap;
+    font-size:14px; line-height:1.5;
 }
-.app-header-icon {
-    width: 48px; height: 48px; border-radius: 14px;
-    background: linear-gradient(135deg, var(--accent), #21867a);
-    display: flex; align-items: center; justify-content: center;
-    font-size: 22px; box-shadow: var(--shadow-sm);
-    flex-shrink: 0;
+/* Inline follow-up chat inside a panel */
+.inline-followup{
+    background:rgba(240,247,255,0.7); border-radius:14px; padding:10px 14px;
+    margin:10px 0 6px 0; border-left:3px solid #1f7aff;
+    font-size:14px; line-height:1.5; color:#1a2540;
 }
-.app-header-title {
-    font-family: 'Lora', serif; font-size: 22px; font-weight: 600;
-    color: var(--text); line-height: 1.2; letter-spacing: -0.3px;
+.inline-patient{
+    background:rgba(31,122,255,0.08); border-radius:14px; padding:8px 12px;
+    margin:6px 0; font-size:14px; line-height:1.5; color:#1a2540;
+    text-align:right;
 }
-.app-header-sub {
-    font-size: 12px; color: var(--text-muted); font-weight: 500;
-    letter-spacing: 0.04em; text-transform: uppercase; margin-top: 2px;
+.panel{
+    margin-top:10px; padding:14px 16px 14px; border-radius:16px;
+    background:rgba(255,255,255,0.72); border:1px solid rgba(200,210,230,0.6);
+    backdrop-filter:blur(10px);
 }
-
-/* ── Chat history window ── */
-.chat-window {
-    max-height: 38vh; overflow-y: auto;
-    padding: 16px 14px; border-radius: var(--r-lg);
-    background: var(--surface);
-    border: 1.5px solid var(--border);
-    box-shadow: var(--shadow-sm);
-    margin-bottom: 16px;
-    scrollbar-width: thin;
-    scrollbar-color: rgba(0,0,0,0.12) transparent;
+.panel-title{ font-weight:700; font-size:15px; margin-bottom:10px; color:#1a2540; }
+.small-note{ color:rgba(0,0,0,0.4); font-size:12px; margin:4px 0; }
+.divider{ border:none; border-top:1px solid rgba(200,215,235,0.7); margin:10px 0; }
+/* Uniform pill buttons */
+.stButton>button{
+    border-radius:20px !important; padding:0.4rem 0.85rem !important;
+    font-size:14px !important; border:1px solid rgba(180,195,220,0.8) !important;
+    background:white !important; color:#1a2540 !important;
+    box-shadow:0 1px 3px rgba(0,0,0,0.06) !important;
+    transition: all 0.12s ease !important; white-space:nowrap !important;
 }
-.chat-window::-webkit-scrollbar { width: 4px; }
-.chat-window::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.12); border-radius: 4px; }
-
-.row-left  { display:flex; justify-content:flex-start; align-items:flex-end; margin:8px 0; gap:10px; }
-.row-right { display:flex; justify-content:flex-end;   align-items:flex-end; margin:8px 0; gap:10px; }
-
-.avatar {
-    width: 32px; height: 32px; border-radius: 50%;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 15px; flex-shrink: 0;
-    background: var(--accent-lt);
-    border: 1.5px solid var(--accent-md);
-}
-
-.bubble-doc {
-    background: var(--surface);
-    border: 1.5px solid var(--border);
-    border-radius: var(--r-md); border-bottom-left-radius: 5px;
-    padding: 10px 14px; max-width: 78%;
-    box-shadow: var(--shadow-sm);
-    font-size: 14px; line-height: 1.6; color: var(--text);
-    white-space: pre-wrap;
-    animation: fadeUp 0.25s ease both;
-}
-.bubble-pat {
-    background: var(--patient);
-    border-radius: var(--r-md); border-bottom-right-radius: 5px;
-    padding: 10px 14px; max-width: 78%;
-    box-shadow: var(--shadow-sm);
-    font-size: 14px; line-height: 1.6; color: #fff;
-    white-space: pre-wrap;
-    animation: fadeUp 0.25s ease both;
-}
-
-/* ── Active stage panel ── */
-.panel {
-    background: var(--surface);
-    border: 1.5px solid var(--border);
-    border-radius: var(--r-lg);
-    padding: 22px 20px 18px;
-    box-shadow: var(--shadow-md);
-    margin-top: 0;
-    animation: fadeUp 0.3s ease both;
-}
-.panel-title {
-    font-family: 'Lora', serif;
-    font-size: 17px; font-weight: 600;
-    color: var(--text); margin-bottom: 14px;
-    line-height: 1.3; letter-spacing: -0.2px;
-}
-.small-note {
-    font-size: 12px; color: var(--text-muted);
-    font-weight: 500; margin: 0 0 10px 0;
-    letter-spacing: 0.02em;
-}
-.divider {
-    border: none;
-    border-top: 1.5px solid var(--border);
-    margin: 16px 0 12px;
-}
-
-/* ── Inline follow-up messages inside panel ── */
-.inline-followup {
-    background: var(--accent-lt);
-    border-left: 3px solid var(--accent);
-    border-radius: 0 var(--r-sm) var(--r-sm) 0;
-    padding: 11px 14px; margin: 12px 0 8px;
-    font-size: 14px; line-height: 1.6; color: var(--text);
-    animation: fadeUp 0.25s ease both;
-}
-.inline-patient {
-    background: rgba(38,70,83,0.07);
-    border-radius: var(--r-sm) var(--r-sm) 0 var(--r-sm);
-    padding: 9px 13px; margin: 6px 0;
-    font-size: 14px; line-height: 1.6; color: var(--text);
-    text-align: right;
-    animation: fadeUp 0.2s ease both;
-}
-
-/* ── Buttons — all uniform, pill-shaped ── */
-.stButton > button {
-    font-family: 'Nunito', sans-serif !important;
-    border-radius: 12px !important;
-    padding: 0.45rem 1rem !important;
-    font-size: 14px !important;
-    font-weight: 600 !important;
-    border: 1.5px solid var(--border) !important;
-    background: var(--surface) !important;
-    color: var(--text) !important;
-    box-shadow: var(--shadow-sm) !important;
-    transition: all 0.15s ease !important;
-    white-space: nowrap !important;
-    letter-spacing: 0.01em !important;
-}
-.stButton > button:hover {
-    border-color: var(--accent) !important;
-    color: var(--accent) !important;
-    background: var(--accent-lt) !important;
-    box-shadow: 0 2px 12px rgba(42,157,143,0.18) !important;
-    transform: translateY(-1px) !important;
-}
-/* Primary (Next) button */
-.stButton > button[kind="primary"] {
-    background: linear-gradient(135deg, var(--accent), #21867a) !important;
-    color: white !important;
-    border-color: transparent !important;
-    box-shadow: 0 3px 14px rgba(42,157,143,0.35) !important;
-    font-size: 15px !important;
-    padding: 0.55rem 1rem !important;
-}
-.stButton > button[kind="primary"]:hover {
-    background: linear-gradient(135deg, #33b09f, #1d7269) !important;
-    color: white !important;
-    transform: translateY(-1px) !important;
-    box-shadow: 0 4px 18px rgba(42,157,143,0.45) !important;
-}
-
-/* ── Mic widget ── */
-[data-testid="stAudioInput"] { margin: 0 !important; padding: 0 !important; }
-[data-testid="stAudioInput"] > label { display: none !important; }
+.stButton>button:hover{ background:#f0f6ff !important; border-color:#1f7aff !important; color:#1f7aff !important; }
+/* Mic pill */
+/* ── Mic widget: icon only, no timer ── */
+[data-testid="stAudioInput"] { margin:0 !important; padding:0 !important; }
+[data-testid="stAudioInput"] > label { display:none !important; }
 [data-testid="stAudioInput"] > div {
-    height: 38px !important; min-height: 38px !important; max-height: 38px !important;
-    border-radius: 12px !important;
-    border: 1.5px solid var(--border) !important;
-    display: flex !important; align-items: center !important; justify-content: center !important;
-    background: var(--surface) !important;
-    box-shadow: var(--shadow-sm) !important;
-    transition: border-color 0.15s !important;
-    overflow: hidden !important;
+    height:36px !important; min-height:36px !important; max-height:36px !important;
+    border-radius:20px !important;
+    border:1px solid rgba(180,195,220,0.8) !important;
+    background:white !important;
+    box-shadow:0 1px 3px rgba(0,0,0,0.06) !important;
+    display:flex !important; align-items:center !important; justify-content:center !important;
+    overflow:hidden !important;
+}
+/* Hide every text element inside: timer, duration, status spans */
+[data-testid="stAudioInput"] span,
+[data-testid="stAudioInput"] p,
+[data-testid="stAudioInput"] small,
+[data-testid="stAudioInput"] div > div > span,
+[data-testid="stAudioInput"] [class*="time"],
+[data-testid="stAudioInput"] [class*="timer"],
+[data-testid="stAudioInput"] [class*="duration"],
+[data-testid="stAudioInput"] [class*="status"] {
+    display:none !important;
+}
+/* Keep only the mic button and its SVG icon */
+[data-testid="stAudioInput"] button {
+    background:transparent !important; border:none !important;
+    box-shadow:none !important; padding:0 !important;
+    display:flex !important; align-items:center !important; justify-content:center !important;
+    width:36px !important; height:36px !important; cursor:pointer !important;
+}
+[data-testid="stAudioInput"] svg {
+    width:16px !important; height:16px !important;
+    color:rgba(100,110,130,0.7) !important; flex-shrink:0 !important;
+    display:block !important;
 }
 [data-testid="stAudioInput"] > div:hover {
-    border-color: var(--accent) !important;
+    border-color:rgba(31,122,255,0.6) !important;
+    background:#f0f6ff !important;
 }
-/* Hide the timer text, keep only the mic icon */
-[data-testid="stAudioInput"] > div > div > span,
-[data-testid="stAudioInput"] > div > div > p,
-[data-testid="stAudioInput"] span { display: none !important; }
-[data-testid="stAudioInput"] > div > div {
-    display: flex !important; align-items: center !important;
-    justify-content: center !important; width: 100% !important;
-    overflow: hidden !important;
+[data-testid="stAudioInput"] > div:hover svg { color:#1f7aff !important; }
+/* Text input pill */
+[data-testid="stTextInput"]>div>div>input{
+    border-radius:20px !important; border:1px solid rgba(180,195,220,0.8) !important;
+    padding:6px 14px !important; font-size:14px !important;
+    background:white !important; height:36px !important;
+    box-shadow:0 1px 3px rgba(0,0,0,0.06) !important;
 }
-
-/* ── Text inputs ── */
-[data-testid="stTextInput"] > div > div > input {
-    font-family: 'Nunito', sans-serif !important;
-    border-radius: 12px 0 0 12px !important;
-    border: 1.5px solid var(--border) !important;
-    border-right: none !important;
-    padding: 8px 16px !important;
-    font-size: 14px !important;
-    background: var(--surface) !important;
-    height: 38px !important;
-    box-shadow: var(--shadow-sm) !important;
-    color: var(--text) !important;
-    transition: border-color 0.15s !important;
-}
-[data-testid="stTextInput"] > div > div > input:focus {
-    border-color: var(--accent) !important;
-    box-shadow: 0 0 0 3px var(--accent-lt) !important;
-    outline: none !important;
-}
-[data-testid="stTextInput"] > label { display: none !important; }
-/* Send button fused to the right of text input */
-[data-testid="stTextInput"] + div [data-testid="stBaseButton-secondary"] > button,
-div:has(+ div [data-testid="stTextInput"]) { gap: 0 !important; }
-/* Target the ↑ send buttons specifically — flat left edge, rounded right */
-[data-testid="column"]:has([data-testid="stTextInput"]) + [data-testid="column"] > div > [data-testid="stBaseButton-secondary"] button {
-    border-radius: 0 12px 12px 0 !important;
-    border-left: none !important;
-    border-color: var(--border) !important;
-    height: 38px !important;
-    box-shadow: var(--shadow-sm) !important;
-    margin-left: -1px !important;
-}
-
-/* Flush the text+send column pair — no gap between them */
-[data-testid="stHorizontalBlock"]:has([data-testid="stTextInput"]) {
-    gap: 0 !important;
-    align-items: center !important;
-}
-/* Restore gap AFTER the send column (before mic) */
-[data-testid="stHorizontalBlock"]:has([data-testid="stTextInput"]) > [data-testid="column"]:nth-child(3) {
-    margin-left: 6px !important;
-}
-[data-testid="stHorizontalBlock"]:has([data-testid="stTextInput"]) > [data-testid="column"]:nth-child(4) {
-    margin-left: 6px !important;
-}
-[data-testid="stChatInput"] textarea {
-    font-family: 'Nunito', sans-serif !important;
-    border-radius: 12px !important;
-    border: 1.5px solid var(--border) !important;
-    background: var(--surface) !important;
-}
-
-/* ── Summary card ── */
-.summary-wrap {
-    background: var(--surface);
-    border: 1.5px solid var(--border);
-    border-radius: var(--r-lg);
-    padding: 28px 24px 22px;
-    box-shadow: var(--shadow-md);
-    animation: fadeUp 0.4s ease both;
-}
-.summary-title {
-    font-family: 'Lora', serif;
-    font-size: 20px; font-weight: 600;
-    color: var(--text); margin-bottom: 4px;
-    letter-spacing: -0.3px;
-}
-.summary-sub {
-    font-size: 12px; color: var(--text-muted);
-    font-weight: 500; margin-bottom: 20px;
-    letter-spacing: 0.04em; text-transform: uppercase;
-}
-.summary-table { width: 100%; border-collapse: collapse; font-size: 14px; }
-.summary-table tr { border-bottom: 1.5px solid var(--border); }
-.summary-table tr:last-child { border-bottom: none; }
-.summary-table td { padding: 11px 8px; vertical-align: top; line-height: 1.5; }
-.summary-table td:first-child {
-    font-weight: 700; color: var(--text-muted);
-    width: 36%; font-size: 12px; text-transform: uppercase;
-    letter-spacing: 0.06em; padding-top: 14px;
-}
-.tag {
-    display: inline-block;
-    background: var(--accent-lt);
-    color: var(--accent);
-    border: 1px solid var(--accent-md);
-    border-radius: 8px;
-    padding: 2px 10px; font-size: 13px; font-weight: 600;
-    margin: 2px 3px 2px 0;
-}
-.submitted-badge {
-    display: inline-flex; align-items: center; gap: 6px;
-    background: #d1fae5; color: #065f46;
-    border: 1.5px solid #6ee7b7;
-    border-radius: 10px; padding: 5px 14px;
-    font-size: 13px; font-weight: 700;
-    margin-bottom: 16px; letter-spacing: 0.02em;
-}
-
-/* ── Animations ── */
-@keyframes fadeUp {
-    from { opacity: 0; transform: translateY(10px); }
-    to   { opacity: 1; transform: translateY(0); }
-}
-
-/* ── Streamlit chrome cleanup ── */
-#MainMenu, footer, [data-testid="stToolbar"] { display: none !important; }
-[data-testid="stSidebarNav"] { display: none !important; }
+[data-testid="stTextInput"]>label{ display:none !important; }
 </style>
-""")
+""", unsafe_allow_html=True)
 
 # ── Session state ───────────────────────────────────────────
 # Stages:
@@ -738,14 +519,7 @@ if openai_init_error: st.warning(f"LLM not ready: {openai_init_error}")
 _init_sheets()
 if sheets_init_error: st.warning(f"Sheets not ready: {sheets_init_error}")
 
-st.markdown('''
-<div class="app-header">
-  <div class="app-header-icon">🩺</div>
-  <div>
-    <div class="app-header-title">Symptom Check-In</div>
-    <div class="app-header-sub">Cancer Care · Daily Check-In</div>
-  </div>
-</div>''', unsafe_allow_html=True)
+st.markdown('<div class="header">🩺 Cancer Symptom Check-In</div>', unsafe_allow_html=True)
 
 # ════════════════════════════════════════════════════════════
 # STAGE -1 — Name entry
@@ -1110,7 +884,19 @@ elif stage == 5:
         else:
             conv_cell = "<span style='opacity:.4'>No additional details shared</span>"
 
-        # Summary styles already defined in main CSS block
+        st.markdown("""
+<style>
+.summary-wrap{background:linear-gradient(135deg,#f0f7ff,#eaf3ff);border:1.5px solid rgba(31,122,255,0.15);border-radius:20px;padding:26px 22px 18px;margin-top:8px;box-shadow:0 4px 20px rgba(31,122,255,0.08);}
+.summary-title{font-size:19px;font-weight:700;color:#1a2540;margin-bottom:3px;}
+.summary-sub{font-size:12px;color:rgba(0,0,0,0.4);margin-bottom:18px;}
+.summary-table{width:100%;border-collapse:collapse;font-size:14px;}
+.summary-table tr{border-bottom:1px solid rgba(200,215,240,0.6);}
+.summary-table tr:last-child{border-bottom:none;}
+.summary-table td{padding:10px 8px;vertical-align:top;}
+.summary-table td:first-child{font-weight:600;color:#4a6080;width:36%;}
+.tag{display:inline-block;background:rgba(31,122,255,0.09);color:#1f5acc;border-radius:20px;padding:2px 10px;font-size:13px;margin:2px 3px 2px 0;}
+.submitted-badge{display:inline-block;background:#22c55e;color:white;border-radius:20px;padding:3px 13px;font-size:13px;font-weight:700;margin-bottom:14px;}
+</style>""", unsafe_allow_html=True)
 
         st.markdown(f"""
 <div class="summary-wrap">
