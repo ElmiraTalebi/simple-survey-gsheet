@@ -375,17 +375,60 @@ html, body, [data-testid="stAppViewContainer"] {
     box-shadow: 0 4px 18px rgba(42,157,143,0.42) !important;
 }
 
-/* ── Mic widget ── */
+/* ── Send (↑) button — teal circle ── */
+.stButton > button:has(div > p:-webkit-any(p)):where([style*="width"]) { }
+/* Target ↑ buttons by their text content using :has */
+.stButton > button:has(> div > p:first-child:last-child) {
+    background: var(--accent) !important;
+    color: white !important;
+    border-color: transparent !important;
+    border-radius: 50% !important;
+    padding: 0 !important;
+    min-width: 38px !important; height: 38px !important;
+    font-size: 18px !important; line-height: 1 !important;
+    box-shadow: 0 3px 10px rgba(42,157,143,0.35) !important;
+}
+.stButton > button:has(> div > p:first-child:last-child):hover {
+    background: #1d7a6e !important;
+    color: white !important;
+    transform: translateY(-1px) scale(1.07) !important;
+    box-shadow: 0 4px 14px rgba(42,157,143,0.45) !important;
+    border-color: transparent !important;
+}
+
+/* ── Mic widget — teal accent pill ── */
 [data-testid="stAudioInput"] { margin: 0 !important; padding: 0 !important; }
 [data-testid="stAudioInput"] > label { display: none !important; }
 [data-testid="stAudioInput"] > div {
     height: 38px !important; min-height: 38px !important;
-    border-radius: var(--r-sm) !important;
-    border: 1.5px solid var(--border) !important;
+    border-radius: 19px !important;
+    border: 1.5px solid var(--accent-md) !important;
     display: flex !important; align-items: center !important; justify-content: center !important;
-    background: var(--surface) !important; box-shadow: var(--shadow-sm) !important;
+    background: var(--accent-lt) !important;
+    box-shadow: 0 2px 8px rgba(42,157,143,0.12) !important;
+    transition: all 0.14s ease !important;
 }
-[data-testid="stAudioInput"] > div:hover { border-color: var(--accent) !important; }
+[data-testid="stAudioInput"] > div:hover {
+    background: var(--accent-md) !important;
+    border-color: var(--accent) !important;
+    box-shadow: 0 3px 12px rgba(42,157,143,0.25) !important;
+}
+/* Hide 00:00 timer and waveform — keep only the mic icon */
+[data-testid="stAudioInput"] > div > div:not(:first-child) { display: none !important; }
+[data-testid="stAudioInput"] [class*="waveform"],
+[data-testid="stAudioInput"] [class*="timeCode"],
+[data-testid="stAudioInput"] [class*="timer"],
+[data-testid="stAudioInput"] [class*="time"],
+[data-testid="stAudioInput"] [class*="duration"],
+[data-testid="stAudioInput"] [class*="counter"],
+[data-testid="stAudioInput"] p,
+[data-testid="stAudioInput"] small,
+[data-testid="stAudioInput"] span:not([data-baseweb]) { display: none !important; }
+/* Force outer container to be a tight circle matching the ↑ button */
+[data-testid="stAudioInput"] > div {
+    width: 38px !important; min-width: 38px !important;
+    max-width: 38px !important;
+}
 
 /* ── Text inputs ── */
 [data-testid="stTextInput"] > div > div > input {
