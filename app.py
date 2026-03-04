@@ -124,6 +124,53 @@ STRICT OUTPUT RULES:
 def _openai_ready():
     return openai_client is not None and openai_init_error is None
 
+def get_opening_message(last: Dict, name: str) -> str:
+    """
+    Generate the opening history-recap message with a lighter, non-restrictive prompt.
+    Explicitly names the patient's last-visit data and asks a targeted question about it.
+    """
+    if not _openai_ready():
+        return f"Hi {name}! Good to see you again. How have you been since your last visit?"
+
+    fl   = last.get("feeling_level", "?")
+    pn   = "yes" if last.get("pain") else "no"
+    ploc = ", ".join(last.get("pain_locations", [])) or "none"
+    sym  = ", ".join(last.get("symptoms", [])) or "none"
+    ts   = last.get("timestamp", "your last visit")
+
+    # Pick the most specific thing to follow up on
+    if last.get("symptoms"):
+        focus = f"ask specifically how their {sym} have been — better, worse, or the same?"
+    elif last.get("pain") and last.get("pain_locations"):
+        focus = f"ask specifically about their {ploc} pain — is it still there, how severe?"
+    elif fl not in ("?", None) and str(fl).isdigit() and int(fl) <= 4:
+        focus = f"ask what was contributing to their low feeling score of {fl}/10 and whether it has changed"
+    else:
+        focus = f"ask how they have been feeling since then"
+
+    system = (
+        "You are a warm, empathetic virtual symptom-intake assistant for a cancer care clinic. "
+        "Write a short opening message (2–3 sentences max). "
+        "Sentence 1: greet the patient by name and briefly mention their SPECIFIC data from last time "
+        "(name the actual symptoms, pain locations, or feeling score — do NOT be generic). "
+        "Sentence 2-3: " + focus + ". "
+        "Do NOT say 'Thank you', 'Great', 'I see', or any filler. Be warm but direct."
+    )
+    try:
+        r = openai_client.chat.completions.create(
+            model=_secret("openai_model", default="gpt-4o-mini"),
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user",   "content": f"Patient name: {name}. Last visit: {ts}. "
+                                               f"Feeling: {fl}/10. Pain: {pn}. "
+                                               f"Locations: {ploc}. Symptoms: {sym}."}
+            ],
+            max_tokens=120, temperature=0.5,
+        )
+        return (r.choices[0].message.content or "").strip()
+    except Exception as e:
+        return f"Hi {name}! Last time you reported {sym if sym != 'none' else 'some symptoms'}. How have things been since then?"
+
 def get_gpt_reply(extra_context: str = "") -> str:
     if not _openai_ready():
         return "(Assistant unavailable — check OpenAI API key.)"
@@ -453,32 +500,8 @@ if st.session_state.stage == -1:
             past = st.session_state.past_checkins
             if past:
                 last = past[-1]
-                fl   = last.get('feeling_level', '?')
-                pn   = 'yes' if last.get('pain') else 'no'
-                ploc = ', '.join(last.get('pain_locations', [])) or 'none'
-                sym  = ', '.join(last.get('symptoms', [])) or 'none'
-                ts   = last.get('timestamp', 'last visit')
-                # Build a specific follow-up question target based on what was worst
-                if last.get('symptoms'):
-                    followup_target = f"specifically ask how their {sym} have been"
-                elif last.get('pain') and last.get('pain_locations'):
-                    followup_target = f"specifically ask about their {ploc} pain"
-                elif fl != '?' and int(fl) <= 4:
-                    followup_target = f"specifically ask what contributed to their low feeling score of {fl}/10"
-                else:
-                    followup_target = "ask how they have been feeling overall"
-                context = (
-                    f"The patient's last visit was on {ts}. "
-                    f"They reported: feeling level {fl}/10, pain: {pn}, "
-                    f"pain locations: {ploc}, symptoms: {sym}. "
-                    f"Greet {name_input.strip()} by name. "
-                    f"In your greeting, explicitly mention their specific data from last time "
-                    f"(e.g. mention the actual symptom names or pain locations or feeling score). "
-                    f"Then {followup_target}. "
-                    f"Be specific, not generic. No filler phrases."
-                )
                 with st.spinner("Getting your assistant ready…"):
-                    opening = get_gpt_reply(extra_context=context)
+                    opening = get_opening_message(last, name_input.strip())
                 add_doctor(opening, stage=0)
                 st.session_state.stage = 0
             else:
