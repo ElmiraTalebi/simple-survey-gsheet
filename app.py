@@ -547,16 +547,23 @@ html, body, [data-testid="stAppViewContainer"] {
 [data-testid="stTextInput"] > label { display: none !important; }
 
 /* ── Embedded send button (↑ inside text input) ── */
-/* Target any column that contains both a text input and a button */
+/* The column contains a text input followed by a button.
+   We overlay the button on top of the input, aligned right. */
 [data-testid="stColumn"]:has([data-testid="stTextInput"]):has(.stButton) {
     position: relative !important;
 }
 [data-testid="stColumn"]:has([data-testid="stTextInput"]):has(.stButton)
-  .stButton {
+  [data-testid="stElementContainer"]:has(.stButton) {
     position: absolute !important;
     right: 8px !important;
     top: 4px !important;
     z-index: 2 !important;
+    width: auto !important;
+}
+[data-testid="stColumn"]:has([data-testid="stTextInput"]):has(.stButton)
+  .stButton {
+    display: flex !important;
+    justify-content: flex-end !important;
 }
 [data-testid="stColumn"]:has([data-testid="stTextInput"]):has(.stButton)
   .stButton button {
@@ -583,7 +590,7 @@ html, body, [data-testid="stAppViewContainer"] {
     box-shadow: 0 3px 12px rgba(42,157,143,0.40) !important;
 }
 /* Add right padding to text inputs in columns so text doesn't go under the button */
-[data-testid="stColumn"] [data-testid="stTextInput"] > div > div > input {
+[data-testid="stColumn"]:has(.stButton) [data-testid="stTextInput"] > div > div > input {
     padding-right: 42px !important;
 }
 
