@@ -381,10 +381,10 @@ html, body, [data-testid="stAppViewContainer"] {
         radial-gradient(ellipse 55% 40% at 8% 92%, rgba(38,70,83,0.08) 0%, transparent 65%),
         #f5f3ef;
 }
-[data-testid="stHeader"]  { display: none !important; }
-[data-testid="stDecoration"] { display: none !important; }
-[data-testid="stStatusWidget"] { display: none !important; }
-[data-testid="stToolbar"] { display: none !important; }
+[data-testid="stHeader"]  { display: none !important; height: 0 !important; }
+[data-testid="stDecoration"] { display: none !important; height: 0 !important; }
+[data-testid="stStatusWidget"] { display: none !important; height: 0 !important; }
+[data-testid="stToolbar"] { display: none !important; height: 0 !important; }
 [data-testid="stMainBlockContainer"] { padding-top: 1rem !important; }
 .block-container { max-width: 680px !important; padding: 0 1.2rem 3rem !important; }
 #MainMenu, footer, header, [data-testid="stToolbar"],
@@ -404,6 +404,21 @@ div[data-testid="stStatusWidget"] {
     overflow: hidden !important;
     visibility: hidden !important;
     position: absolute !important;
+}
+/* Hide the Streamlit top bar / connection status bar */
+.stApp > div:first-child,
+.stApp [data-testid="stHeader"],
+.stApp [data-testid="stStatusWidget"],
+[data-testid="collapsedControl"],
+.stApp iframe[title="streamlitApp"],
+.stAppHeader, .stHeader {
+    display: none !important;
+    height: 0 !important;
+    min-height: 0 !important;
+    max-height: 0 !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    overflow: hidden !important;
 }
 
 /* ── App header ── */
@@ -470,6 +485,14 @@ div[data-testid="stStatusWidget"] {
 
 /* ── Panel (active stage card) ── */
 .panel {
+    background: transparent;
+    border: none;
+    border-radius: var(--r-lg);
+    padding: 6px 0 10px;
+    box-shadow: none;
+    animation: fadeUp 0.28s ease both;
+}
+.panel-card {
     background: var(--surface);
     border: 1.5px solid var(--border);
     border-radius: var(--r-lg);
@@ -482,9 +505,9 @@ div[data-testid="stStatusWidget"] {
     margin-bottom: 14px;
 }
 .panel-title-avatar {
-    width: 30px; height: 30px; border-radius: 50%; flex-shrink: 0;
+    width: 32px; height: 32px; border-radius: 50%; flex-shrink: 0;
     display: flex; align-items: center; justify-content: center;
-    font-size: 14px;
+    font-size: 15px;
     background: var(--accent-lt); border: 1.5px solid var(--accent-md);
 }
 .panel-title-bubble {
@@ -493,7 +516,8 @@ div[data-testid="stStatusWidget"] {
     padding: 10px 15px; box-shadow: var(--shadow-sm);
     font-family: 'Nunito', sans-serif;
     font-size: 15px; font-weight: 600; color: var(--text);
-    line-height: 1.5; animation: fadeUp 0.22s ease both;
+    line-height: 1.5; max-width: 82%;
+    animation: fadeUp 0.22s ease both;
 }
 .small-note {
     font-size: 12px; color: var(--muted); font-weight: 500;
@@ -925,7 +949,7 @@ st.markdown('''
 # STAGE -1 — Name entry
 # ════════════════════════════════════════════════════════════
 if st.session_state.stage == -1:
-    st.markdown('<div class="panel"><div class="panel-title"><div class="panel-title-avatar">🩺</div><div class="panel-title-bubble">Welcome · Please enter your name</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="panel-card"><div class="panel-title"><div class="panel-title-avatar">🩺</div><div class="panel-title-bubble">Welcome · Please enter your name</div></div>', unsafe_allow_html=True)
     name_input = st.text_input("Your name:", value=st.session_state.patient_name)
     if st.button("Start Check-In"):
         if name_input.strip():
