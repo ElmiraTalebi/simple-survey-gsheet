@@ -413,6 +413,13 @@ html, body, [data-testid="stAppViewContainer"] {
     border-color: var(--accent) !important;
     box-shadow: 0 3px 12px rgba(42,157,143,0.25) !important;
 }
+/* Hide the timer, keep only the mic icon */
+[data-testid="stAudioInput"] span[data-testid="stAudioInputWaveform"],
+[data-testid="stAudioInput"] .stAudioInputWaveformTimeCode,
+[data-testid="stAudioInput"] div[class*="timeCode"],
+[data-testid="stAudioInput"] div[class*="waveform"] {
+    display: none !important;
+}
 
 /* ── Text inputs ── */
 [data-testid="stTextInput"] > div > div > input {
