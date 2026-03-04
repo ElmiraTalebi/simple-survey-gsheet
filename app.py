@@ -709,6 +709,7 @@ defaults = {
     "symptoms": [], "submitted": False, "past_checkins": [],
     "last_audio_hash": None, "mic_key_counter": 0,
     "followup_counts": {}, "stage_answered": {},
+    "other_input_open": {}, "note_open": False,
 }
 for k, v in defaults.items():
     if k not in st.session_state: st.session_state[k] = v
@@ -728,6 +729,20 @@ def add_patient(text, stage=None):
 def toggle_body_part(part):
     if part in st.session_state.selected_parts: st.session_state.selected_parts.remove(part)
     else: st.session_state.selected_parts.add(part)
+
+
+def is_other_open(key: str) -> bool:
+    return bool(st.session_state.other_input_open.get(key, False))
+
+def open_other(key: str):
+    st.session_state.other_input_open[key] = True
+
+def render_secondary_input_toggle(key: str, label: str = "Other"):
+    if not is_other_open(key):
+        if st.button(label, key=f"open_{key}", use_container_width=True):
+            open_other(key)
+            st.rerun()
+
 
 MAX_FOLLOWUPS = {0:0, 1:0, 2:0, 3:0, 4:0, 5:0}  # Professor feedback: no GPT-driven follow-ups; branching handled deterministically
 
@@ -850,13 +865,18 @@ def render_suggestion_buttons(suggestions: list, stage_id: int,
 
 def render_followup_input(stage_id: int, extra_context: str = ""):
     """
-    Compact text + mic row for answering follow-up questions inline in the panel.
-    Only shown when the stage has been answered AND GPT still has follow-up budget.
-    Send button is embedded inside the text input via CSS.
+    Secondary free-text / voice for deeper detail only.
+    Hidden behind a button so quick replies remain the default interaction.
     """
+    key = f"followup_{stage_id}_{followup_count(stage_id)}"
+    render_secondary_input_toggle(key, label="Other / add more detail")
+    if not is_other_open(key):
+        return
+
+    st.markdown('<div class="small-note">Type or speak only if the quick replies do not fit.</div>', unsafe_allow_html=True)
     c_main, c_mic = st.columns([7, 2.5], gap="small")
     with c_main:
-        typed = st.text_input("", placeholder="Reply…",
+        typed = st.text_input("", placeholder="Type more detail…",
                               key=f"fu_txt_{stage_id}_{followup_count(stage_id)}",
                               label_visibility="collapsed")
         send_clicked = st.button("↑", key=f"fu_send_{stage_id}_{followup_count(stage_id)}")
@@ -878,11 +898,16 @@ def render_next_button(label="Next →"):
         advance_stage(); st.rerun()
 
 def render_text_mic_row(stage_id: int, extra_context: str = "",
-                        placeholder: str = "Or type your answer…"):
+                        placeholder: str = "Type your answer…"):
     """
-    Primary answer row: [text input + ↑ Send] [🎤]
-    Send button is embedded inside the text input via CSS.
+    Secondary text / voice input. Hidden until the patient taps Other.
     """
+    key = f"stage_{stage_id}_other"
+    render_secondary_input_toggle(key, label="Other")
+    if not is_other_open(key):
+        return
+
+    st.markdown('<div class="small-note">Type or speak only if the buttons above do not fit your answer.</div>', unsafe_allow_html=True)
     c_main, c_mic = st.columns([7, 2.5], gap="small")
     with c_main:
         typed = st.text_input("", placeholder=placeholder,
@@ -980,8 +1005,8 @@ if stage == 0:
 
     # If patient hasn't replied yet, default to click-first (buttons) but allow typing/voice.
     if not is_answered(0):
-        st.markdown('<div class="small-note">Tap one option above. Or type / speak if you prefer.</div>', unsafe_allow_html=True)
-        render_text_mic_row(stage_id=0, extra_context=history_ctx, placeholder="Type a short reply (optional)…")
+        st.markdown('<div class="small-note">Tap one option above.</div>', unsafe_allow_html=True)
+        render_text_mic_row(stage_id=0, extra_context=history_ctx, placeholder="Type a short reply…")
 
     # Once answered, offer a fast path when there are no changes.
     if is_answered(0):
@@ -1030,7 +1055,7 @@ elif stage == 1:
     if not is_answered(1):
         # Show opening GPT message (tagged stage=1) inline
         render_inline_stage_messages(stage_id=1, extra_context=feeling_ctx)
-        st.markdown('<div class="small-note">Choose how you feel, or describe in your own words below</div>',
+        st.markdown('<div class="small-note">Choose one option below.</div>',
                     unsafe_allow_html=True)
 
         # 5 buttons in a single row
@@ -1087,11 +1112,10 @@ elif stage == 2:
 
     if not is_answered(2):
         render_inline_stage_messages(stage_id=2, extra_context=pain_ctx)
-        st.markdown('<div class="small-note">Choose an option or describe in your own words</div>',
+        st.markdown('<div class="small-note">Choose one option below.</div>',
                     unsafe_allow_html=True)
 
-        # [Yes] [No] [text + ↑] [🎤]
-        c1, c2, c_main, c_mic = st.columns([1.7, 1.7, 4, 2.5], gap="small")
+        c1, c2, c3 = st.columns([1.7, 1.7, 1.6], gap="small")
         with c1:
             if st.button("✅ Yes, pain", use_container_width=True, key="pain_yes"):
                 st.session_state.pain_yesno = True
@@ -1100,18 +1124,24 @@ elif stage == 2:
             if st.button("🙂 No pain", use_container_width=True, key="pain_no"):
                 st.session_state.pain_yesno = False
                 on_patient_answer("No, I don't have any pain today.", 2, pain_ctx); st.rerun()
-        with c_main:
-            typed_pain = st.text_input("", placeholder="Or describe…",
-                                       key="txt_2", label_visibility="collapsed")
-            send_pain = st.button("↑", key="txtsend_2")
-        with c_mic:
-            audio_pain = None
-            if hasattr(st, "audio_input"):
-                audio_pain = st.audio_input("", key=f"mic_2_{st.session_state.mic_key_counter}",
-                                            label_visibility="collapsed")
-        if send_pain and typed_pain and typed_pain.strip():
-            on_patient_answer(typed_pain.strip(), 2, pain_ctx); st.rerun()
-        if handle_voice(audio_pain, 2, pain_ctx): st.rerun()
+        with c3:
+            render_secondary_input_toggle("stage_2_other", label="Other")
+
+        if is_other_open("stage_2_other"):
+            st.markdown('<div class="small-note">Type or speak only if Yes / No does not fit.</div>', unsafe_allow_html=True)
+            c_main, c_mic = st.columns([7, 2.5], gap="small")
+            with c_main:
+                typed_pain = st.text_input("", placeholder="Describe your pain answer…",
+                                           key="txt_2", label_visibility="collapsed")
+                send_pain = st.button("↑", key="txtsend_2")
+            with c_mic:
+                audio_pain = None
+                if hasattr(st, "audio_input"):
+                    audio_pain = st.audio_input("", key=f"mic_2_{st.session_state.mic_key_counter}",
+                                                label_visibility="collapsed")
+            if send_pain and typed_pain and typed_pain.strip():
+                on_patient_answer(typed_pain.strip(), 2, pain_ctx); st.rerun()
+            if handle_voice(audio_pain, 2, pain_ctx): st.rerun()
 
     else:
         render_inline_stage_messages(stage_id=2, extra_context=pain_ctx)
@@ -1136,7 +1166,7 @@ elif stage == 3:
 
     if not is_answered(3):
         render_inline_stage_messages(stage_id=3, extra_context=location_ctx)
-        st.markdown('<div class="small-note">Select areas on the map, or describe below</div>',
+        st.markdown('<div class="small-note">Select areas on the map, then send your selection.</div>',
                     unsafe_allow_html=True)
 
         col_svg, col_btns = st.columns([1, 1], gap="medium")
@@ -1153,22 +1183,27 @@ elif stage == 3:
                 + (", ".join(sorted(st.session_state.selected_parts)) or "None") + "</div>",
                 unsafe_allow_html=True)
 
-        c_main3, c_mic3, c_send3b = st.columns([4, 2.5, 2], gap="small")
-        with c_main3:
-            typed_loc = st.text_input("", placeholder="Or describe where you feel pain…",
-                                      key="txt_3", label_visibility="collapsed")
-            send_txt3 = st.button("↑", key="txtsend_3")
-        with c_mic3:
-            audio_loc = None
-            if hasattr(st, "audio_input"):
-                audio_loc = st.audio_input("", key=f"mic_3_{st.session_state.mic_key_counter}",
-                                           label_visibility="collapsed")
+        c_other3, c_send3b = st.columns([1.6, 2], gap="small")
+        with c_other3:
+            render_secondary_input_toggle("stage_3_other", label="Other")
         with c_send3b:
             send_locs = st.button("Send locations ➜", key="send_locs", use_container_width=True)
 
-        if send_txt3 and typed_loc and typed_loc.strip():
-            on_patient_answer(typed_loc.strip(), 3, location_ctx); st.rerun()
-        if handle_voice(audio_loc, 3, location_ctx): st.rerun()
+        if is_other_open("stage_3_other"):
+            st.markdown('<div class="small-note">Type or speak only if the body map does not capture it well.</div>', unsafe_allow_html=True)
+            c_main3, c_mic3 = st.columns([7, 2.5], gap="small")
+            with c_main3:
+                typed_loc = st.text_input("", placeholder="Describe where you feel pain…",
+                                          key="txt_3", label_visibility="collapsed")
+                send_txt3 = st.button("↑", key="txtsend_3")
+            with c_mic3:
+                audio_loc = None
+                if hasattr(st, "audio_input"):
+                    audio_loc = st.audio_input("", key=f"mic_3_{st.session_state.mic_key_counter}",
+                                               label_visibility="collapsed")
+            if send_txt3 and typed_loc and typed_loc.strip():
+                on_patient_answer(typed_loc.strip(), 3, location_ctx); st.rerun()
+            if handle_voice(audio_loc, 3, location_ctx): st.rerun()
         if send_locs:
             loc_txt = ", ".join(sorted(st.session_state.selected_parts)) if st.session_state.selected_parts else "not sure of location"
             on_patient_answer(f"Pain locations: {loc_txt}.", 3, location_ctx); st.rerun()
@@ -1201,7 +1236,7 @@ elif stage == 4:
 
     if not is_answered(4):
         render_inline_stage_messages(stage_id=4, extra_context=symptom_ctx)
-        st.markdown('<div class="small-note">Tap to select all that apply, then click Send — or describe below</div>',
+        st.markdown('<div class="small-note">Tap to select all that apply, then send your selection.</div>',
                     unsafe_allow_html=True)
 
         sc = st.columns(2, gap="small")
@@ -1213,22 +1248,27 @@ elif stage == 4:
                     else: st.session_state.symptoms.append(symptom)
                     st.rerun()
 
-        c_main4, c_mic4, c_send4b = st.columns([4, 2.5, 2], gap="small")
-        with c_main4:
-            typed_sym = st.text_input("", placeholder="Or describe your symptoms…",
-                                      key="txt_4", label_visibility="collapsed")
-            send_txt4 = st.button("↑", key="txtsend_4")
-        with c_mic4:
-            audio_sym = None
-            if hasattr(st, "audio_input"):
-                audio_sym = st.audio_input("", key=f"mic_4_{st.session_state.mic_key_counter}",
-                                           label_visibility="collapsed")
+        c_other4, c_send4b = st.columns([1.6, 2], gap="small")
+        with c_other4:
+            render_secondary_input_toggle("stage_4_other", label="Other")
         with c_send4b:
             send_syms = st.button("Send symptoms ➜", key="send_syms", use_container_width=True)
 
-        if send_txt4 and typed_sym and typed_sym.strip():
-            on_patient_answer(typed_sym.strip(), 4, symptom_ctx); st.rerun()
-        if handle_voice(audio_sym, 4, symptom_ctx): st.rerun()
+        if is_other_open("stage_4_other"):
+            st.markdown('<div class="small-note">Type or speak only for a symptom that is not listed.</div>', unsafe_allow_html=True)
+            c_main4, c_mic4 = st.columns([7, 2.5], gap="small")
+            with c_main4:
+                typed_sym = st.text_input("", placeholder="Type the other symptom…",
+                                          key="txt_4", label_visibility="collapsed")
+                send_txt4 = st.button("↑", key="txtsend_4")
+            with c_mic4:
+                audio_sym = None
+                if hasattr(st, "audio_input"):
+                    audio_sym = st.audio_input("", key=f"mic_4_{st.session_state.mic_key_counter}",
+                                               label_visibility="collapsed")
+            if send_txt4 and typed_sym and typed_sym.strip():
+                on_patient_answer(typed_sym.strip(), 4, symptom_ctx); st.rerun()
+            if handle_voice(audio_sym, 4, symptom_ctx): st.rerun()
         if send_syms:
             sym_txt = "; ".join(st.session_state.symptoms) if st.session_state.symptoms else "no symptoms from checklist"
             on_patient_answer(f"Symptoms today: {sym_txt}.", 4, symptom_ctx); st.rerun()
@@ -1288,13 +1328,18 @@ elif stage == 5:
     else:
         st.markdown('<div class="panel">', unsafe_allow_html=True)
         st.markdown('<div class="panel-title"><div class="panel-title-avatar">🩺</div><div class="panel-title-bubble">Review & submit</div></div>', unsafe_allow_html=True)
-        st.markdown('<div class="small-note">Optional: add one short note for your care team. Otherwise, you can submit now.</div>', unsafe_allow_html=True)
+        st.markdown('<div class="small-note">Review your answers and submit. Add a note only if something important is still missing.</div>', unsafe_allow_html=True)
 
-        st.session_state.extra_note = st.text_area(
-            "", value=st.session_state.extra_note,
-            placeholder="Optional note (for example: something new that wasn't captured above)…",
-            height=110, label_visibility="collapsed",
-        )
+        if not st.session_state.note_open:
+            if st.button("Other / add a note", use_container_width=True, key="open_note_button"):
+                st.session_state.note_open = True
+                st.rerun()
+        else:
+            st.session_state.extra_note = st.text_area(
+                "", value=st.session_state.extra_note,
+                placeholder="Type a short note for your care team…",
+                height=110, label_visibility="collapsed",
+            )
 
         if st.button("✅ Submit Check-In", use_container_width=True, type="primary"):
             # Save the baseline questionnaire data + optional note.
