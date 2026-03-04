@@ -383,9 +383,28 @@ html, body, [data-testid="stAppViewContainer"] {
 }
 [data-testid="stHeader"]  { display: none !important; }
 [data-testid="stDecoration"] { display: none !important; }
-[data-testid="stMainBlockContainer"] { padding-top: 2rem !important; }
+[data-testid="stStatusWidget"] { display: none !important; }
+[data-testid="stToolbar"] { display: none !important; }
+[data-testid="stMainBlockContainer"] { padding-top: 1rem !important; }
 .block-container { max-width: 680px !important; padding: 0 1.2rem 3rem !important; }
-#MainMenu, footer, [data-testid="stToolbar"] { display: none !important; }
+#MainMenu, footer, header, [data-testid="stToolbar"],
+[data-testid="stAppDeployButton"], [data-testid="stStatusWidget"],
+.stDeployButton, .stApp > header,
+iframe[title="streamlitApp"] { display: none !important; }
+/* Kill any fixed/sticky bars at top */
+.stApp > header, .stApp > div:first-child > header {
+    display: none !important;
+}
+header[data-testid="stHeader"],
+div[data-testid="stDecoration"],
+div[data-testid="stStatusWidget"] {
+    display: none !important;
+    height: 0 !important;
+    max-height: 0 !important;
+    overflow: hidden !important;
+    visibility: hidden !important;
+    position: absolute !important;
+}
 
 /* ── App header ── */
 .app-header {
