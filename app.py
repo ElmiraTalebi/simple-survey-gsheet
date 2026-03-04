@@ -381,7 +381,7 @@ html, body, [data-testid="stAppViewContainer"] {
         radial-gradient(ellipse 55% 40% at 8% 92%, rgba(38,70,83,0.08) 0%, transparent 65%),
         #f5f3ef;
 }
-[data-testid="stHeader"]  { background: transparent !important; }
+[data-testid="stHeader"]  { display: none !important; }
 [data-testid="stDecoration"] { display: none !important; }
 [data-testid="stMainBlockContainer"] { padding-top: 2rem !important; }
 .block-container { max-width: 680px !important; padding: 0 1.2rem 3rem !important; }
@@ -459,9 +459,22 @@ html, body, [data-testid="stAppViewContainer"] {
     animation: fadeUp 0.28s ease both;
 }
 .panel-title {
-    font-family: 'Lora', serif;
-    font-size: 17px; font-weight: 600; letter-spacing: -0.2px;
-    color: var(--text); margin-bottom: 12px; line-height: 1.3;
+    display: flex; align-items: flex-start; gap: 10px;
+    margin-bottom: 14px;
+}
+.panel-title-avatar {
+    width: 30px; height: 30px; border-radius: 50%; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14px;
+    background: var(--accent-lt); border: 1.5px solid var(--accent-md);
+}
+.panel-title-bubble {
+    background: var(--surface); border: 1.5px solid var(--border);
+    border-radius: var(--r-md); border-bottom-left-radius: 4px;
+    padding: 10px 15px; box-shadow: var(--shadow-sm);
+    font-family: 'Nunito', sans-serif;
+    font-size: 15px; font-weight: 600; color: var(--text);
+    line-height: 1.5; animation: fadeUp 0.22s ease both;
 }
 .small-note {
     font-size: 12px; color: var(--muted); font-weight: 500;
@@ -893,7 +906,7 @@ st.markdown('''
 # STAGE -1 — Name entry
 # ════════════════════════════════════════════════════════════
 if st.session_state.stage == -1:
-    st.markdown('<div class="panel"><div class="panel-title">Welcome · Please enter your name</div>', unsafe_allow_html=True)
+    st.markdown('<div class="panel"><div class="panel-title"><div class="panel-title-avatar">🩺</div><div class="panel-title-bubble">Welcome · Please enter your name</div></div>', unsafe_allow_html=True)
     name_input = st.text_input("Your name:", value=st.session_state.patient_name)
     if st.button("Start Check-In"):
         if name_input.strip():
@@ -939,7 +952,7 @@ if stage == 0:
         "Do NOT start structured check-in questions yet. No filler."
     )
     st.markdown('<div class="panel">', unsafe_allow_html=True)
-    st.markdown('<div class="panel-title">💬 Catching up from your last visit</div>', unsafe_allow_html=True)
+    st.markdown('<div class="panel-title"><div class="panel-title-avatar">🩺</div><div class="panel-title-bubble">💬 Catching up from your last visit</div></div>', unsafe_allow_html=True)
 
     # Always render inline messages (GPT question + any patient replies so far)
     render_inline_stage_messages(stage_id=0, extra_context=history_ctx)
@@ -971,7 +984,7 @@ elif stage == 1:
         "Ask ONE specific follow-up about what is driving that feeling. No filler. Just the question."
     )
     st.markdown('<div class="panel">', unsafe_allow_html=True)
-    st.markdown('<div class="panel-title">How are you feeling today?</div>', unsafe_allow_html=True)
+    st.markdown('<div class="panel-title"><div class="panel-title-avatar">🩺</div><div class="panel-title-bubble">How are you feeling today?</div></div>', unsafe_allow_html=True)
 
     # PROMIS Global Health 5-point scale — standard in oncology patient-reported outcomes
     FEELING_OPTIONS = [
@@ -1038,7 +1051,7 @@ elif stage == 2:
         "No filler."
     )
     st.markdown('<div class="panel">', unsafe_allow_html=True)
-    st.markdown('<div class="panel-title">Do you have any pain today?</div>', unsafe_allow_html=True)
+    st.markdown('<div class="panel-title"><div class="panel-title-avatar">🩺</div><div class="panel-title-bubble">Do you have any pain today?</div></div>', unsafe_allow_html=True)
 
     if not is_answered(2):
         render_inline_stage_messages(stage_id=2, extra_context=pain_ctx)
@@ -1087,7 +1100,7 @@ elif stage == 3:
         "Ask ONE follow-up about those locations (severity, duration, character). No filler."
     )
     st.markdown('<div class="panel">', unsafe_allow_html=True)
-    st.markdown('<div class="panel-title">Where do you feel pain?</div>', unsafe_allow_html=True)
+    st.markdown('<div class="panel-title"><div class="panel-title-avatar">🩺</div><div class="panel-title-bubble">Where do you feel pain?</div></div>', unsafe_allow_html=True)
 
     if not is_answered(3):
         render_inline_stage_messages(stage_id=3, extra_context=location_ctx)
@@ -1152,7 +1165,7 @@ elif stage == 4:
         "Fever / chills","Constipation","Diarrhea","Sleep problems","Anxiety / low mood",
     ]
     st.markdown('<div class="panel">', unsafe_allow_html=True)
-    st.markdown('<div class="panel-title">Any of these symptoms today?</div>', unsafe_allow_html=True)
+    st.markdown('<div class="panel-title"><div class="panel-title-avatar">🩺</div><div class="panel-title-bubble">Any of these symptoms today?</div></div>', unsafe_allow_html=True)
 
     if not is_answered(4):
         render_inline_stage_messages(stage_id=4, extra_context=symptom_ctx)
@@ -1279,7 +1292,7 @@ elif stage == 5:
                             f'<div class="avatar">🙂</div></div>', unsafe_allow_html=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
-        st.markdown('<div class="panel"><div class="panel-title">💬 Anything else to share?</div>'
+        st.markdown('<div class="panel"><div class="panel-title"><div class="panel-title-avatar">🩺</div><div class="panel-title-bubble">💬 Anything else to share?</div></div>'
                     '<div class="small-note">Chat with the assistant, or submit when ready.</div>',
                     unsafe_allow_html=True)
 
