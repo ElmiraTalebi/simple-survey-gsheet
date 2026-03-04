@@ -400,7 +400,7 @@ html, body, [data-testid="stAppViewContainer"] {
 [data-testid="stAudioInput"] { margin: 0 !important; padding: 0 !important; }
 [data-testid="stAudioInput"] > label { display: none !important; }
 
-/* Outer wrapper: exact same size/shape as the Send button */
+/* Outer wrapper */
 [data-testid="stAudioInput"] > div {
     height: 38px !important; min-height: 38px !important; max-height: 38px !important;
     width: 100% !important;
@@ -412,39 +412,41 @@ html, body, [data-testid="stAppViewContainer"] {
     overflow: hidden !important;
     display: flex !important; align-items: center !important; justify-content: center !important;
     cursor: pointer !important;
+    position: relative !important;
 }
 [data-testid="stAudioInput"] > div:hover {
     border-color: var(--accent) !important;
     background: var(--accent-lt) !important;
 }
 
-/* Inner layout — center the icon, crush everything else */
+/* Inner row — flex center */
 [data-testid="stAudioInput"] > div > div {
     display: flex !important; align-items: center !important;
     justify-content: center !important;
     width: 100% !important; height: 100% !important;
     gap: 0 !important; padding: 0 !important;
-    overflow: hidden !important;
 }
 
-/* Hide ALL text nodes: timer (00:00), labels, status spans */
-[data-testid="stAudioInput"] p,
-[data-testid="stAudioInput"] span:not(:has(svg)),
-[data-testid="stAudioInput"] [class*="timer"],
-[data-testid="stAudioInput"] [class*="Timer"],
-[data-testid="stAudioInput"] [class*="label"],
-[data-testid="stAudioInput"] [class*="text"],
-[data-testid="stAudioInput"] div > span { display: none !important; }
+/* Hide only the timer text (it lives in a <p> or bare text span next to the button) */
+[data-testid="stAudioInput"] p { display: none !important; }
+[data-testid="stAudioInput"] > div > div > span { display: none !important; }
 
-/* Keep the mic SVG icon visible and centred */
+/* Mic icon button itself — just size it nicely */
+[data-testid="stAudioInput"] button {
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+    display: flex !important; align-items: center !important; justify-content: center !important;
+    width: 100% !important; height: 100% !important;
+    cursor: pointer !important;
+}
 [data-testid="stAudioInput"] svg {
-    display: block !important;
     width: 18px !important; height: 18px !important;
-    color: var(--text-muted) !important; flex-shrink: 0 !important;
+    color: var(--text-muted) !important;
+    flex-shrink: 0 !important;
 }
-[data-testid="stAudioInput"] > div:hover svg {
-    color: var(--accent) !important;
-}
+[data-testid="stAudioInput"] > div:hover svg { color: var(--accent) !important; }
 
 /* ── Text inputs ── */
 [data-testid="stTextInput"] > div > div > input {
