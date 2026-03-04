@@ -209,9 +209,10 @@ def get_gpt_reply_with_suggestions(extra_context: str = ""):
     suggestion_instruction = (
         "\n\nRESPONSE FORMAT — you MUST reply with ONLY valid JSON, no markdown fences:\n"
         '{"question": "Your single follow-up question here", '
-        '"suggested_answers": ["likely answer 1", "likely answer 2", "likely answer 3"]}\n'
-        "The suggested_answers should be 2-3 short, realistic patient responses (5-12 words each) "
-        "that a cancer patient would likely give to YOUR question. Make them range from positive to concerning. "
+        '"suggested_answers": ["short answer 1", "short answer 2", "short answer 3"]}\n'
+        "The suggested_answers MUST be 2-3 very brief patient responses — MAX 4 words each. "
+        "Examples: \"Much better\", \"About the same\", \"Worse than before\", \"Yes, a little\", \"No, not really\". "
+        "Keep them short enough to fit on a button. Range from positive to concerning. "
         "Output ONLY the JSON object — no extra text, no code fences."
     )
     system_prompt = build_system_prompt(extra_context) + suggestion_instruction
@@ -292,9 +293,11 @@ def get_opening_message_with_suggestions(last: Dict, name: str):
         "Do NOT say 'Thank you', 'Great', 'I see', or any filler. Be warm but direct.\n\n"
         "RESPONSE FORMAT — you MUST reply with ONLY valid JSON, no markdown fences:\n"
         '{"question": "Your full opening message here", '
-        '"suggested_answers": ["likely answer 1", "likely answer 2", "likely answer 3"]}\n'
-        "The suggested_answers should be 2-3 short, realistic patient responses (5-12 words each) "
-        "that range from positive to concerning. Output ONLY the JSON object."
+        '"suggested_answers": ["short answer 1", "short answer 2", "short answer 3"]}\n'
+        "The suggested_answers MUST be 2-3 very brief patient responses — MAX 4 words each. "
+        "Examples: \"Much better now\", \"About the same\", \"Gotten worse\". "
+        "Keep them short enough to fit on a button. Range from positive to concerning. "
+        "Output ONLY the JSON object."
     )
     try:
         r = openai_client.chat.completions.create(
