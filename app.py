@@ -995,7 +995,7 @@ st.markdown('''
 # STAGE -1 — Name entry
 # ════════════════════════════════════════════════════════════
 if st.session_state.stage == -1:
-    st.markdown('<div class="panel-card"><div class="panel-title"><div class="panel-title-avatar">🩺</div><div class="panel-title-bubble">Welcome · Please enter your name</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="panel"><div class="panel-title"><div class="panel-title-avatar">🩺</div><div class="panel-title-bubble">Welcome · Please enter your name</div></div>', unsafe_allow_html=True)
     name_input = st.text_input("Your name:", value=st.session_state.patient_name)
     if st.button("Start Check-In"):
         if name_input.strip():
