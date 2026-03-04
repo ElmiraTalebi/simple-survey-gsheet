@@ -620,7 +620,10 @@ elif stage == 1:
 elif stage == 2:
     pain_ctx = (
         "Patient answered whether they have pain. "
-        "Ask ONE focused follow-up about their pain situation. No filler."
+        "Ask ONE follow-up about the nature or severity of their pain — "
+        "e.g. how intense it is, how long they've had it, or what it feels like. "
+        "IMPORTANT: Do NOT ask where the pain is located — location is collected separately in the next step. "
+        "No filler."
     )
     st.markdown('<div class="panel">', unsafe_allow_html=True)
     st.markdown('<div class="panel-title">Do you have any pain today?</div>', unsafe_allow_html=True)
