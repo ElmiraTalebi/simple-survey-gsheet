@@ -1147,8 +1147,8 @@ elif stage == 2:
         st.markdown('<div class="small-note">Choose an option or describe in your own words</div>',
                     unsafe_allow_html=True)
 
-        # Row 1: [Yes] [No]
-        c1, c2 = st.columns(2, gap="small")
+        # [Yes] [No] [text + ↑] [🎤]
+        c1, c2, c_main, c_mic = st.columns([1.7, 1.7, 4, 2.5], gap="small")
         with c1:
             if st.button("✅ Yes, pain", use_container_width=True, key="pain_yes"):
                 st.session_state.pain_yesno = True
@@ -1157,9 +1157,18 @@ elif stage == 2:
             if st.button("🙂 No pain", use_container_width=True, key="pain_no"):
                 st.session_state.pain_yesno = False
                 on_patient_answer("No, I don't have any pain today.", 2, pain_ctx); st.rerun()
-        # Row 2: [text + ↑] [🎤]
-        render_text_mic_row(stage_id=2, extra_context=pain_ctx,
-                            placeholder="Or describe…")
+        with c_main:
+            typed_pain = st.text_input("", placeholder="Or describe…",
+                                       key="txt_2", label_visibility="collapsed")
+            send_pain = st.button("↑", key="txtsend_2")
+        with c_mic:
+            audio_pain = None
+            if hasattr(st, "audio_input"):
+                audio_pain = st.audio_input("", key=f"mic_2_{st.session_state.mic_key_counter}",
+                                            label_visibility="collapsed")
+        if send_pain and typed_pain and typed_pain.strip():
+            on_patient_answer(typed_pain.strip(), 2, pain_ctx); st.rerun()
+        if handle_voice(audio_pain, 2, pain_ctx): st.rerun()
 
     else:
         render_inline_stage_messages(stage_id=2, extra_context=pain_ctx)
@@ -1284,14 +1293,10 @@ elif stage == 4:
     else:
         render_inline_stage_messages(stage_id=4, extra_context=symptom_ctx)
         stage4_msgs = [m for m in st.session_state.messages if m.get("stage") == 4]
-        last_is_doctor = stage4_msgs and stage4_msgs[-1].get("role") == "doctor"
-        if last_is_doctor:
-            # Doctor asked a follow-up — let patient reply
+        if stage4_msgs and stage4_msgs[-1].get("role") == "doctor":
             render_followup_input(stage_id=4, extra_context=symptom_ctx)
-        else:
-            # Patient replied and no more follow-up was generated — move on
-            advance_stage()
-            st.rerun()
+        st.markdown("<hr class='divider'>", unsafe_allow_html=True)
+        render_next_button("Finish check-in →")
 
     st.markdown("</div>", unsafe_allow_html=True)
 
