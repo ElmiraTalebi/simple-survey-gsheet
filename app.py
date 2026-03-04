@@ -583,7 +583,7 @@ def toggle_body_part(part):
     else: st.session_state.selected_parts.add(part)
 
 MAX_FOLLOWUPS_BY_MODE = {
-    "simple":         {0:0, 1:0, 2:0, 3:0, 4:0},
+    "simple":         {0:1, 1:1, 2:1, 3:1, 4:1},
     "hybrid":         {0:1, 1:3, 2:3, 3:3, 4:3},
     "conversational": {0:2, 1:4, 2:4, 3:4, 4:4},
 }
@@ -615,13 +615,10 @@ def on_patient_answer(text: str, stage_id: int, extra_context: str = ""):
     add_patient(text, stage=stage_id)
     mark_answered(stage_id)
     mode = st.session_state.get("interaction_mode", "hybrid")
-    if mode == "simple":
-        # Simple mode: no GPT follow-ups at all
-        return
     if can_followup(stage_id):
         record_followup(stage_id)
         with st.spinner("Assistant is thinking…"):
-            if mode == "conversational":
+            if mode in ("simple", "conversational"):
                 reply, suggestions = get_gpt_reply_with_suggestions(extra_context=extra_context)
                 if suggestions:
                     st.session_state.pending_suggestions[stage_id] = suggestions
@@ -639,12 +636,10 @@ def on_followup_reply(text: str, stage_id: int, extra_context: str = ""):
     # Clear any previous suggestions for this stage
     st.session_state.pending_suggestions.pop(stage_id, None)
     mode = st.session_state.get("interaction_mode", "hybrid")
-    if mode == "simple":
-        return
     if can_followup(stage_id):
         record_followup(stage_id)
         with st.spinner("Assistant is thinking…"):
-            if mode == "conversational":
+            if mode in ("simple", "conversational"):
                 reply, suggestions = get_gpt_reply_with_suggestions(extra_context=extra_context)
                 if suggestions:
                     st.session_state.pending_suggestions[stage_id] = suggestions
@@ -711,10 +706,6 @@ def render_followup_input(stage_id: int, extra_context: str = ""):
     Only shown when the stage has been answered AND GPT still has follow-up budget.
     Now also renders GPT-suggested answer buttons when available.
     """
-    mode = st.session_state.get("interaction_mode", "hybrid")
-    if mode == "simple":
-        return  # No follow-up input in simple mode
-
     # ── Render suggested-answer buttons if GPT provided them ──
     suggestions = st.session_state.pending_suggestions.get(stage_id, [])
     if suggestions:
@@ -916,9 +907,61 @@ if stage == 0:
     render_inline_stage_messages(stage_id=0)
 
     if _mode() == "simple":
-        # Simple mode: just show the recap and let them proceed
-        st.markdown("<hr class='divider'>", unsafe_allow_html=True)
-        render_next_button("Start today's check-in →")
+        # Simple mode: show GPT-suggested answer buttons for the recap question
+        stage0_msgs = [m for m in st.session_state.messages if m.get("stage") == 0]
+        last_is_doctor = stage0_msgs and stage0_msgs[-1].get("role") == "doctor"
+
+        if last_is_doctor and not is_answered(0):
+            # Generate suggestions if we don't have any yet
+            if 0 not in st.session_state.pending_suggestions:
+                with st.spinner("Preparing quick answers…"):
+                    _, suggestions = get_gpt_reply_with_suggestions(extra_context=history_ctx)
+                    if suggestions:
+                        st.session_state.pending_suggestions[0] = suggestions
+                    else:
+                        st.session_state.pending_suggestions[0] = [
+                            "Doing better", "About the same", "Feeling worse"
+                        ]
+                st.rerun()
+
+            suggestions = st.session_state.pending_suggestions.get(0, [])
+            if suggestions:
+                st.markdown('<div class="small-note">Quick answers — or type your own below</div>',
+                            unsafe_allow_html=True)
+                sug_cols = st.columns(len(suggestions), gap="small")
+                for idx, sug_text in enumerate(suggestions):
+                    with sug_cols[idx]:
+                        if st.button(sug_text, key=f"sug_s0_{idx}", use_container_width=True):
+                            st.session_state.pending_suggestions.pop(0, None)
+                            on_patient_answer(sug_text, 0, history_ctx)
+                            st.rerun()
+
+            # Fallback text + voice
+            c_txt, c_send, c_mic = st.columns([6, 1, 1], gap="small")
+            with c_txt:
+                typed_s0 = st.text_input("", placeholder="Or type your reply…",
+                                         key="txt_0_simple", label_visibility="collapsed")
+            with c_send:
+                send_s0 = st.button("↑", key="txtsend_0_simple", use_container_width=True)
+            with c_mic:
+                audio_s0 = None
+                if hasattr(st, "audio_input"):
+                    audio_s0 = st.audio_input("", key=f"mic_0_{st.session_state.mic_key_counter}",
+                                              label_visibility="collapsed")
+            if send_s0 and typed_s0 and typed_s0.strip():
+                st.session_state.pending_suggestions.pop(0, None)
+                on_patient_answer(typed_s0.strip(), 0, history_ctx); st.rerun()
+            if handle_voice(audio_s0, 0, history_ctx):
+                st.session_state.pending_suggestions.pop(0, None)
+                st.rerun()
+
+        if last_is_doctor and is_answered(0):
+            # Show follow-up with suggestions if GPT asked one
+            render_followup_input(stage_id=0, extra_context=history_ctx)
+
+        if is_answered(0):
+            st.markdown("<hr class='divider'>", unsafe_allow_html=True)
+            render_next_button("Start today's check-in →")
     else:
         # Determine if the last message in this stage is from the doctor (needs a reply)
         stage0_msgs = [m for m in st.session_state.messages if m.get("stage") == 0]
