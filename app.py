@@ -827,19 +827,16 @@ elif stage == 2:
                 if st.button(lbl, key=f"bp_{part}", use_container_width=True):
                     toggle_body_part(part)
                     if part not in st.session_state.selected_parts:
-                        # Deselected — clear severity and any followup for this part
                         st.session_state.pain_severities.pop(part, None)
                         st.session_state.part_followup_q.pop(part, None)
                         st.session_state.part_followup_a.pop(part, None)
                     st.rerun()
 
-                # Inline severity slider — pre-seeded with last visit value
                 if part in st.session_state.selected_parts:
                     default_sev = prev_sevs.get(part, 5)
                     current_sev = st.session_state.pain_severities.get(part, default_sev)
                     sev_val = st.slider(
-                        f"_{part}_sev",
-                        0, 10, current_sev,
+                        f"_{part}_sev", 0, 10, current_sev,
                         key=f"sev_{part}",
                         label_visibility="collapsed",
                         help=f"{part} pain: 0 = none, 10 = worst"
@@ -855,72 +852,71 @@ elif stage == 2:
                         else:          delta_str = " = same as last visit"
                     st.markdown(
                         f'<div style="text-align:right;font-size:12px;font-weight:700;'
-                        f'color:{color};margin:-8px 0 6px;">'
-                        f'{sev_val}/10{delta_str}</div>',
+                        f'color:{color};margin:-8px 0 6px;">{sev_val}/10{delta_str}</div>',
                         unsafe_allow_html=True
                     )
-
-                    # ── Inline per-part follow-up ──────────────────────────
+                    # Compute & cache question — rendered outside columns below
                     is_new = part not in prev_locs
                     q = _part_followup_question(part, sev_val, is_new)
-
-                    if q:
-                        # Store the question so it persists across reruns
-                        if part not in st.session_state.part_followup_q:
-                            st.session_state.part_followup_q[part] = q
-
-                        stored_q = st.session_state.part_followup_q[part]
-                        existing_ans = st.session_state.part_followup_a.get(part)
-
-                        if existing_ans:
-                            # Already answered — show it quietly
-                            st.markdown(
-                                f'<div style="font-size:12px;color:#8a8075;margin:-4px 0 6px;'
-                                f'padding:4px 8px;border-left:2px solid var(--accent-md);">'
-                                f'🩺 {stored_q}<br>'
-                                f'<span style="color:var(--accent);font-weight:600;">✓ {existing_ans}</span></div>',
-                                unsafe_allow_html=True
-                            )
-                        else:
-                            # Show follow-up question + quick replies inline
-                            st.markdown(
-                                f'<div class="inline-followup" style="margin:4px 0;">🩺 {stored_q}</div>',
-                                unsafe_allow_html=True
-                            )
-                            # Build context-appropriate quick replies
-                            sq = stored_q.lower()
-                            if "first notice" in sq or "when did" in sq:
-                                quick = ["Today", "A few days ago", "About a week ago", "Over a week ago"]
-                            elif "swallow" in sq or "eat" in sq:
-                                quick = ["Yes, makes it hard", "Somewhat", "No, not really"]
-                            elif "movement" in sq or "activit" in sq:
-                                quick = ["Yes, limits me", "A little", "Not really"]
-                            elif "worse" in sq or "what made" in sq or "increased" in sq:
-                                quick = ["More activity", "Don't know", "It just got worse"]
-                            else:
-                                quick = ["Yes", "Somewhat", "No"]
-
-                            ctr = st.session_state.mic_key_counter
-                            qc = st.columns(len(quick), gap="small")
-                            for qi, qr in enumerate(quick):
-                                with qc[qi]:
-                                    if st.button(qr, key=f"pfu_{part}_{qi}_{ctr}",
-                                                 use_container_width=True):
-                                        st.session_state.part_followup_a[part] = qr
-                                        st.rerun()
-                            # Also allow free-text
-                            typed_fu = st.text_input(
-                                "", placeholder="Or type your answer…",
-                                key=f"pfu_txt_{part}_{ctr}",
-                                label_visibility="collapsed"
-                            )
-                            if st.button("↑", key=f"pfu_send_{part}_{ctr}") and typed_fu.strip():
-                                st.session_state.part_followup_a[part] = typed_fu.strip()
-                                st.rerun()
+                    if q and part not in st.session_state.part_followup_q:
+                        st.session_state.part_followup_q[part] = q
+                    elif not q:
+                        # Severity dropped below threshold — clear stale followup
+                        st.session_state.part_followup_q.pop(part, None)
+                        st.session_state.part_followup_a.pop(part, None)
 
             # Other location — button-only until clicked
             if st.button("➕ Other location", key="bp_other", use_container_width=True):
                 st.session_state.show_other[2] = True; st.rerun()
+
+        # ── Per-part follow-up questions — full width, below the columns ──
+        ctr = st.session_state.mic_key_counter
+        for part in list(st.session_state.part_followup_q.keys()):
+            if part not in st.session_state.selected_parts:
+                continue  # part was deselected
+            stored_q = st.session_state.part_followup_q[part]
+            existing_ans = st.session_state.part_followup_a.get(part)
+
+            if existing_ans:
+                st.markdown(
+                    f'<div style="font-size:13px;color:#8a8075;margin:6px 0;'
+                    f'padding:6px 12px;border-left:3px solid var(--accent-md);'
+                    f'background:var(--accent-lt);border-radius:8px;">'
+                    f'🩺 {stored_q}<br>'
+                    f'<span style="color:var(--accent);font-weight:700;">✓ {existing_ans}</span></div>',
+                    unsafe_allow_html=True
+                )
+            else:
+                st.markdown(
+                    f'<div class="inline-followup" style="margin:8px 0;">🩺 {stored_q}</div>',
+                    unsafe_allow_html=True
+                )
+                sq = stored_q.lower()
+                if "first notice" in sq or "when did" in sq:
+                    quick = ["Today", "A few days ago", "About a week ago", "Over a week ago"]
+                elif "swallow" in sq or "eat" in sq:
+                    quick = ["Yes, makes it hard", "Somewhat", "No, not really"]
+                elif "movement" in sq or "activit" in sq:
+                    quick = ["Yes, limits me", "A little", "Not really"]
+                elif "worse" in sq or "increased" in sq:
+                    quick = ["More activity", "Don't know", "It just got worse"]
+                else:
+                    quick = ["Yes", "Somewhat", "No"]
+                qc = st.columns(len(quick), gap="small")
+                for qi, qr in enumerate(quick):
+                    with qc[qi]:
+                        if st.button(qr, key=f"pfu_{part}_{qi}_{ctr}", use_container_width=True):
+                            st.session_state.part_followup_a[part] = qr
+                            st.rerun()
+                c_ft, c_fs = st.columns([6, 1], gap="small")
+                with c_ft:
+                    typed_fu = st.text_input("", placeholder="Or type your answer…",
+                                             key=f"pfu_txt_{part}_{ctr}",
+                                             label_visibility="collapsed")
+                with c_fs:
+                    if st.button("↑", key=f"pfu_send_{part}_{ctr}") and typed_fu.strip():
+                        st.session_state.part_followup_a[part] = typed_fu.strip()
+                        st.rerun()
 
         # Other location free-text input (outside columns so it spans full width)
         if st.session_state.show_other.get(2):
