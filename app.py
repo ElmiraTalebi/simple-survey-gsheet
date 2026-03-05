@@ -154,47 +154,32 @@ def transcribe_audio(audio_bytes: bytes) -> str:
         ).text or "").strip()
     except Exception as e: return f"(Transcription failed: {e})"
 
-# ── Follow-Up Logic ────────────────────────────────────────
-# Follow-ups fire ONLY when clinically concerning.
-# "Minimize time — only drill when needed." (Professor)
+# ── Symptom follow-up — fires ONLY for urgent NEW symptoms ──
+# Rule: ONE question max, ONLY if symptom is clinically urgent AND new vs last visit.
+# "New" = not reported last visit. Always-urgent = Fever, SOB, Vomiting (ask even if recurring).
 
-def get_curated_followup(stage_id: int) -> Optional[str]:
-    """Return ONE specific follow-up ONLY if the answer is clinically concerning.
-    Stage 2 (pain): per-part followups are handled inline on the body map — return None here.
-    Stage 3 (eating): only ask if patient can't eat / eating is harder.
-    Stage 4 (symptoms): ask about the single most urgent reported symptom.
-    """
-    if stage_id == 2:
-        # Inline per-part followups cover this — no additional question needed
+_URGENT_NEW = [
+    ("Fever / chills",           "Have you taken your temperature? What was it?"),
+    ("Shortness of breath",      "Is it happening at rest, or only with activity?"),
+    ("Vomiting",                 "How many times in the last 24 hours?"),
+    ("Trouble swallowing",       "Are you coughing or choking when you swallow?"),
+    ("Dizziness / unsteadiness", "Does it get worse when you stand up?"),
+    ("Diarrhea",                 "How many episodes today?"),
+    ("Constipation",             "How many days since your last bowel movement?"),
+    ("Mouth sores",              "Are the sores making it hard to eat or drink?"),
+]
+_ALWAYS_URGENT = {"Fever / chills", "Shortness of breath", "Vomiting"}
+
+def get_symptom_followup() -> Optional[str]:
+    """Return ONE question for the highest-priority urgent/new symptom, or None."""
+    symptoms = set(st.session_state.get("symptoms", []))
+    if not symptoms:
         return None
-
-    if stage_id == 3:  # eating
-        status = st.session_state.get("eating_status")
-        if status == "cant_eat":
-            return "Are you able to get any fluids or nutrition shakes down at all?"
-        if status == "worse":
-            return "Is it mainly pain, nausea, or no appetite that's making it harder to eat?"
-        return None
-
-    if stage_id == 4:  # symptoms — ask about the single most urgent symptom
-        symptoms = st.session_state.get("symptoms", [])
-        # Ordered by clinical urgency — stop at first match
-        URGENT_FIRST = [
-            ("Fever / chills",           "Have you taken your temperature? What was it?"),
-            ("Shortness of breath",      "Is the shortness of breath happening at rest or only with activity?"),
-            ("Vomiting",                 "How many times in the last 24 hours?"),
-            ("Trouble swallowing",       "Are you coughing or choking when you try to swallow?"),
-            ("Dizziness / unsteadiness", "Does the dizziness happen when you go from sitting to standing?"),
-            ("Diarrhea",                 "How many episodes today?"),
-            ("Constipation",             "How many days since your last bowel movement?"),
-            ("Nausea",                   "Are you able to keep food and fluids down?"),
-            ("Mouth sores",              "Are the mouth sores making it hard to eat or drink?"),
-        ]
-        for sym, q in URGENT_FIRST:
-            if sym in symptoms:
-                return q
-        return None
-
+    past = st.session_state.get("past_checkins", [])
+    prev = set(past[-1].get("symptoms", [])) if past else set()
+    for sym, q in _URGENT_NEW:
+        if sym in symptoms and (sym in _ALWAYS_URGENT or sym not in prev):
+            return q
     return None
 
 # ── CSS ─────────────────────────────────────────────────────
@@ -480,171 +465,125 @@ div[data-reply-pills] ~ div .stButton > button {
 </style>
 """, unsafe_allow_html=True)
 
-# ── Session state ───────────────────────────────────────────
-# STAGES (redesigned from clinical transcripts):
-#  -1 = name entry
-#   0 = quick status (returning) — fast path if nothing changed
-#   1 = overall feeling (PROMIS) — follow-up ONLY if fair/poor
-#   2 = pain: location → severity → timing (follow-up if ≥5 or new)
-#   3 = eating & nutrition (from transcripts — asked in 100% of visits)
-#   4 = symptom checklist (clinically-derived, "Other" hidden)
-#   5 = submit + optional note
+# ── Session state ────────────────────────────────────────────
+# Stages:  -1=name  0=returning status  1=new patient greeting
+#           2=pain map+timing  3=eating  4=symptoms  5=submit
 defaults = {
     "messages": [], "stage": -1, "patient_name": "",
-    "selected_parts": set(), "pain_yesno": None, "feeling_level": None,
+    "selected_parts": set(), "pain_yesno": None,
     "symptoms": [], "submitted": False, "past_checkins": [],
     "last_audio_hash": None, "mic_key_counter": 0,
-    "stage_answered": {}, "followup_fired": {},
     "pain_severities": {}, "pain_timing": None,
     "eating_status": None, "food_type": None,
     "shakes_per_day": None, "hydration": None,
-    "show_other": {},  # {stage_id: bool}
+    "show_other": {},
     "fast_path": False,
-    "pain_sub": "map",   # sub-stages within pain: map → timing → done
-    "eat_sub": "status", # sub-stages within eating: status → type → shakes → hydration → done
-    "part_followup_q": {},  # {body_part: question}
-    "part_followup_a": {},  # {body_part: answer}
-    "part_fu_logged":  False,
-    "session_id": None,     # set on login to detect new sessions
+    "pain_sub": "map",      # map → timing → done
+    "eat_sub": "status",    # status → type → shakes → hydration → done
+    "part_followup_q": {},  # {body_part: question_str}
+    "part_followup_a": {},  # {body_part: answer_str}
+    "part_fu_logged": False,
+    "sym_fu_q": None,       # the ONE symptom followup question (or None)
+    "sym_fu_a": None,       # patient's answer to it (or None)
 }
 for k, v in defaults.items():
-    if k not in st.session_state: st.session_state[k] = v
+    if k not in st.session_state:
+        st.session_state[k] = v
 
-# ── Core helpers ────────────────────────────────────────────
+# ── Core helpers ──────────────────────────────────────────────
 def add_doctor(text, stage=None):
-    s = stage if stage is not None else st.session_state.get("stage", -1)
-    st.session_state.messages.append({"role":"doctor","content":text,"stage":s})
+    s = stage if stage is not None else st.session_state.stage
+    st.session_state.messages.append({"role": "doctor", "content": text, "stage": s})
 
 def add_patient(text, stage=None):
-    s = stage if stage is not None else st.session_state.get("stage", -1)
-    st.session_state.messages.append({"role":"patient","content":text,"stage":s})
-
-def is_answered(sid): return st.session_state.stage_answered.get(sid, False)
-def mark_answered(sid): st.session_state.stage_answered[sid] = True
-def followup_fired(sid): return st.session_state.followup_fired.get(sid, False)
-def mark_followup_fired(sid): st.session_state.followup_fired[sid] = True
+    s = stage if stage is not None else st.session_state.stage
+    st.session_state.messages.append({"role": "patient", "content": text, "stage": s})
 
 def toggle_body_part(part):
-    if part in st.session_state.selected_parts: st.session_state.selected_parts.remove(part)
-    else: st.session_state.selected_parts.add(part)
+    if part in st.session_state.selected_parts:
+        st.session_state.selected_parts.discard(part)
+        st.session_state.pain_severities.pop(part, None)
+        st.session_state.part_followup_q.pop(part, None)
+        st.session_state.part_followup_a.pop(part, None)
+    else:
+        st.session_state.selected_parts.add(part)
 
 def advance_stage():
     s = st.session_state.stage
-    # Fast path only applies when leaving stage 0 (the "About the same" shortcut)
     if st.session_state.fast_path and s == 0:
         st.session_state.stage = 5; return
-    if   s == 0: st.session_state.stage = 2  # stage 1 (feeling) removed
-    elif s == 1: st.session_state.stage = 2  # new patients start at stage 1
-    elif s == 2: st.session_state.stage = 3  # eating is always asked
+    if   s == 0: st.session_state.stage = 2
+    elif s == 1: st.session_state.stage = 2
+    elif s == 2: st.session_state.stage = 3
     elif s == 3: st.session_state.stage = 4
     elif s == 4: st.session_state.stage = 5
 
-def on_answer(text: str, stage_id: int):
-    """Record answer. Fire ONE curated follow-up only if concerning."""
-    add_patient(text, stage=stage_id)
-    mark_answered(stage_id)
-    if not followup_fired(stage_id):
-        fu = get_curated_followup(stage_id)
-        if fu:
-            mark_followup_fired(stage_id)
-            add_doctor(fu, stage=stage_id)
-
-def on_followup_reply(text: str, stage_id: int):
-    """Patient replied to curated follow-up. No further questions."""
-    add_patient(text, stage=stage_id)
-
-def handle_voice(audio_value, stage_id: int, is_followup: bool = False) -> bool:
-    if audio_value is None: return False
+def handle_voice(audio_value) -> Optional[str]:
+    if audio_value is None: return None
     try:
         ab = audio_value.getvalue()
         ah = hashlib.sha1(ab).hexdigest()
-    except: return False
-    if not ab or not ah or ah == st.session_state.last_audio_hash: return False
+    except: return None
+    if not ab or ah == st.session_state.last_audio_hash: return None
     st.session_state.last_audio_hash = ah
     st.session_state.mic_key_counter += 1
     with st.spinner("Transcribing…"):
         t = transcribe_audio(ab)
-    if t and not t.startswith("(Transcription failed"):
-        st.info(f'Heard: "{t}"')
-        if is_followup: on_followup_reply(t, stage_id)
-        else: on_answer(t, stage_id)
-        return True
-    return False
+    return t if t and not t.startswith("(Transcription") else None
 
 def render_chat_window():
     current = st.session_state.stage
-    past_msgs = [m for m in st.session_state.messages if m.get("stage", -99) < current]
-    if not past_msgs: return
+    past = [m for m in st.session_state.messages if m.get("stage", -99) < current]
+    if not past: return
     st.markdown('<div class="chat-window">', unsafe_allow_html=True)
-    for msg in past_msgs:
-        if msg.get("role") == "doctor":
+    for m in past:
+        if m["role"] == "doctor":
             st.markdown(f'<div class="row-left"><div class="avatar">🩺</div>'
-                        f'<div class="bubble-doc">{msg.get("content","")}</div></div>',
-                        unsafe_allow_html=True)
+                        f'<div class="bubble-doc">{m["content"]}</div></div>', unsafe_allow_html=True)
         else:
-            st.markdown(f'<div class="row-right"><div class="bubble-pat">{msg.get("content","")}</div>'
+            st.markdown(f'<div class="row-right"><div class="bubble-pat">{m["content"]}</div>'
                         f'<div class="avatar">🙂</div></div>', unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
 def render_inline(stage_id: int):
-    for msg in [m for m in st.session_state.messages if m.get("stage") == stage_id]:
-        if msg["role"] == "doctor":
-            st.markdown(f'<div class="inline-followup">🩺 {msg["content"]}</div>',
-                        unsafe_allow_html=True)
+    for m in [m for m in st.session_state.messages if m.get("stage") == stage_id]:
+        if m["role"] == "doctor":
+            st.markdown(f'<div class="inline-followup">🩺 {m["content"]}</div>', unsafe_allow_html=True)
         else:
-            st.markdown(f'<div class="inline-patient">{msg["content"]} 🙂</div>',
-                        unsafe_allow_html=True)
+            st.markdown(f'<div class="inline-patient">{m["content"]} 🙂</div>', unsafe_allow_html=True)
 
-def render_followup_input(stage_id: int):
-    """Text + mic for replying to a curated follow-up."""
+def render_text_mic(key_prefix: str, placeholder: str = "Type your answer…") -> Optional[str]:
+    """Text input + optional mic. Returns submitted text or None."""
     ctr = st.session_state.mic_key_counter
-    st.markdown('<div class="small-note" style="margin-top:6px;">Or type / speak your answer:</div>',
-                unsafe_allow_html=True)
-    c_main, c_mic = st.columns([7, 2.5], gap="small")
-    with c_main:
-        typed = st.text_input("", placeholder="Type your reply here…",
-                              key=f"fu_txt_{stage_id}_{ctr}", label_visibility="collapsed")
-        send = st.button("↑", key=f"fu_send_{stage_id}_{ctr}")
-    with c_mic:
-        audio = None
-        if hasattr(st, "audio_input"):
-            audio = st.audio_input("", label_visibility="collapsed",
-                                   key=f"fu_mic_{stage_id}_{ctr}")
-    if send and typed and typed.strip():
-        on_followup_reply(typed.strip(), stage_id); st.rerun()
-    if handle_voice(audio, stage_id, is_followup=True): st.rerun()
-
-def render_other_input(stage_id: int, placeholder: str = "Describe…"):
-    """Text input shown only after clicking 'Other'."""
-    ctr = st.session_state.mic_key_counter
-    st.markdown('<div class="small-note" style="margin-top:6px;">Type or speak your answer:</div>',
-                unsafe_allow_html=True)
-    c_main, c_mic = st.columns([7, 2.5], gap="small")
-    with c_main:
+    c_txt, c_mic = st.columns([7, 2.5], gap="small")
+    with c_txt:
         typed = st.text_input("", placeholder=placeholder,
-                              key=f"other_txt_{stage_id}_{ctr}", label_visibility="collapsed")
-        send = st.button("↑", key=f"other_send_{stage_id}_{ctr}")
+                              key=f"{key_prefix}_t{ctr}", label_visibility="collapsed")
+        if st.button("↑", key=f"{key_prefix}_s{ctr}") and typed.strip():
+            return typed.strip()
     with c_mic:
-        audio = None
         if hasattr(st, "audio_input"):
-            audio = st.audio_input("", key=f"other_mic_{stage_id}_{ctr}",
-                                   label_visibility="collapsed")
-    if send and typed and typed.strip():
-        on_answer(typed.strip(), stage_id); st.rerun()
-    if handle_voice(audio, stage_id): st.rerun()
+            audio = st.audio_input("", label_visibility="collapsed", key=f"{key_prefix}_m{ctr}")
+            t = handle_voice(audio)
+            if t: return t
+    return None
 
+def panel_q(text):
+    st.markdown(f'<div class="panel-title"><div class="panel-title-avatar">🩺</div>'
+                f'<div class="panel-title-bubble">{text}</div></div>', unsafe_allow_html=True)
+
+
+# ── Body SVG ─────────────────────────────────────────────────
 def body_svg(selected: Set[str], prev_locs: Optional[Set[str]] = None) -> str:
-    if prev_locs is None:
-        prev_locs = set()
+    if prev_locs is None: prev_locs = set()
     def fill(p):
-        if p in selected: return "#e63946"    # red — pain selected
-        if p in prev_locs: return "#f4a261"   # orange — pain last visit
-        return "#a8d5b5"                       # green — no pain
+        if p in selected: return "#e63946"
+        if p in prev_locs: return "#f4a261"
+        return "#a8d5b5"
     def stroke(p):
         if p in selected: return "#b52535"
         if p in prev_locs: return "#c47a3a"
         return "#6daa82"
-    s = "#6b7a90"
     return f"""<svg width="200" height="325" viewBox="0 0 320 520" xmlns="http://www.w3.org/2000/svg">
   <defs><filter id="sh"><feDropShadow dx="0" dy="2" stdDeviation="2" flood-color="rgba(0,0,0,0.12)"/></filter></defs>
   <g filter="url(#sh)"><circle cx="160" cy="70" r="38" fill="{fill('Head')}" stroke="{stroke('Head')}" stroke-width="2"/></g>
@@ -657,18 +596,12 @@ def body_svg(selected: Set[str], prev_locs: Optional[Set[str]] = None) -> str:
   <g filter="url(#sh)"><path d="M185 265 C200 310,202 360,194 410 C188 445,188 475,192 500 L165 500 C162 470,160 435,164 405 C170 355,168 312,155 265Z" fill="{fill('Right Leg')}" stroke="{stroke('Right Leg')}" stroke-width="2"/></g>
 </svg>""".strip()
 
-def panel_q(text):
-    """Render a panel-title question bubble."""
-    st.markdown(f'<div class="panel-title"><div class="panel-title-avatar">🩺</div>'
-                f'<div class="panel-title-bubble">{text}</div></div>', unsafe_allow_html=True)
-
-# ── Warnings ────────────────────────────────────────────────
+# ── Warnings + header ────────────────────────────────────────
 if openai_init_error: st.warning(f"LLM not ready: {openai_init_error}")
 _init_sheets()
 if sheets_init_error: st.warning(f"Sheets not ready: {sheets_init_error}")
 
-st.markdown('''
-<div class="app-header">
+st.markdown('''<div class="app-header">
   <div class="app-header-icon">🩺</div>
   <div>
     <div class="app-header-title">Symptom Check-In</div>
@@ -676,36 +609,49 @@ st.markdown('''
   </div>
 </div>''', unsafe_allow_html=True)
 
+
 # ════════════════════════════════════════════════════════════
 # STAGE -1 — Name entry
 # ════════════════════════════════════════════════════════════
 if st.session_state.stage == -1:
     st.markdown('<div class="panel">', unsafe_allow_html=True)
     panel_q("Welcome · Please enter your name")
-    name_input = st.text_input("Your name:", value=st.session_state.patient_name)
-    if st.button("Start Check-In"):
-        if name_input.strip():
-            st.session_state.patient_name = name_input.strip()
+    name_input = st.text_input("", placeholder="Your name…",
+                               value=st.session_state.patient_name,
+                               label_visibility="collapsed")
+    if st.button("Start Check-In", use_container_width=True, type="primary"):
+        name = name_input.strip()
+        if name:
+            st.session_state.patient_name = name
+            # Reset all per-session flow state
+            for k in ("part_followup_q","part_followup_a","part_fu_logged",
+                       "sym_fu_q","sym_fu_a","pain_sub","eat_sub","messages",
+                       "pain_yesno","pain_severities","pain_timing",
+                       "eating_status","food_type","shakes_per_day","hydration",
+                       "selected_parts","symptoms","fast_path","submitted",
+                       "stage_answered","followup_fired","show_other"):
+                st.session_state[k] = defaults.get(k, None) if k not in ("selected_parts","symptoms","messages","show_other","part_followup_q","part_followup_a","pain_severities") else type(defaults[k])()
+            st.session_state.part_fu_logged = False
+            st.session_state.fast_path = False
+            st.session_state.submitted = False
+            st.session_state.pain_sub = "map"
+            st.session_state.eat_sub = "status"
+            st.session_state.sym_fu_q = None
+            st.session_state.sym_fu_a = None
+            st.session_state.show_other = {}
             with st.spinner("Loading your history…"):
-                st.session_state.past_checkins = load_past_checkins(name_input.strip())
+                st.session_state.past_checkins = load_past_checkins(name)
             past = st.session_state.past_checkins
             if past:
                 last = past[-1]
-                # Pre-populate from last visit
                 st.session_state.selected_parts = set(last.get("pain_locations", []))
                 st.session_state.symptoms = list(last.get("symptoms", []))
                 st.session_state.pain_severities = dict(last.get("pain_severities", {}))
-                with st.spinner("Getting ready…"):
-                    opening = get_opening_message(last, name_input.strip())
-                add_doctor(opening, stage=0)
+                add_doctor(get_opening_message(last, name), stage=0)
                 st.session_state.stage = 0
             else:
-                add_doctor(f"Hi {name_input.strip()}! Let's go through a few quick questions.", stage=1)
+                add_doctor(f"Hi {name}! Let's do a quick check-in.", stage=1)
                 st.session_state.stage = 1
-            # Reset per-session state that must not carry over
-            st.session_state.part_fu_logged = False
-            st.session_state.part_followup_q = {}
-            st.session_state.part_followup_a = {}
             st.rerun()
         else:
             st.warning("Please enter your name.")
@@ -716,132 +662,109 @@ stage = st.session_state.stage
 render_chat_window()
 
 # ════════════════════════════════════════════════════════════
-# STAGE 0 — Quick status + fast path
+# STAGE 0 — Returning patient quick status
 # ════════════════════════════════════════════════════════════
 if stage == 0:
     st.markdown('<div class="panel">', unsafe_allow_html=True)
     render_inline(0)
-
-    if not is_answered(0):
+    s0_done = any(m["role"] == "patient" for m in st.session_state.messages if m.get("stage") == 0)
+    if not s0_done:
         c1, c2, c3 = st.columns(3, gap="small")
         with c1:
-            if st.button("👍 Better", use_container_width=True, key="s0_better"):
-                st.session_state.fast_path = True   # feeling better → no need to drill
-                on_answer("Better since last visit.", 0)
+            if st.button("👍 Better", use_container_width=True, key="s0_b"):
+                st.session_state.fast_path = True
+                add_patient("Better since last visit.", stage=0)
                 advance_stage(); st.rerun()
         with c2:
-            if st.button("➡️ About the same", use_container_width=True, key="s0_same"):
+            if st.button("➡️ About the same", use_container_width=True, key="s0_s"):
                 st.session_state.fast_path = True
-                on_answer("About the same as last visit.", 0)
+                add_patient("About the same.", stage=0)
                 advance_stage(); st.rerun()
         with c3:
-            if st.button("⚠️ Worse", use_container_width=True, key="s0_worse"):
-                st.session_state.fast_path = False  # worse → full check-in
-                on_answer("Worse than last visit.", 0)
+            if st.button("⚠️ Worse", use_container_width=True, key="s0_w"):
+                st.session_state.fast_path = False
+                add_patient("Things are worse.", stage=0)
                 advance_stage(); st.rerun()
     else:
-        stage_msgs = [m for m in st.session_state.messages if m.get("stage") == 0]
-        if stage_msgs and stage_msgs[-1]["role"] == "patient":
-            advance_stage(); st.rerun()
-
+        advance_stage(); st.rerun()
     st.markdown("</div>", unsafe_allow_html=True)
 
 # ════════════════════════════════════════════════════════════
-# STAGE 2 — Pain (location + severity + timing in one stage)
+# STAGE 1 — New patient (no history) — goes straight to pain
+# ════════════════════════════════════════════════════════════
+elif stage == 1:
+    # No UI needed — immediately advance to pain stage
+    advance_stage(); st.rerun()
+
+# ════════════════════════════════════════════════════════════
+# STAGE 2 — Pain: body map → timing → done
 # ════════════════════════════════════════════════════════════
 elif stage == 2:
+    import urllib.parse
     st.markdown('<div class="panel">', unsafe_allow_html=True)
+    pain_sub = st.session_state.pain_sub
+    past = st.session_state.get("past_checkins", [])
+    prev_locs = set(past[-1].get("pain_locations", [])) if past else set()
+    prev_sevs = dict(past[-1].get("pain_severities", {})) if past else {}
 
-    # Sub-stages within pain: map → timing → done
-    pain_sub = st.session_state.get("pain_sub", "map")
-
-    # Pain is assumed present; patient selects locations (or confirms none)
-    if st.session_state.get("pain_yesno") is None:
-        st.session_state.pain_yesno = True
-
+    # ── MAP ──────────────────────────────────────────────────
     if pain_sub == "map":
-        panel_q("Where do you feel pain? Tap a location to mark it.")
-        past = st.session_state.get("past_checkins", [])
-        prev_locs = set(past[-1].get("pain_locations", [])) if past else set()
-        prev_sevs = dict(past[-1].get("pain_severities", {})) if past else {}
-
+        panel_q("Where do you feel pain? Tap to mark, then rate severity.")
         if prev_locs:
-            st.markdown(
-                '<div class="small-note">🟢 = no pain reported · 🔴 = pain selected · '
-                '🟠 = pain last visit. Tap to mark, then adjust the slider.</div>',
-                unsafe_allow_html=True)
+            st.markdown('<div class="small-note">🔴 = selected · 🟠 = pain last visit · 🟢 = none</div>',
+                        unsafe_allow_html=True)
         else:
-            st.markdown(
-                '<div class="small-note">🟢 = no pain · tap a location to mark it as painful, '
-                'then rate severity with the slider.</div>',
-                unsafe_allow_html=True)
-
-        import urllib.parse
+            st.markdown('<div class="small-note">Tap a body part to mark it painful, then rate severity.</div>',
+                        unsafe_allow_html=True)
 
         col_svg, col_btns = st.columns([1, 1.4], gap="medium")
         with col_svg:
-            st.markdown(body_svg(st.session_state.selected_parts, prev_locs),
-                        unsafe_allow_html=True)
+            st.markdown(body_svg(st.session_state.selected_parts, prev_locs), unsafe_allow_html=True)
 
-        # Ensure per-part followup state dicts exist
-        if "part_followup_q" not in st.session_state:
-            st.session_state.part_followup_q = {}
-        if "part_followup_a" not in st.session_state:
-            st.session_state.part_followup_a = {}
-
-        def _part_followup_question(part: str, sev: int, is_new: bool) -> Optional[str]:
-            """
-            Return ONE clinically relevant follow-up question, or None.
-            Rules (strict — no filler questions):
-            - New location (not in last visit): ask when it started
-            - Severity ≥ 6 AND head/neck/throat/chest: ask if hard to swallow/eat
-            - Severity ≥ 6 AND limb: ask if limiting movement
-            - Severity increased >2 vs last visit: ask what made it worse
-            - Otherwise: None — do not ask anything
-            """
+        def _part_fu_q(part: str, sev: int) -> Optional[str]:
+            """ONE inline question per body part — strict rules:
+            - New location this visit: ask when it started
+            - Severity ≥ 7: ask functional impact relevant to region
+            - Severity jumped >2 vs last visit: ask what changed
+            - Otherwise: None"""
             loc = part.lower()
+            is_new = part not in prev_locs
+            prev_sev = prev_sevs.get(part, 0)
             if is_new:
                 return "When did this pain start?"
-            prev_sev = prev_sevs.get(part, 0)
-            if sev >= 6:
-                if any(r in loc for r in ("head", "throat", "neck", "chest", "abdomen")):
+            if sev >= 7:
+                if any(r in loc for r in ("head", "throat", "neck", "chest")):
                     return "Is it making it hard to swallow or eat?"
-                else:
-                    return "Is it limiting your movement or daily activities?"
+                if "abdomen" in loc:
+                    return "Is it constant or does it come and go?"
+                return "Is it limiting your movement?"
             if sev > prev_sev + 2:
-                return f"It went up from {prev_sev}→{sev}/10. What do you think made it worse?"
+                return f"Up from {prev_sev}→{sev}/10 — what do you think made it worse?"
             return None
 
-        def _quick_replies(q: str) -> list:
-            sq = q.lower()
-            if "when did" in sq or "start" in sq:
-                return ["Today", "2–3 days ago", "About a week ago", "Over a week ago"]
-            elif "swallow" in sq or "eat" in sq:
-                return ["Yes, makes it hard", "A little", "Not really"]
-            elif "movement" in sq or "activit" in sq or "limiting" in sq:
+        def _quick_replies_for(q: str) -> list:
+            ql = q.lower()
+            if "start" in ql or "when did" in ql:
+                return ["Today", "2–3 days ago", "~1 week ago", "Over a week ago"]
+            if "swallow" in ql or "eat" in ql:
+                return ["Yes, hard to eat/swallow", "A little", "Not really"]
+            if "constant" in ql or "come and go" in ql:
+                return ["Constant", "Comes and goes"]
+            if "movement" in ql or "limiting" in ql:
                 return ["Yes, limits me", "A little", "Not really"]
-            elif "worse" in sq or "made it" in sq:
-                return ["More activity", "Don't know", "It just got worse"]
+            if "worse" in ql or "made it" in ql:
+                return ["More activity", "Stress", "No idea"]
             return ["Yes", "Somewhat", "No"]
 
+        BODY_PARTS = ["Head", "Throat/Neck", "Chest", "Abdomen",
+                      "Left Arm", "Right Arm", "Left Leg", "Right Leg"]
+
         with col_btns:
-            BODY_PARTS = ["Head", "Throat/Neck", "Chest", "Abdomen",
-                          "Left Arm", "Right Arm", "Left Leg", "Right Leg"]
-
             for part in BODY_PARTS:
-                selected  = part in st.session_state.selected_parts
-                from_last = part in prev_locs
-
-                if selected:   lbl = f"🔴 {part} ✓"
-                elif from_last: lbl = f"🟠 {part}"
-                else:           lbl = f"🟢 {part}"
-
+                selected = part in st.session_state.selected_parts
+                lbl = f"🔴 {part} ✓" if selected else (f"🟠 {part}" if part in prev_locs else f"🟢 {part}")
                 if st.button(lbl, key=f"bp_{part}", use_container_width=True):
                     toggle_body_part(part)
-                    if part not in st.session_state.selected_parts:
-                        st.session_state.pain_severities.pop(part, None)
-                        st.session_state.part_followup_q.pop(part, None)
-                        st.session_state.part_followup_a.pop(part, None)
                     st.rerun()
 
                 if not selected:
@@ -849,88 +772,71 @@ elif stage == 2:
 
                 # Severity slider
                 default_sev = prev_sevs.get(part, 5)
-                current_sev = st.session_state.pain_severities.get(part, default_sev)
-                sev_val = st.slider(f"Pain level — {part}", 0, 10, current_sev,
-                                    key=f"sev_{part}", label_visibility="collapsed",
-                                    help=f"{part}: 0=none 10=worst")
+                cur_sev = st.session_state.pain_severities.get(part, default_sev)
+                sev_val = st.slider(f"Severity — {part}", 0, 10, cur_sev,
+                                    key=f"sev_{part}", label_visibility="collapsed")
                 st.session_state.pain_severities[part] = sev_val
-                prev_val = prev_sevs.get(part)
-                color = "#e63946" if sev_val >= 7 else "#f4a261" if sev_val >= 4 else "#2a9d8f"
-                delta_str = ""
-                if prev_val is not None:
-                    d = sev_val - prev_val
-                    delta_str = (f" ▲{d}" if d > 0 else f" ▼{abs(d)}" if d < 0 else " =same")
 
-                # Compute & cache followup — only trigger "new" for parts
-                # the patient actively tapped this session (not pre-populated from last visit)
-                is_new = (part not in prev_locs) and selected
-                q = _part_followup_question(part, sev_val, is_new)
+                color = "#e63946" if sev_val >= 7 else "#f4a261" if sev_val >= 4 else "#2a9d8f"
+                prev_v = prev_sevs.get(part)
+                d = sev_val - prev_v if prev_v is not None else None
+                delta = (f" ▲{d}" if d and d > 0 else f" ▼{abs(d)}" if d and d < 0 else " =same") if d is not None else ""
+
+                # Compute and cache per-part followup
+                q = _part_fu_q(part, sev_val)
                 if q and part not in st.session_state.part_followup_q:
                     st.session_state.part_followup_q[part] = q
-                elif not q:
-                    st.session_state.part_followup_q.pop(part, None)
-                    st.session_state.part_followup_a.pop(part, None)
+                elif not q and part in st.session_state.part_followup_q:
+                    # Slider moved out of trigger zone — clear it unless already answered
+                    if part not in st.session_state.part_followup_a:
+                        st.session_state.part_followup_q.pop(part, None)
 
-                stored_q   = st.session_state.part_followup_q.get(part)
-                existing_a = st.session_state.part_followup_a.get(part)
+                stored_q = st.session_state.part_followup_q.get(part)
+                stored_a = st.session_state.part_followup_a.get(part)
 
-                if stored_q and not existing_a:
-                    quick = _quick_replies(stored_q)
+                if stored_q and not stored_a:
                     pills = "".join(
-                        f'<a href="?{urllib.parse.urlencode({"pfu_part": part, "pfu_ans": qr})}" '
-                        f'target="_self" style="display:inline-block;padding:3px 9px;'
-                        f'margin:2px 3px 0 0;background:#fff4ec;color:#b85c00;'
-                        f'border:1.5px solid #f4a261;border-radius:10px;font-size:11px;'
-                        f'font-weight:700;font-family:Nunito,sans-serif;text-decoration:none;">'
-                        f'{qr}</a>'
-                        for qr in quick)
-                    # negative margin-top closes the gap Streamlit adds after slider
+                        f'<a href="?{urllib.parse.urlencode({"pfu_part": part, "pfu_ans": r})}" '
+                        f'target="_self" style="display:inline-block;padding:3px 9px;margin:2px 3px 0 0;'
+                        f'background:#fff4ec;color:#b85c00;border:1.5px solid #f4a261;border-radius:10px;'
+                        f'font-size:11px;font-weight:700;font-family:Nunito,sans-serif;text-decoration:none;">'
+                        f'{r}</a>'
+                        for r in _quick_replies_for(stored_q))
                     st.markdown(
                         f'<div style="margin-top:-10px;margin-bottom:4px;">'
-                        f'<div style="display:flex;justify-content:flex-end;margin-bottom:2px;">'
-                        f'<span style="font-size:11px;font-weight:800;color:{color};">'
-                        f'{sev_val}/10{delta_str}</span></div>'
+                        f'<div style="text-align:right;font-size:11px;font-weight:800;color:{color};">'
+                        f'{sev_val}/10{delta}</div>'
                         f'<div style="padding:6px 10px 8px;background:#fff8f2;'
                         f'border:1.5px solid #f4a261;border-radius:10px;">'
-                        f'<div style="font-size:11px;color:#9a4e10;font-weight:600;'
-                        f'margin-bottom:4px;">🩺 {stored_q}</div>'
-                        f'<div>{pills}</div></div></div>',
+                        f'<div style="font-size:11px;color:#9a4e10;font-weight:600;margin-bottom:4px;">'
+                        f'🩺 {stored_q}</div><div>{pills}</div></div></div>',
                         unsafe_allow_html=True)
-                elif stored_q and existing_a:
+                elif stored_q and stored_a:
                     st.markdown(
                         f'<div style="margin-top:-10px;margin-bottom:4px;">'
-                        f'<div style="display:flex;justify-content:flex-end;margin-bottom:2px;">'
-                        f'<span style="font-size:11px;font-weight:800;color:{color};">'
-                        f'{sev_val}/10{delta_str}</span></div>'
+                        f'<div style="text-align:right;font-size:11px;font-weight:800;color:{color};">'
+                        f'{sev_val}/10{delta}</div>'
                         f'<div style="padding:4px 10px;background:#fff8f2;'
                         f'border:1px solid rgba(244,162,97,0.35);border-radius:8px;'
                         f'font-size:11px;color:#b85c00;font-weight:700;">'
-                        f'🩺 {stored_q} · ✓ {existing_a}</div></div>',
+                        f'🩺 {stored_q} · ✓ {stored_a}</div></div>',
                         unsafe_allow_html=True)
                 else:
                     st.markdown(
-                        f'<div style="margin-top:-10px;margin-bottom:4px;'
-                        f'text-align:right;font-size:11px;font-weight:800;color:{color};">'
-                        f'{sev_val}/10{delta_str}</div>',
+                        f'<div style="margin-top:-10px;margin-bottom:4px;text-align:right;'
+                        f'font-size:11px;font-weight:800;color:{color};">{sev_val}/10{delta}</div>',
                         unsafe_allow_html=True)
 
             if st.button("➕ Other location", key="bp_other", use_container_width=True):
                 st.session_state.show_other[2] = True; st.rerun()
 
-
-        # Other location free-text input (outside columns so it spans full width)
         if st.session_state.show_other.get(2):
-            c_m, c_mic = st.columns([7, 2.5], gap="small")
-            with c_m:
-                other_loc = st.text_input("", placeholder="Describe other location…",
-                                          key="bp_other_txt", label_visibility="collapsed")
-                if st.button("↑", key="bp_other_send"):
-                    if other_loc.strip():
-                        st.session_state.selected_parts.add(other_loc.strip())
-                        st.session_state.show_other[2] = False
-                        st.rerun()
+            t = render_text_mic("bp_other_txt", "Describe location…")
+            if t:
+                st.session_state.selected_parts.add(t)
+                st.session_state.show_other[2] = False; st.rerun()
 
-        c_no, c_confirm = st.columns([1, 2], gap="small")
+        c_no, c_ok = st.columns([1, 2], gap="small")
         with c_no:
             if st.button("🙂 No pain", key="pain_none", use_container_width=True):
                 st.session_state.pain_yesno = False
@@ -938,21 +844,24 @@ elif stage == 2:
                 st.session_state.pain_severities = {}
                 st.session_state.part_followup_q = {}
                 st.session_state.part_followup_a = {}
-                on_answer("No pain today.", 2)
+                add_patient("No pain today.", stage=2)
                 advance_stage(); st.rerun()
-        with c_confirm:
-            if st.button("Confirm locations ➜", key="pain_confirm", use_container_width=True, type="primary"):
+        with c_ok:
+            if st.button("Confirm locations ➜", key="pain_confirm",
+                         use_container_width=True, type="primary"):
                 if st.session_state.selected_parts:
+                    st.session_state.pain_yesno = True
                     st.session_state.pain_sub = "timing"; st.rerun()
                 else:
                     st.warning("Select at least one location, or click 'No pain'.")
 
+    # ── TIMING ───────────────────────────────────────────────
     elif pain_sub == "timing":
         panel_q("Is your pain constant, or mainly at certain times?")
         for idx, (lbl, val) in enumerate([
             ("Constant", "constant"),
-            ("When eating/swallowing", "eating"),
-            ("When moving/standing", "movement"),
+            ("When eating / swallowing", "eating"),
+            ("When moving / standing", "movement"),
             ("Comes and goes", "intermittent"),
         ]):
             if st.button(lbl, key=f"pt_{idx}", use_container_width=True):
@@ -960,14 +869,15 @@ elif stage == 2:
                 locs = sorted(st.session_state.selected_parts)
                 sevs = st.session_state.pain_severities
                 summary = ", ".join(f"{l} ({sevs.get(l,'?')}/10)" for l in locs)
-                on_answer(f"Pain: {summary}. Timing: {val}.", 2)
+                add_patient(f"Pain: {summary}. Timing: {val}.", stage=2)
                 st.session_state.pain_sub = "done"; st.rerun()
 
+    # ── DONE ─────────────────────────────────────────────────
     elif pain_sub == "done":
-        # Fold per-part follow-up Q&As into conversation log exactly once
-        if not st.session_state.get("part_fu_logged"):
-            for part, ans in st.session_state.get("part_followup_a", {}).items():
-                q = st.session_state.get("part_followup_q", {}).get(part, "")
+        # Log inline Q&As into message history exactly once
+        if not st.session_state.part_fu_logged:
+            for part, ans in st.session_state.part_followup_a.items():
+                q = st.session_state.part_followup_q.get(part, "")
                 if q and ans:
                     add_doctor(q, stage=2)
                     add_patient(ans, stage=2)
@@ -980,16 +890,15 @@ elif stage == 2:
     st.markdown("</div>", unsafe_allow_html=True)
 
 # ════════════════════════════════════════════════════════════
-# STAGE 3 — Eating & Nutrition (from transcripts: 100% of visits)
+# STAGE 3 — Eating & Nutrition
+# No GPT followup — the sub-stages already collect everything needed.
 # ════════════════════════════════════════════════════════════
 elif stage == 3:
     st.markdown('<div class="panel">', unsafe_allow_html=True)
-
-    eat_sub = st.session_state.get("eat_sub", "status")
+    eat_sub = st.session_state.eat_sub
 
     if eat_sub == "status":
         panel_q("How has eating been?")
-        render_inline(3)
         for idx, (lbl, val) in enumerate([
             ("👍 Better than before", "better"),
             ("➡️ About the same",     "same"),
@@ -998,35 +907,27 @@ elif stage == 3:
         ]):
             if st.button(lbl, key=f"eat_{idx}", use_container_width=True):
                 st.session_state.eating_status = val
-                clean_lbl = lbl.split(" ", 1)[1]  # strip emoji
-                if val in ("worse", "cant_eat"):
-                    add_patient(f"Eating: {clean_lbl}", stage=3)
-                    st.session_state.eat_sub = "type"
-                else:
-                    # Same or better — record and trigger followup check (will return None)
-                    on_answer(f"Eating: {clean_lbl}", 3)
-                    st.session_state.eat_sub = "done"
+                add_patient(lbl.split(" ", 1)[1], stage=3)  # strip emoji
+                st.session_state.eat_sub = "type" if val in ("worse", "cant_eat") else "done"
                 st.rerun()
 
     elif eat_sub == "type":
         panel_q("What are you able to eat?")
         for idx, (lbl, val) in enumerate([
-            ("Normal food", "normal"),
-            ("Soft food / purees", "soft"),
-            ("Liquids only", "liquids"),
-            ("Tube feeding", "tube"),
+            ("Normal food", "normal"), ("Soft food / purees", "soft"),
+            ("Liquids only", "liquids"), ("Tube feeding", "tube"),
         ]):
             if st.button(lbl, key=f"food_{idx}", use_container_width=True):
                 st.session_state.food_type = val
-                add_patient(f"Eating: {lbl}", stage=3)
+                add_patient(lbl, stage=3)
                 st.session_state.eat_sub = "shakes"; st.rerun()
 
     elif eat_sub == "shakes":
-        panel_q("How many supplement shakes/Boosts today?")
+        panel_q("How many supplement shakes / Boosts today?")
         cols = st.columns(4, gap="small")
         for idx, (lbl, val) in enumerate([("None","0"),("1–2","1-2"),("3–4","3-4"),("5+","5+")]):
             with cols[idx]:
-                if st.button(lbl, key=f"shake_{idx}", use_container_width=True):
+                if st.button(lbl, key=f"shk_{idx}", use_container_width=True):
                     st.session_state.shakes_per_day = val
                     add_patient(f"Shakes: {lbl}", stage=3)
                     st.session_state.eat_sub = "hydration"; st.rerun()
@@ -1038,134 +939,121 @@ elif stage == 3:
             with cols[idx]:
                 if st.button(lbl, key=f"hyd_{idx}", use_container_width=True):
                     st.session_state.hydration = val
-                    # on_answer here triggers the curated followup for eating stage
-                    on_answer(f"Hydration: {lbl}", 3)
+                    add_patient(f"Hydration: {lbl}", stage=3)
                     st.session_state.eat_sub = "done"; st.rerun()
 
     elif eat_sub == "done":
         render_inline(3)
-        stage_msgs = [m for m in st.session_state.messages if m.get("stage") == 3]
-        last_msg_role = stage_msgs[-1]["role"] if stage_msgs else None
-        if followup_fired(3) and last_msg_role == "doctor":
-            # Followup was fired and not yet answered — show reply options
-            replies = ["Pain when eating", "No appetite", "Nausea"]
-            rc = st.columns(len(replies), gap="small")
-            for i, r in enumerate(replies):
-                with rc[i]:
-                    if st.button(r, key=f"f3_r_{i}", use_container_width=True):
-                        on_followup_reply(r, 3); st.rerun()
-            render_followup_input(3)
-        else:
-            st.markdown("<hr class='divider'>", unsafe_allow_html=True)
-            if st.button("Next →", key="eat_next", use_container_width=True, type="primary"):
-                advance_stage(); st.rerun()
+        st.markdown("<hr class='divider'>", unsafe_allow_html=True)
+        if st.button("Next →", key="eat_next", use_container_width=True, type="primary"):
+            advance_stage(); st.rerun()
 
     st.markdown("</div>", unsafe_allow_html=True)
 
 # ════════════════════════════════════════════════════════════
-# STAGE 4 — Symptom checklist (clinically-derived from transcripts)
+# STAGE 4 — Symptoms + ONE conditional followup
+# GPT followup fires ONLY when:
+#   - symptom is clinically urgent AND (new this visit OR always-urgent)
+#   - exactly ONE question, no chaining
 # ════════════════════════════════════════════════════════════
 elif stage == 4:
-    st.markdown('<div class="panel">', unsafe_allow_html=True)
-    panel_q("Any of these symptoms today?")
-
-    # Derived from what clinicians screen in EVERY transcript
     SYMPTOM_LIST = [
-        "Fatigue / low energy",
-        "Nausea",
-        "Vomiting",
-        "Mouth sores",
-        "Trouble swallowing",
-        "Constipation",
-        "Diarrhea",
-        "Fever / chills",
-        "Dizziness / unsteadiness",
-        "Numbness / tingling (hands or feet)",
-        "Hearing changes / ringing in ears",
-        "Coughing / choking",
-        "Anxiety / low mood",
+        "Fatigue / low energy", "Nausea", "Vomiting", "Mouth sores",
+        "Trouble swallowing", "Constipation", "Diarrhea", "Fever / chills",
+        "Dizziness / unsteadiness", "Numbness / tingling (hands or feet)",
+        "Hearing changes / ringing in ears", "Coughing / choking", "Anxiety / low mood",
     ]
-
     past = st.session_state.get("past_checkins", [])
     prev_syms = set(past[-1].get("symptoms", [])) if past else set()
 
-    if not is_answered(4):
-        render_inline(4)
-        if prev_syms:
-            st.markdown('<div class="small-note">✓ = from last visit. Tap to remove if resolved.</div>',
-                        unsafe_allow_html=True)
-        else:
-            st.markdown('<div class="small-note">Tap all that apply:</div>',
-                        unsafe_allow_html=True)
+    # Has the patient confirmed symptoms yet?
+    sym_confirmed = any(
+        m["role"] == "patient" and m["content"].startswith("Symptoms:")
+        for m in st.session_state.messages if m.get("stage") == 4
+    )
+
+    st.markdown('<div class="panel">', unsafe_allow_html=True)
+
+    if not sym_confirmed:
+        panel_q("Any of these symptoms today?")
+        hint = "✓ = reported last visit. Tap to remove if resolved." if prev_syms else "Tap all that apply."
+        st.markdown(f'<div class="small-note">{hint}</div>', unsafe_allow_html=True)
 
         sc = st.columns(2, gap="small")
         for idx, sym in enumerate(SYMPTOM_LIST):
             with sc[idx % 2]:
-                lbl = f"✓ {sym}" if sym in st.session_state.symptoms else sym
-                if st.button(lbl, key=f"sym_{idx}", use_container_width=True):
-                    if sym in st.session_state.symptoms:
-                        st.session_state.symptoms.remove(sym)
-                    else:
-                        st.session_state.symptoms.append(sym)
+                active = sym in st.session_state.symptoms
+                if st.button(f"✓ {sym}" if active else sym, key=f"sym_{idx}", use_container_width=True):
+                    if active: st.session_state.symptoms.remove(sym)
+                    else: st.session_state.symptoms.append(sym)
                     st.rerun()
 
         if st.button("➕ Other symptom", key="sym_other_btn", use_container_width=True):
             st.session_state.show_other[4] = True; st.rerun()
 
         if st.session_state.show_other.get(4):
-            # Inline handler: adds to symptoms list only, does NOT trigger follow-up flow
-            ctr = st.session_state.mic_key_counter
-            c_m4, c_mic4 = st.columns([7, 2.5], gap="small")
-            with c_m4:
-                other_sym = st.text_input("", placeholder="Describe other symptom…",
-                                          key=f"other_sym_txt_{ctr}", label_visibility="collapsed")
-                other_sym_send = st.button("↑", key=f"other_sym_send_{ctr}")
-            with c_mic4:
-                if hasattr(st, "audio_input"):
-                    other_sym_audio = st.audio_input("", key=f"other_sym_mic_{ctr}",
-                                                     label_visibility="collapsed")
-                    if handle_voice(other_sym_audio, 4): st.rerun()
-            if other_sym_send and other_sym and other_sym.strip():
-                sym_val = other_sym.strip()
-                if sym_val not in st.session_state.symptoms:
-                    st.session_state.symptoms.append(sym_val)
-                st.session_state.show_other[4] = False
-                st.rerun()
+            t = render_text_mic("sym_other", "Describe other symptom…")
+            if t:
+                if t not in st.session_state.symptoms:
+                    st.session_state.symptoms.append(t)
+                st.session_state.show_other[4] = False; st.rerun()
 
         st.markdown("<div style='margin-top:8px;'></div>", unsafe_allow_html=True)
-        if st.button("Confirm symptoms ➜", key="sym_confirm", use_container_width=True, type="primary"):
-            sym_txt = "; ".join(st.session_state.symptoms) if st.session_state.symptoms else "none"
-            on_answer(f"Symptoms: {sym_txt}", 4); st.rerun()
+        if st.button("Confirm symptoms ➜", key="sym_confirm",
+                     use_container_width=True, type="primary"):
+            sym_txt = "; ".join(st.session_state.symptoms) or "none"
+            add_patient(f"Symptoms: {sym_txt}", stage=4)
+            # Decide RIGHT NOW whether a followup is needed — store in slot
+            st.session_state.sym_fu_q = get_symptom_followup()
+            st.session_state.sym_fu_a = None
+            st.rerun()
+
     else:
         render_inline(4)
-        stage_msgs = [m for m in st.session_state.messages if m.get("stage") == 4]
-        last_msg_role = stage_msgs[-1]["role"] if stage_msgs else None
-        if followup_fired(4) and last_msg_role == "doctor":
-            # Followup fired but not yet answered — show reply options
-            last_q = stage_msgs[-1]["content"].lower()
-            if "keep food" in last_q or "fluids down" in last_q:
-                replies = ["Yes, keeping it down", "Mostly", "No, can't keep it down"]
-            elif "times" in last_q or "episodes" in last_q or "how many" in last_q:
-                replies = ["1–2 times", "3–5 times", "More than 5"]
-            elif "temperature" in last_q:
-                replies = ["Yes, elevated", "Yes, normal", "Haven't checked"]
-            elif "bowel" in last_q or "days since" in last_q:
-                replies = ["1–2 days", "3–4 days", "4+ days"]
-            elif "rest" in last_q or "activity" in last_q:
+        fq = st.session_state.sym_fu_q
+        fa = st.session_state.sym_fu_a
+
+        if fq and fa is None:
+            # Show the ONE followup question + quick replies
+            st.markdown(f'<div class="inline-followup">🩺 {fq}</div>', unsafe_allow_html=True)
+
+            ql = fq.lower()
+            if "temperature" in ql:
+                replies = ["It was elevated", "Normal / not sure", "Haven't checked"]
+            elif "times" in ql or "episodes" in ql or "how many" in ql:
+                replies = ["1–2", "3–5", "More than 5"]
+            elif "rest" in ql or "activity" in ql:
                 replies = ["At rest", "Only with activity", "Both"]
-            elif "position" in last_q or "standing" in last_q:
-                replies = ["Yes", "Not sure", "No"]
-            elif "coughing" in last_q or "choking" in last_q:
+            elif "stand" in ql or "worse when" in ql:
+                replies = ["Yes, worse standing", "No difference"]
+            elif "coughing" in ql or "choking" in ql:
                 replies = ["Yes, often", "Sometimes", "No"]
+            elif "bowel" in ql or "days since" in ql:
+                replies = ["1–2 days", "3–4 days", "4+ days"]
+            elif "eat or drink" in ql or "hard to eat" in ql or "sores" in ql:
+                replies = ["Yes, makes it hard", "A little", "Not really"]
+            elif "swallow" in ql or "choking" in ql:
+                replies = ["Yes, coughing/choking", "Some difficulty", "No"]
             else:
                 replies = ["Yes", "Somewhat", "No"]
+
             rc = st.columns(len(replies), gap="small")
             for i, r in enumerate(replies):
                 with rc[i]:
-                    if st.button(r, key=f"f4_r_{i}", use_container_width=True):
-                        on_followup_reply(r, 4); st.rerun()
-            render_followup_input(4)
+                    if st.button(r, key=f"sym_fu_r{i}", use_container_width=True):
+                        st.session_state.sym_fu_a = r
+                        add_patient(r, stage=4)
+                        st.rerun()
+            st.markdown('<div class="small-note" style="margin-top:6px;">Or type your answer:</div>',
+                        unsafe_allow_html=True)
+            t = render_text_mic("sym_fu", "Type your answer…")
+            if t:
+                st.session_state.sym_fu_a = t
+                add_patient(t, stage=4)
+                st.rerun()
+
         else:
+            # No followup needed, or already answered — show Next
             st.markdown("<hr class='divider'>", unsafe_allow_html=True)
             if st.button("Continue →", key="sym_next", use_container_width=True, type="primary"):
                 advance_stage(); st.rerun()
@@ -1173,121 +1061,93 @@ elif stage == 4:
     st.markdown("</div>", unsafe_allow_html=True)
 
 # ════════════════════════════════════════════════════════════
-# STAGE 5 — Submit
+# STAGE 5 — Submit + Summary
+# GPT used ONLY here: extract free-text notes for care team.
+# Strict prompt: facts only, no hallucination.
 # ════════════════════════════════════════════════════════════
 elif stage == 5:
     if st.session_state.submitted:
-        name      = st.session_state.get("patient_name","—")
-        feeling   = st.session_state.get("feeling_level") or "—"
-        pain      = st.session_state.get("pain_yesno")
-        locations = sorted(list(st.session_state.get("selected_parts", set())))
-        severities = st.session_state.get("pain_severities", {})
-        symptoms  = st.session_state.get("symptoms", [])
-        timing    = st.session_state.get("pain_timing") or "—"
-        eating    = st.session_state.get("eating_status") or "—"
-        food      = st.session_state.get("food_type") or "—"
-        shakes    = st.session_state.get("shakes_per_day") or "—"
-        hydration = st.session_state.get("hydration") or "—"
-        is_fast   = st.session_state.get("fast_path", False)
+        name      = st.session_state.patient_name or "—"
+        pain      = st.session_state.pain_yesno
+        locations = sorted(st.session_state.selected_parts)
+        sevs      = st.session_state.pain_severities
+        timing    = st.session_state.pain_timing or "—"
+        eating    = st.session_state.eating_status or "—"
+        food      = st.session_state.food_type or "—"
+        shakes    = st.session_state.shakes_per_day or "—"
+        hydration = st.session_state.hydration or "—"
+        symptoms  = st.session_state.symptoms
+        is_fast   = st.session_state.fast_path
+        carried   = ' <span style="font-size:11px;opacity:.55;">(from last visit)</span>'
 
-        # On fast path, fill nutrition fields from last visit if not collected today
+        # On fast path, pull missing fields from last visit
         if is_fast:
-            past = st.session_state.get("past_checkins", [])
-            if past:
-                last = past[-1]
-                if eating == "—": eating = last.get("eating") or "—"
-                if food   == "—": food   = last.get("food_type") or "—"
-                if shakes == "—": shakes = last.get("shakes_per_day") or "—"
-                if hydration == "—": hydration = last.get("hydration") or "—"
-                if feeling == "—": feeling = last.get("feeling_level") or "—"
+            last = (st.session_state.past_checkins or [{}])[-1]
+            if eating    == "—": eating    = last.get("eating") or "—"
+            if food      == "—": food      = last.get("food_type") or "—"
+            if shakes    == "—": shakes    = last.get("shakes_per_day") or "—"
+            if hydration == "—": hydration = last.get("hydration") or "—"
 
-        pain_str = "Yes" if pain else ("No" if pain is False else "—")
-        carried  = ' <span style="font-size:11px;opacity:.55;">(from last visit)</span>'
+        pain_str  = "Yes" if pain else ("No" if pain is False else "—")
+        fast_row  = '<tr><td>Status</td><td><span class="tag">No changes</span></td></tr>' if is_fast else ""
 
-        # Pain locations: on fast path these are pre-populated from last visit
         if locations:
-            loc_html = "".join(
-                f'<span class="tag">{l} ({severities.get(l,"?")}/10)</span>'
-                for l in locations
-            )
+            loc_html = "".join(f'<span class="tag">{l} ({sevs.get(l,"?")}/10)</span>' for l in locations)
             if is_fast: loc_html += carried
         else:
-            loc_html = "N/A"
+            loc_html = "None"
 
         sym_html = "".join(f'<span class="tag">{s}</span>' for s in symptoms) or "None"
         if is_fast and symptoms: sym_html += carried
 
-        fast_note = ""
-        if is_fast:
-            fast_note = '<tr><td>Status</td><td><span class="tag">No changes since last visit</span></td></tr>'
-
-        # Nutrition rows: hide entirely if all are still "—" (truly no data)
-        show_nutrition = not (eating == "—" and food == "—" and shakes == "—" and hydration == "—")
-        nutrition_rows = ""
-        if show_nutrition:
-            eat_disp    = f"{eating}{carried}"  if is_fast and eating    != "—" else eating
-            food_disp   = f"{food}{carried}"    if is_fast and food      != "—" else food
-            shakes_disp = f"{shakes}{carried}"  if is_fast and shakes    != "—" else shakes
-            hyd_disp    = f"{hydration}{carried}" if is_fast and hydration != "—" else hydration
-            nutrition_rows = f"""
-    <tr><td>Eating</td><td>{eat_disp}</td></tr>
-    <tr><td>Diet type</td><td>{food_disp}</td></tr>
-    <tr><td>Shakes/day</td><td>{shakes_disp}</td></tr>
-    <tr><td>Hydration</td><td>{hyd_disp}</td></tr>"""
-
-        # Timing row: only show if pain was reported
         timing_row = f"<tr><td>Pain timing</td><td>{timing}</td></tr>" if pain else ""
+        show_nut   = not (eating == "—" and food == "—" and shakes == "—" and hydration == "—")
+        nut_rows   = ""
+        if show_nut:
+            def _d(v): return f"{v}{carried}" if is_fast and v != "—" else v
+            nut_rows = (f"<tr><td>Eating</td><td>{_d(eating)}</td></tr>"
+                        f"<tr><td>Diet type</td><td>{_d(food)}</td></tr>"
+                        f"<tr><td>Shakes/day</td><td>{_d(shakes)}</td></tr>"
+                        f"<tr><td>Hydration</td><td>{_d(hydration)}</td></tr>")
 
-        # Extract notes from free-text replies
-        skip = {"About the same.", "Things are better.", "Things are worse.",
-                "No pain today.", "Yes, I have pain."}
-        patient_lines = [m["content"] for m in st.session_state.messages
-                         if m["role"]=="patient" and m["content"] not in skip
-                         and not m["content"].startswith("Feeling ")
-                         and not m["content"].startswith("Pain:")
-                         and not m["content"].startswith("Symptoms:")
-                         and not m["content"].startswith("Eating:")
-                         and not m["content"].startswith("Shakes:")
-                         and not m["content"].startswith("Hydration:")]
-
-        conv_cell = "<span style='opacity:.4'>—</span>"
-        if patient_lines and _openai_ready():
+        # GPT: extract free-text patient notes ONLY (skip structured answers)
+        STRUCTURED = {"No pain today.", "About the same.", "Things are worse.", "Better since last visit."}
+        STRUCTURED_PREFIXES = ("Pain:", "Symptoms:", "Hydration:", "Shakes:", "Food:", "Eating:")
+        free_lines = [
+            m["content"] for m in st.session_state.messages
+            if m["role"] == "patient"
+            and m["content"] not in STRUCTURED
+            and not any(m["content"].startswith(p) for p in STRUCTURED_PREFIXES)
+        ]
+        notes_cell = "<span style='opacity:.4'>—</span>"
+        if free_lines and _openai_ready():
             try:
-                sr = openai_client.chat.completions.create(
+                resp = openai_client.chat.completions.create(
                     model=_secret("openai_model", default="gpt-4o-mini"),
-                    messages=[{
-                        "role": "system",
-                        "content": (
-                            "You are a clinical note assistant for a cancer care team. "
-                            "Your job is to extract ONLY concrete, medically relevant facts "
-                            "from patient free-text responses during a symptom check-in. "
-                            "\n\nSTRICT RULES:"
-                            "\n- Output ONLY bullet points, one fact per line, starting with '•'"
-                            "\n- Include ONLY: specific symptoms, durations, triggers, severity descriptions, "
-                            "functional impacts (e.g. can't eat, can't walk), medication mentions"
-                            "\n- Do NOT paraphrase or interpret — copy the patient's own words closely"
-                            "\n- Do NOT add clinical judgments, diagnoses, or recommendations"
-                            "\n- Do NOT include vague statements like 'patient reports discomfort'"
-                            "\n- Do NOT hallucinate. If there are no concrete facts, output exactly: None"
-                            "\n- Maximum 5 bullets. Each bullet must be a single specific fact."
-                        )
-                    }, {
-                        "role": "user",
-                        "content": "Patient free-text responses:\n" + "\n".join(f"- {l}" for l in patient_lines)
-                    }],
-                    max_tokens=200,
                     temperature=0.0,
+                    max_tokens=200,
+                    messages=[
+                        {"role": "system", "content": (
+                            "You extract clinical notes from cancer patient check-in responses.\n"
+                            "OUTPUT FORMAT: bullet points only, one per line, starting with •\n"
+                            "INCLUDE ONLY: symptoms, durations, triggers, functional impacts, medication mentions.\n"
+                            "DO NOT include: vague feelings, structured answers already captured in the form, "
+                            "interpretations, diagnoses, or anything not explicitly stated.\n"
+                            "If nothing clinically relevant: output exactly 'None'.\n"
+                            "Maximum 5 bullets."
+                        )},
+                        {"role": "user", "content": "\n".join(f"- {l}" for l in free_lines)},
+                    ],
                 )
-                txt = (sr.choices[0].message.content or "").strip()
-                if txt and txt.lower() != "none":
-                    items = [l.lstrip("•-– ").strip() for l in txt.split("\n")
+                txt = (resp.choices[0].message.content or "").strip()
+                if txt.lower() != "none":
+                    items = [l.lstrip("• -").strip() for l in txt.splitlines()
                              if l.strip() and l.strip().lower() != "none"]
                     if items:
-                        conv_cell = ("<ul style='margin:0;padding-left:18px;'>" +
-                                     "".join(f"<li style='font-size:14px;'>{l}</li>"
-                                             for l in items) + "</ul>")
-            except:
-                pass
+                        notes_cell = ("<ul style='margin:0;padding-left:18px;'>" +
+                                      "".join(f"<li style='font-size:14px;'>{i}</li>" for i in items) +
+                                      "</ul>")
+            except: pass
 
         st.markdown(f"""
 <div class="summary-wrap">
@@ -1296,43 +1156,38 @@ elif stage == 5:
   <div class="summary-sub">Your care team will review this.</div>
   <table class="summary-table">
     <tr><td>Patient</td><td>{name}</td></tr>
-    {fast_note}
-    <tr><td>Feeling</td><td>{feeling}</td></tr>
+    {fast_row}
     <tr><td>Pain</td><td>{pain_str}</td></tr>
     <tr><td>Pain locations</td><td>{loc_html}</td></tr>
     {timing_row}
-    {nutrition_rows}
+    {nut_rows}
     <tr><td>Symptoms</td><td>{sym_html}</td></tr>
-    <tr><td>Notes</td><td>{conv_cell}</td></tr>
+    <tr><td>Notes</td><td>{notes_cell}</td></tr>
   </table>
 </div>""", unsafe_allow_html=True)
 
     else:
         st.markdown('<div class="panel">', unsafe_allow_html=True)
-
-        # Show empathy note if things are worse or patient has high-severity pain
-        worst_sev = max(st.session_state.get("pain_severities", {}).values(), default=0)
-        stage0_ans = next((m["content"] for m in st.session_state.messages
-                           if m.get("stage") == 0 and m["role"] == "patient"), "")
-        if "worse" in stage0_ans.lower() or worst_sev >= 7:
-            st.markdown(
-                '<div class="inline-followup" style="margin-bottom:10px;">🩺 '
-                "We're sorry to hear you're having a hard time. "
-                "Your care team will review this right away.</div>",
-                unsafe_allow_html=True)
+        worst_sev = max(st.session_state.pain_severities.values(), default=0)
+        s0_ans = next((m["content"] for m in st.session_state.messages
+                       if m.get("stage") == 0 and m["role"] == "patient"), "")
+        if "worse" in s0_ans.lower() or worst_sev >= 7:
+            st.markdown('<div class="inline-followup" style="margin-bottom:10px;">🩺 '
+                        "We're sorry you're having a hard time. "
+                        "Your care team will review this right away.</div>", unsafe_allow_html=True)
 
         panel_q("Ready to submit — anything else to add?")
-        st.markdown('<div class="small-note">Optional — type a note for your care team:</div>',
+        st.markdown('<div class="small-note">Optional note for your care team:</div>',
                     unsafe_allow_html=True)
-        note = st.text_input("", placeholder="e.g. I started a new medication yesterday…",
+        note = st.text_input("", placeholder="e.g. Started a new medication yesterday…",
                              key="final_note", label_visibility="collapsed")
-
         if st.button("✅ Submit Check-In", use_container_width=True, type="primary"):
             if note and note.strip():
                 add_patient(note.strip(), stage=5)
             try:
-                save_to_sheet(); st.session_state.submitted = True; st.rerun()
+                save_to_sheet()
+                st.session_state.submitted = True
+                st.rerun()
             except Exception as e:
                 st.error(f"Failed to save: {e}")
-
         st.markdown("</div>", unsafe_allow_html=True)
