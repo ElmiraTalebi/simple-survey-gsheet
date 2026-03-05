@@ -1,16 +1,13 @@
 import json
 from datetime import datetime
-from typing import Optional
-
 import streamlit as st
 import gspread
 from google.oauth2.service_account import Credentials
-from openai import OpenAI
 
 st.set_page_config(page_title="Cancer Symptom Check-In", page_icon="🩺", layout="centered")
 
 # ============================================================
-# Secrets helper
+# Helpers
 # ============================================================
 
 def _secret(*keys, default=None):
@@ -21,32 +18,19 @@ def _secret(*keys, default=None):
 
 
 # ============================================================
-# OpenAI (optional)
-# ============================================================
-
-OPENAI_API_KEY = _secret("OPENAI_API_KEY")
-openai_client: Optional[OpenAI] = None
-
-if OPENAI_API_KEY:
-    try:
-        openai_client = OpenAI(api_key=OPENAI_API_KEY)
-    except:
-        pass
-
-
-# ============================================================
 # Google Sheets
 # ============================================================
 
 sheet = None
 
-
 def init_sheets():
     global sheet
+
     if sheet:
         return
 
     try:
+
         creds = Credentials.from_service_account_info(
             st.secrets["gcp_service_account"],
             scopes=["https://www.googleapis.com/auth/spreadsheets"]
@@ -76,6 +60,7 @@ def load_last_checkin(name):
 
     for row in reversed(rows[1:]):
         if row[1].lower() == name.lower():
+
             try:
                 return json.loads(row[2])
             except:
@@ -99,7 +84,7 @@ def save_to_sheet(data):
 
 
 # ============================================================
-# Body Map SVG
+# Body map image
 # ============================================================
 
 def body_svg():
@@ -116,7 +101,7 @@ def body_svg():
 
 
 # ============================================================
-# Session state
+# Session state defaults
 # ============================================================
 
 defaults = dict(
@@ -159,13 +144,16 @@ if st.session_state.stage == -1:
 
             last = load_last_checkin(name)
 
-            if last:
-                st.session_state.last_severity = last.get("pain_severity", {})
+            if last and isinstance(last.get("pain_severity"), dict):
+                st.session_state.last_severity = last["pain_severity"]
+            else:
+                st.session_state.last_severity = {}
 
             st.session_state.stage = 0
             st.rerun()
 
     st.stop()
+
 
 stage = st.session_state.stage
 
@@ -272,29 +260,30 @@ elif stage == 3:
 
                 st.rerun()
 
-            # If selected → show GPT bubble
             if part in st.session_state.pain_locations:
 
                 st.info("How severe is it (0-10)?")
 
-                last_val = st.session_state.last_severity.get(part, 0)
+                last_val = 0
+
+                if isinstance(st.session_state.last_severity, dict):
+                    last_val = st.session_state.last_severity.get(part, 0)
 
                 severity = st.number_input(
                     f"{part} severity",
-                    0,
-                    10,
+                    min_value=0,
+                    max_value=10,
                     value=last_val,
                     key=f"sev_{part}"
                 )
 
                 st.session_state.pain_severity[part] = severity
 
-                # Follow-up condition
                 if severity > 6 or severity > last_val:
 
                     st.warning("What seems to be causing the worsening?")
 
-                    reason = st.text_input(
+                    st.text_input(
                         f"Reason for {part}",
                         key=f"reason_{part}"
                     )
@@ -312,11 +301,17 @@ elif stage == 3:
 
             st.session_state.pain_locations.add(other)
 
-            sev = st.number_input("Severity (0-10)", 0, 10, key="other_sev")
+            sev = st.number_input(
+                "Severity (0-10)",
+                min_value=0,
+                max_value=10,
+                key="other_sev"
+            )
 
             st.session_state.pain_severity[other] = sev
 
     if st.button("Next"):
+
         st.session_state.stage = 4
         st.rerun()
 
@@ -344,7 +339,6 @@ elif stage == 4:
 
         st.session_state.submitted = True
         st.session_state.stage = 5
-
         st.rerun()
 
 
