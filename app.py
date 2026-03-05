@@ -622,90 +622,70 @@ def render_other_input(stage_id: int, placeholder: str = "Describe…"):
 
 def face_neck_svg(selected: set, prev_locs: set = set()) -> str:
     """
-    SVG diagram of a face + neck with 6 labelled pain regions.
-    Selected regions → teal (#2a9d8f). Prev-visit-only → orange (#f4a261). Default → light grey.
-    Pure display — buttons in the adjacent column do the toggling.
+    SVG face+neck diagram with 6 labelled pain regions.
+    NO HTML comments inside SVG — they break Streamlit's markdown renderer.
+    Wrapped in a div so st.markdown renders it as a block element.
     """
-    def fill(p):
-        if p in selected:  return "#2a9d8f"   # teal  – currently selected
-        if p in prev_locs: return "#f4a261"   # orange – from last visit
-        return "#dde3ec"                       # grey   – unselected
+    def fc(p):
+        if p in selected:  return "#2a9d8f"
+        if p in prev_locs: return "#f4a261"
+        return "#dde3ec"
 
-    def text_col(p):
+    def tc(p):
         return "#ffffff" if (p in selected or p in prev_locs) else "#4a5568"
 
-    # colours
-    s  = "#8a97aa"   # stroke
-    sw = "1.5"       # stroke-width
+    sk = "#8a97aa"
 
-    return f"""
-<svg width="190" height="340" viewBox="0 0 190 340"
-     xmlns="http://www.w3.org/2000/svg"
-     style="display:block;margin:0 auto;filter:drop-shadow(0 2px 6px rgba(0,0,0,0.10))">
-  <defs>
-    <filter id="sh2"><feDropShadow dx="0" dy="1" stdDeviation="1.5"
-      flood-color="rgba(0,0,0,0.13)"/></filter>
-  </defs>
+    svg = (
+        '<div style="text-align:center">'
+        '<svg width="180" height="330" viewBox="0 0 180 330" xmlns="http://www.w3.org/2000/svg">'
 
-  <!-- ── Neck region ── -->
-  <rect x="65" y="218" width="60" height="68" rx="14"
-        fill="{fill('Neck')}" stroke="{s}" stroke-width="{sw}" filter="url(#sh2)"/>
-  <text x="95" y="257" text-anchor="middle" font-family="Nunito,sans-serif"
-        font-size="11" font-weight="700" fill="{text_col('Neck')}">Neck</text>
+        # ── hair / scalp (decorative) ──
+        f'<ellipse cx="90" cy="28" rx="58" ry="20" fill="#b0bac8" opacity="0.4"/>'
 
-  <!-- ── Throat region (lower neck / collar) ── -->
-  <rect x="60" y="285" width="70" height="46" rx="14"
-        fill="{fill('Throat')}" stroke="{s}" stroke-width="{sw}" filter="url(#sh2)"/>
-  <text x="95" y="313" text-anchor="middle" font-family="Nunito,sans-serif"
-        font-size="11" font-weight="700" fill="{text_col('Throat')}">Throat</text>
+        # ── face oval ──
+        f'<ellipse cx="90" cy="110" rx="64" ry="84" fill="#f5f0ea" stroke="{sk}" stroke-width="1.5"/>'
 
-  <!-- ── Face oval ── -->
-  <ellipse cx="95" cy="115" rx="68" ry="88"
-           fill="#f5f0ea" stroke="{s}" stroke-width="{sw}" filter="url(#sh2)"/>
+        # ── left ear ──
+        f'<ellipse cx="22" cy="112" rx="13" ry="19" fill="{fc("Ear(s)")}" stroke="{sk}" stroke-width="1.5"/>'
+        # ── right ear ──
+        f'<ellipse cx="158" cy="112" rx="13" ry="19" fill="{fc("Ear(s)")}" stroke="{sk}" stroke-width="1.5"/>'
+        # ear labels (one on each ear)
+        f'<text x="22" y="116" text-anchor="middle" font-family="sans-serif" font-size="8" font-weight="700" fill="{tc("Ear(s)")}">Ear</text>'
+        f'<text x="158" y="116" text-anchor="middle" font-family="sans-serif" font-size="8" font-weight="700" fill="{tc("Ear(s)")}">Ear</text>'
 
-  <!-- ── Ear Left ── -->
-  <ellipse cx="22" cy="118" rx="14" ry="20"
-           fill="{fill('Ear(s)')}" stroke="{s}" stroke-width="{sw}" filter="url(#sh2)"/>
-  <!-- ── Ear Right ── -->
-  <ellipse cx="168" cy="118" rx="14" ry="20"
-           fill="{fill('Ear(s)')}" stroke="{s}" stroke-width="{sw}" filter="url(#sh2)"/>
-  <!-- Ear label centred between both ears, above face -->
-  <text x="95" y="44" text-anchor="middle" font-family="Nunito,sans-serif"
-        font-size="10" font-weight="700" fill="{text_col('Ear(s)')}">Ear(s)</text>
-  <!-- small arrows pointing to each ear -->
-  <line x1="64" y1="46" x2="36" y2="100" stroke="{text_col('Ear(s)')}" stroke-width="1" opacity="0.5"/>
-  <line x1="126" y1="46" x2="154" y2="100" stroke="{text_col('Ear(s)')}" stroke-width="1" opacity="0.5"/>
+        # ── eyes (decorative) ──
+        f'<ellipse cx="70" cy="96" rx="11" ry="7" fill="#c8d0dc" stroke="{sk}" stroke-width="1"/>'
+        f'<ellipse cx="110" cy="96" rx="11" ry="7" fill="#c8d0dc" stroke="{sk}" stroke-width="1"/>'
+        f'<circle cx="70" cy="96" r="4" fill="#6b7a90"/>'
+        f'<circle cx="110" cy="96" r="4" fill="#6b7a90"/>'
 
-  <!-- ── Jaw region (lower face arc) ── -->
-  <path d="M42 165 Q95 215 148 165 Q148 195 95 205 Q42 195 42 165Z"
-        fill="{fill('Jaw')}" stroke="{s}" stroke-width="{sw}" filter="url(#sh2)"/>
-  <text x="95" y="195" text-anchor="middle" font-family="Nunito,sans-serif"
-        font-size="11" font-weight="700" fill="{text_col('Jaw')}">Jaw</text>
+        # ── nose (decorative) ──
+        f'<path d="M86 104 Q90 117 94 104" fill="none" stroke="{sk}" stroke-width="1.2"/>'
 
-  <!-- ── Lips / Gums strip ── -->
-  <rect x="65" y="155" width="60" height="22" rx="11"
-        fill="{fill('Lips / Gums')}" stroke="{s}" stroke-width="{sw}" filter="url(#sh2)"/>
-  <text x="95" y="170" text-anchor="middle" font-family="Nunito,sans-serif"
-        font-size="9.5" font-weight="700" fill="{text_col('Lips / Gums')}">Lips / Gums</text>
+        # ── mouth / tongue region ──
+        f'<ellipse cx="90" cy="128" rx="28" ry="14" fill="{fc("Mouth / Tongue")}" stroke="{sk}" stroke-width="1.5"/>'
+        f'<text x="90" y="132" text-anchor="middle" font-family="sans-serif" font-size="8.5" font-weight="700" fill="{tc("Mouth / Tongue")}">Mouth/Tongue</text>'
 
-  <!-- ── Mouth / Tongue oval (mid face) ── -->
-  <ellipse cx="95" cy="133" rx="30" ry="16"
-           fill="{fill('Mouth / Tongue')}" stroke="{s}" stroke-width="{sw}" filter="url(#sh2)"/>
-  <text x="95" y="137" text-anchor="middle" font-family="Nunito,sans-serif"
-        font-size="9" font-weight="700" fill="{text_col('Mouth / Tongue')}">Mouth/Tongue</text>
+        # ── lips / gums strip ──
+        f'<rect x="64" y="148" width="52" height="19" rx="9" fill="{fc("Lips / Gums")}" stroke="{sk}" stroke-width="1.5"/>'
+        f'<text x="90" y="161" text-anchor="middle" font-family="sans-serif" font-size="8.5" font-weight="700" fill="{tc("Lips / Gums")}">Lips/Gums</text>'
 
-  <!-- ── Eyes (decorative, not clickable) ── -->
-  <ellipse cx="73" cy="100" rx="12" ry="8" fill="#c8d0dc" stroke="{s}" stroke-width="1"/>
-  <ellipse cx="117" cy="100" rx="12" ry="8" fill="#c8d0dc" stroke="{s}" stroke-width="1"/>
-  <circle  cx="73"  cy="100" r="4"  fill="#6b7a90"/>
-  <circle  cx="117" cy="100" r="4"  fill="#6b7a90"/>
+        # ── jaw (lower face arc) ──
+        f'<path d="M38 160 Q90 208 142 160 Q142 188 90 198 Q38 188 38 160Z" fill="{fc("Jaw")}" stroke="{sk}" stroke-width="1.5"/>'
+        f'<text x="90" y="190" text-anchor="middle" font-family="sans-serif" font-size="10" font-weight="700" fill="{tc("Jaw")}">Jaw</text>'
 
-  <!-- ── Nose (decorative) ── -->
-  <path d="M90 108 Q95 122 100 108" fill="none" stroke="{s}" stroke-width="1.2"/>
+        # ── neck ──
+        f'<rect x="62" y="205" width="56" height="58" rx="12" fill="{fc("Neck")}" stroke="{sk}" stroke-width="1.5"/>'
+        f'<text x="90" y="238" text-anchor="middle" font-family="sans-serif" font-size="10" font-weight="700" fill="{tc("Neck")}">Neck</text>'
 
-  <!-- ── Hair / head top (decorative) ── -->
-  <ellipse cx="95" cy="33" rx="62" ry="22" fill="#b0bac8" opacity="0.35"/>
-</svg>""".strip()
+        # ── throat ──
+        f'<rect x="57" y="266" width="66" height="52" rx="12" fill="{fc("Throat")}" stroke="{sk}" stroke-width="1.5"/>'
+        f'<text x="90" y="296" text-anchor="middle" font-family="sans-serif" font-size="10" font-weight="700" fill="{tc("Throat")}">Throat</text>'
+
+        '</svg></div>'
+    )
+    return svg
 
 
 def panel_q(text):
