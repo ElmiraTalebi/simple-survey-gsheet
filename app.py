@@ -665,8 +665,15 @@ def add_patient(text, stage=None):
     st.session_state.messages.append({"role":"patient","content":text,"stage":s})
 
 def toggle_body_part(part):
-    if part in st.session_state.selected_parts: st.session_state.selected_parts.remove(part)
-    else: st.session_state.selected_parts.add(part)
+    # Keep selected parts and per-location severities consistent.
+    if part in st.session_state.selected_parts:
+        st.session_state.selected_parts.remove(part)
+        try:
+            st.session_state.pain_severities.pop(part, None)
+        except Exception:
+            pass
+    else:
+        st.session_state.selected_parts.add(part)
 
 def followup_count(sid): return st.session_state.followup_counts.get(sid, 0)
 def record_followup(sid): st.session_state.followup_counts[sid] = followup_count(sid)+1
@@ -1020,6 +1027,8 @@ elif stage == 3:
             st.markdown(body_svg(st.session_state.selected_parts, prev_locs),
                         unsafe_allow_html=True)
         with col_btns:
+            # Pre-populate per-location severities from last visit.
+            prev_sevs = dict(past[-1].get("pain_severities", {})) if past else {}
             for part in ["Head","Chest","Abdomen","Left Arm","Right Arm","Left Leg","Right Leg"]:
                 label = f"✓ {part}" if part in st.session_state.selected_parts else part
                 # Show previous status
@@ -1027,6 +1036,22 @@ elif stage == 3:
                     label += " (was painful)"
                 if st.button(label, key=f"toggle_{part}", use_container_width=True):
                     toggle_body_part(part); st.rerun()
+
+                # Drawer-style severity control (hidden unless selected)
+                if part in st.session_state.selected_parts:
+                    last_val = prev_sevs.get(part)
+                    hint = f"last: {last_val}/10" if last_val is not None else "last: —"
+                    with st.expander(f"▸ {part} severity ({hint})", expanded=False):
+                        default_val = int(prev_sevs.get(part, st.session_state.pain_severities.get(part, 3)))
+                        val = st.slider(
+                            label="Severity",
+                            min_value=0,
+                            max_value=10,
+                            value=default_val,
+                            key=f"sev_{part}",
+                            label_visibility="collapsed",
+                        )
+                        st.session_state.pain_severities[part] = int(val)
 
             # "Other" button for unlisted locations
             if st.button("➕ Other location", key="other_loc_btn", use_container_width=True):
@@ -1036,16 +1061,11 @@ elif stage == 3:
         if st.session_state.show_other_text.get(3, False):
             render_other_text(stage_id=3, placeholder="Describe other pain location…")
 
-        # Severity sliders for selected areas
+        # Ensure every selected location has a default severity even if the drawer isn't opened.
         if st.session_state.selected_parts:
-            st.markdown("<hr class='divider'>", unsafe_allow_html=True)
-            st.markdown('<div class="small-note">Rate severity for each area (0–10):</div>',
-                        unsafe_allow_html=True)
             prev_sevs = dict(past[-1].get("pain_severities", {})) if past else {}
-            for part in sorted(st.session_state.selected_parts):
-                default_val = prev_sevs.get(part, 3)
-                val = st.slider(part, 0, 10, default_val, key=f"sev_{part}")
-                st.session_state.pain_severities[part] = val
+            for part in st.session_state.selected_parts:
+                st.session_state.pain_severities.setdefault(part, int(prev_sevs.get(part, 3)))
 
         st.markdown("<div style='margin-top:8px;'></div>", unsafe_allow_html=True)
         if st.button("Save pain areas", key="send_locs", use_container_width=True, type="primary"):
