@@ -6,9 +6,6 @@ import streamlit as st
 import gspread
 from google.oauth2.service_account import Credentials
 from openai import OpenAI
-from streamlit_image_coordinates import streamlit_image_coordinates
-from PIL import Image
-import numpy as np
 
 st.set_page_config(page_title="Cancer Symptom Check-In", page_icon="🩺", layout="centered")
 
@@ -24,10 +21,10 @@ def _secret(*keys, default=None):
 
 
 # ============================================================
-# OpenAI (only for optional summarization)
+# OpenAI (optional)
 # ============================================================
 
-OPENAI_API_KEY = _secret("OPENAI_API_KEY", "openai_api_key")
+OPENAI_API_KEY = _secret("OPENAI_API_KEY")
 openai_client: Optional[OpenAI] = None
 
 if OPENAI_API_KEY:
@@ -45,17 +42,14 @@ sheet = None
 
 
 def init_sheets():
-
     global sheet
-
     if sheet:
         return
 
     try:
-
         creds = Credentials.from_service_account_info(
             st.secrets["gcp_service_account"],
-            scopes=["https://www.googleapis.com/auth/spreadsheets"],
+            scopes=["https://www.googleapis.com/auth/spreadsheets"]
         )
 
         gc = gspread.authorize(creds)
@@ -71,6 +65,25 @@ def init_sheets():
         st.warning(f"Sheets unavailable: {e}")
 
 
+def load_last_checkin(name):
+
+    init_sheets()
+
+    if sheet is None:
+        return None
+
+    rows = sheet.get_all_values()
+
+    for row in reversed(rows[1:]):
+        if row[1].lower() == name.lower():
+            try:
+                return json.loads(row[2])
+            except:
+                return None
+
+    return None
+
+
 def save_to_sheet(data):
 
     init_sheets()
@@ -78,13 +91,28 @@ def save_to_sheet(data):
     if sheet is None:
         return
 
-    sheet.append_row(
-        [
-            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            data["name"],
-            json.dumps(data),
-        ]
-    )
+    sheet.append_row([
+        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        data["name"],
+        json.dumps(data)
+    ])
+
+
+# ============================================================
+# Body Map SVG
+# ============================================================
+
+def body_svg():
+
+    return """
+    <svg width="250" height="380" viewBox="0 0 320 520" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="160" cy="70" r="38" fill="#e0e0e0"/>
+        <rect x="110" y="120" width="100" height="70" rx="24" fill="#e0e0e0"/>
+        <rect x="115" y="195" width="90" height="70" rx="22" fill="#e0e0e0"/>
+        <rect x="120" y="260" width="30" height="120" fill="#e0e0e0"/>
+        <rect x="170" y="260" width="30" height="120" fill="#e0e0e0"/>
+    </svg>
+    """
 
 
 # ============================================================
@@ -94,9 +122,13 @@ def save_to_sheet(data):
 defaults = dict(
     stage=-1,
     name="",
-    pain_map={},
-    last_severity=0,
-    submitted=False,
+    feeling=None,
+    pain=None,
+    pain_locations=set(),
+    pain_severity={},
+    last_severity={},
+    show_other=False,
+    submitted=False
 )
 
 for k, v in defaults.items():
@@ -105,59 +137,14 @@ for k, v in defaults.items():
 
 
 # ============================================================
-# Clinical helpers
-# ============================================================
-
-def is_same_as_yesterday(text):
-
-    text = text.lower()
-
-    keywords = [
-        "same",
-        "same as yesterday",
-        "about the same",
-        "no change",
-        "nothing changed",
-    ]
-
-    return any(k in text for k in keywords)
-
-
-# ============================================================
-# Body regions (coordinate mapping)
-# ============================================================
-
-BODY_REGIONS = {
-
-    "Head": (120, 40, 200, 110),
-    "Chest": (100, 110, 220, 200),
-    "Abdomen": (110, 200, 210, 280),
-    "Left Arm": (40, 120, 100, 260),
-    "Right Arm": (220, 120, 280, 260),
-    "Left Leg": (110, 280, 150, 420),
-    "Right Leg": (170, 280, 210, 420),
-}
-
-
-def get_clicked_region(x, y):
-
-    for part, (x1, y1, x2, y2) in BODY_REGIONS.items():
-
-        if x1 <= x <= x2 and y1 <= y <= y2:
-            return part
-
-    return None
-
-
-# ============================================================
-# UI Header
+# Header
 # ============================================================
 
 st.title("🩺 Cancer Symptom Check-In")
 
 
 # ============================================================
-# Stage -1 Name
+# Stage -1 : name
 # ============================================================
 
 if st.session_state.stage == -1:
@@ -169,17 +156,22 @@ if st.session_state.stage == -1:
         if name:
 
             st.session_state.name = name
+
+            last = load_last_checkin(name)
+
+            if last:
+                st.session_state.last_severity = last.get("pain_severity", {})
+
             st.session_state.stage = 0
             st.rerun()
 
     st.stop()
 
-
 stage = st.session_state.stage
 
 
 # ============================================================
-# Stage 0 Fast Exit
+# Stage 0 fast exit
 # ============================================================
 
 if stage == 0:
@@ -192,7 +184,6 @@ if stage == 0:
         if st.button("Same as yesterday"):
 
             st.success("Check-in complete.")
-
             st.session_state.submitted = True
             st.session_state.stage = 5
             st.rerun()
@@ -200,12 +191,30 @@ if stage == 0:
     with col2:
         if st.button("Something changed"):
 
-            st.session_state.stage = 2
+            st.session_state.stage = 1
             st.rerun()
 
 
 # ============================================================
-# Stage 2 Pain Question
+# Stage 1 feeling
+# ============================================================
+
+elif stage == 1:
+
+    feeling = st.radio(
+        "How are you feeling today?",
+        ["Excellent", "Very good", "Good", "Fair", "Poor"]
+    )
+
+    if st.button("Next"):
+
+        st.session_state.feeling = feeling
+        st.session_state.stage = 2
+        st.rerun()
+
+
+# ============================================================
+# Stage 2 pain yes/no
 # ============================================================
 
 elif stage == 2:
@@ -213,6 +222,8 @@ elif stage == 2:
     pain = st.radio("Do you have pain today?", ["No", "Yes"])
 
     if st.button("Next"):
+
+        st.session_state.pain = pain
 
         if pain == "Yes":
             st.session_state.stage = 3
@@ -223,80 +234,87 @@ elif stage == 2:
 
 
 # ============================================================
-# Stage 3 Clickable Body Map
+# Stage 3 body map
 # ============================================================
 
 elif stage == 3:
 
-    st.subheader("Click where you feel pain")
+    st.subheader("Mark where you feel pain")
 
-    body_img = Image.open("body_map.png")
+    st.markdown(body_svg(), unsafe_allow_html=True)
 
-    click = streamlit_image_coordinates(body_img)
+    parts = [
+        "Head",
+        "Neck",
+        "Chest",
+        "Abdomen",
+        "Left Arm",
+        "Right Arm",
+        "Left Leg",
+        "Right Leg"
+    ]
 
-    if click:
+    cols = st.columns(2)
 
-        region = get_clicked_region(click["x"], click["y"])
+    for i, part in enumerate(parts):
 
-        if region:
+        with cols[i % 2]:
 
-            if region not in st.session_state.pain_map:
-                st.session_state.pain_map[region] = {
-                    "severity": None,
-                    "reason": None
-                }
+            selected = part in st.session_state.pain_locations
+            color = "🔴" if selected else "🟢"
 
-    for part, data in st.session_state.pain_map.items():
+            if st.button(f"{color} {part}", key=part):
 
-        st.markdown(f"### {part}")
+                if selected:
+                    st.session_state.pain_locations.remove(part)
+                else:
+                    st.session_state.pain_locations.add(part)
 
-        if data["severity"] is None:
-
-            st.markdown(
-                f"""
-                <div style="background:#eef2ff;padding:10px;border-radius:10px">
-                🩺 How severe is the pain in your {part.lower()}? (0–10)
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
-
-            sev = st.number_input(
-                "",
-                min_value=0,
-                max_value=10,
-                key=f"sev_{part}"
-            )
-
-            if st.button("Submit", key=f"submit_{part}"):
-
-                st.session_state.pain_map[part]["severity"] = sev
                 st.rerun()
 
-        else:
+            # If selected → show GPT bubble
+            if part in st.session_state.pain_locations:
 
-            sev = data["severity"]
-            st.write(f"Severity: {sev}/10")
+                st.info("How severe is it (0-10)?")
 
-            if sev > 6 or sev > st.session_state.last_severity:
+                last_val = st.session_state.last_severity.get(part, 0)
 
-                if data["reason"] is None:
+                severity = st.number_input(
+                    f"{part} severity",
+                    0,
+                    10,
+                    value=last_val,
+                    key=f"sev_{part}"
+                )
 
-                    st.markdown(
-                        f"""
-                        <div style="background:#eef2ff;padding:10px;border-radius:10px">
-                        🩺 What seems to be causing the increase in your {part.lower()} pain?
-                        </div>
-                        """,
-                        unsafe_allow_html=True
+                st.session_state.pain_severity[part] = severity
+
+                # Follow-up condition
+                if severity > 6 or severity > last_val:
+
+                    st.warning("What seems to be causing the worsening?")
+
+                    reason = st.text_input(
+                        f"Reason for {part}",
+                        key=f"reason_{part}"
                     )
 
-                    reason = st.text_input("", key=f"reason_{part}")
+    st.markdown("---")
 
-                    if st.button("Submit reason", key=f"reasonbtn_{part}"):
+    if st.button("Other location"):
+        st.session_state.show_other = True
 
-                        st.session_state.pain_map[part]["reason"] = reason
-                        st.rerun()
+    if st.session_state.show_other:
+
+        other = st.text_input("Describe other pain location")
+
+        if other:
+
+            st.session_state.pain_locations.add(other)
+
+            sev = st.number_input("Severity (0-10)", 0, 10, key="other_sev")
+
+            st.session_state.pain_severity[other] = sev
 
     if st.button("Next"):
         st.session_state.stage = 4
@@ -304,35 +322,40 @@ elif stage == 3:
 
 
 # ============================================================
-# Stage 4 Symptoms
+# Stage 4 symptoms
 # ============================================================
 
 elif stage == 4:
 
-    symptoms = st.text_area("Any symptoms today?")
+    symptoms = st.text_area("Describe any symptoms")
 
     if st.button("Submit Check-In"):
 
         data = dict(
             name=st.session_state.name,
-            pain_map=st.session_state.pain_map,
+            feeling=st.session_state.feeling,
+            pain=st.session_state.pain,
+            pain_locations=list(st.session_state.pain_locations),
+            pain_severity=st.session_state.pain_severity,
             symptoms=symptoms
         )
 
         save_to_sheet(data)
 
-        st.session_state.stage = 5
         st.session_state.submitted = True
+        st.session_state.stage = 5
+
         st.rerun()
 
 
 # ============================================================
-# Stage 5 Completed
+# Stage 5 finished
 # ============================================================
 
 elif stage == 5:
 
     st.success("Check-in complete.")
+    st.write("Your care team will review your responses.")
 
     if st.button("Start another check-in"):
 
