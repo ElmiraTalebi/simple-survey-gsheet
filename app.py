@@ -857,14 +857,10 @@ if st.session_state.stage == -1:
             past = st.session_state.past_checkins
             if past:
                 last = past[-1]
-                # Carry over prior symptoms for quick confirmation, but do NOT pre-select
-                # prior pain locations as today's pain. They should appear orange first and
-                # only turn red if the patient clicks them today.
-                st.session_state.selected_parts = set()
+                # Pre-populate from last visit
+                st.session_state.selected_parts = set(last.get("pain_locations", []))
                 st.session_state.symptoms = list(last.get("symptoms", []))
-                # Keep today's pain severities empty until a body part is confirmed today.
-                # Previous severities are still shown from past_checkins inside Stage 3.
-                st.session_state.pain_severities = {}
+                st.session_state.pain_severities = dict(last.get("pain_severities", {}))
                 with st.spinner("Getting your assistant ready…"):
                     opening = get_opening_message(last, name_input.strip())
                 add_doctor(opening, stage=0)
