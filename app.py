@@ -4,7 +4,6 @@ from datetime import datetime
 from typing import Dict, List, Optional, Set
 
 import streamlit as st
-import streamlit.components.v1 as components
 import gspread
 from google.oauth2.service_account import Credentials
 from openai import OpenAI
@@ -141,34 +140,29 @@ def transcribe_audio(audio_bytes: bytes) -> str:
 
 def voice_input_widget(answer_key: str, label: str = "🎤 Or speak your answer"):
     """
-    Renders a mic recorder. On new audio, transcribes and writes into
-    st.session_state[answer_key].
-    Requires: streamlit-audiorecorder  (pip install streamlit-audiorecorder)
-    Falls back silently if not installed.
+    Renders a mic input using Streamlit's built-in st.audio_input (no extra package needed).
+    On new audio, transcribes via Whisper and injects text into st.session_state[answer_key].
     """
-    try:
-        from audiorecorder import audiorecorder
-    except ImportError:
-        return
-
     last_hash_key = f"_audio_hash_{answer_key}"
     if last_hash_key not in st.session_state:
         st.session_state[last_hash_key] = None
 
-    audio = audiorecorder(label, "⏹ Stop", key=f"_rec_{answer_key}")
+    audio = st.audio_input(label, key=f"_rec_{answer_key}")
 
     if audio is None:
         return
+
     try:
-        ab = audio.export(format="wav").read()
+        ab = audio.getvalue()
     except Exception:
         return
+
     if not ab:
         return
 
     ah = hashlib.sha1(ab).hexdigest()
     if ah == st.session_state[last_hash_key]:
-        return  # same clip, skip
+        return  # same clip already processed
 
     st.session_state[last_hash_key] = ah
     with st.spinner("Transcribing…"):
@@ -632,7 +626,7 @@ elif st.session_state.stage == 1:
     st.markdown('<div class="section-title">How are you feeling today?</div>', unsafe_allow_html=True)
 
     last_feeling = st.session_state.last_summary.get("feeling_level", None) if st.session_state.last_summary else None
-    default_feeling = int(last_feeling) if last_feeling is not None else 7
+    default_feeling = int(last_feeling) if last_feeling is not None else 0
     feeling = st.number_input("Feeling (0-10)", 0, 10, value=default_feeling)
 
     feeling_improved = (last_feeling is not None and feeling > int(last_feeling))
