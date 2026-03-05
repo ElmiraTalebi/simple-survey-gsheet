@@ -317,64 +317,72 @@ def detect_worsening(payload: Dict, last_summary: Optional[Dict]) -> Dict:
 
 def generate_followup_questions(payload: Dict, worse: Dict, last_summary: Dict) -> List[str]:
     """
-    Calls GPT-4.1-mini to generate 1-2 empathetic follow-up questions
-    based on what worsened since the last check-in.
-    Returns a list of question strings.
+    Generates at most 1 specific follow-up question, only when clinically necessary
+    and not already answered by the patient in the body map stage.
     """
     if openai_client is None:
         return []
 
-    context_parts = []
+    pain_reason = payload.get("pain_reason", {})
+    pain_severity = payload.get("pain_severity", {})
 
-    if "worsened_pain" in worse:
+    # Find the single most critical unanswered issue — strict priority order
+    critical_issue = None
+
+    # 1. Severity >= 8 with no reason given
+    for region, sev in pain_severity.items():
+        if sev >= 8 and region not in pain_reason:
+            critical_issue = f"Pain in {region} is severe ({sev}/10) and no reason was provided."
+            break
+
+    # 2. Pain jumped by 3+ with no reason given
+    if not critical_issue and "worsened_pain" in worse:
         for region, change in worse["worsened_pain"].items():
-            context_parts.append(
-                f"Pain in {region} worsened from {change['from']}/10 to {change['to']}/10."
-            )
+            jump = change["to"] - change["from"]
+            if jump >= 3 and region not in pain_reason:
+                critical_issue = (
+                    f"Pain in {region} jumped from {change['from']}/10 to {change['to']}/10 "
+                    f"with no explanation provided."
+                )
+                break
 
-    if "new_pain_locations" in worse:
-        locs = ", ".join(worse["new_pain_locations"])
-        context_parts.append(f"New pain appeared in: {locs}.")
+    # 3. New pain location with severity >= 6 and no reason
+    if not critical_issue and "new_pain_locations" in worse:
+        for region in worse["new_pain_locations"]:
+            sev = pain_severity.get(region, 0)
+            if sev >= 6 and region not in pain_reason:
+                critical_issue = f"New pain in {region} at {sev}/10 with no explanation."
+                break
 
-    if "feeling_dropped" in worse:
-        fd = worse["feeling_dropped"]
-        context_parts.append(
-            f"Overall feeling dropped from {fd['from']}/10 to {fd['to']}/10."
-        )
-
-    if "new_symptoms" in worse:
-        syms = ", ".join(worse["new_symptoms"])
-        context_parts.append(f"New symptoms reported: {syms}.")
-
-    context = " ".join(context_parts)
+    # Nothing critical or everything already explained — no follow-up needed
+    if not critical_issue:
+        return []
 
     prompt = (
-        f"You are a compassionate oncology nurse assistant. "
-        f"A cancer patient named {payload.get('name', 'the patient')} just completed a symptom check-in. "
-        f"Compared to their last visit, the following changes were noted: {context} "
-        f"Please ask exactly 1 to 2 short, empathetic, open-ended follow-up questions to better understand "
-        f"their situation. Focus on the most clinically significant change. "
-        f"Return ONLY a JSON array of question strings, nothing else. "
-        f'Example format: ["Question one?", "Question two?"]'
+        f"You are a concise oncology nurse. A cancer patient has this unresolved clinical issue: "
+        f"{critical_issue} "
+        f"Ask exactly ONE specific, short question to clarify only this issue. "
+        f"Do not ask anything already covered. Do not be vague or generic. "
+        f'Return ONLY a JSON array with one question string. Example: ["Your question here?"]'
     )
 
     try:
         response = openai_client.chat.completions.create(
             model="gpt-4.1-mini",
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=200,
-            temperature=0.5,
+            max_tokens=80,
+            temperature=0.3,
         )
         raw = response.choices[0].message.content.strip()
-        # Strip markdown fences if present
         raw = raw.replace("```json", "").replace("```", "").strip()
         questions = json.loads(raw)
-        if isinstance(questions, list):
-            return [str(q) for q in questions[:2]]
+        if isinstance(questions, list) and questions:
+            return [str(questions[0])]
     except Exception:
         pass
 
     return []
+
 
 
 # ============================================================
