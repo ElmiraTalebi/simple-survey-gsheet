@@ -138,12 +138,38 @@ def transcribe_audio(audio_bytes: bytes) -> str:
         return f"(Transcription failed: {e})"
 
 
-def voice_input_widget(answer_key: str, label: str = "🎤 Or speak your answer"):
+def interpret_voice_answer(transcript: str, question: str) -> str:
     """
-    Renders a mic input using st.audio_input. Transcribes via Whisper and stores
-    the result in a separate _transcript_{answer_key} buffer to avoid the
-    Streamlit restriction on writing to active widget keys.
-    Callers should read: st.session_state.get(f"_transcript_{answer_key}", "")
+    Passes the raw Whisper transcript + the question to GPT to produce
+    a clean, concise written answer. Falls back to raw transcript on error.
+    """
+    if openai_client is None:
+        return transcript
+    try:
+        prompt = (
+            f"A cancer patient was asked the following question during a symptom check-in:\n"
+            f"Question: {question}\n"
+            f"The patient spoke this answer (raw speech transcription): {transcript}\n\n"
+            f"Rewrite their answer as a clean, concise written response in first person. "
+            f"Keep all medical details exactly as stated. Do not add anything not mentioned. "
+            f"Return only the cleaned answer, nothing else."
+        )
+        response = openai_client.chat.completions.create(
+            model="gpt-4.1-mini",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=120,
+            temperature=0.2,
+        )
+        return response.choices[0].message.content.strip()
+    except Exception:
+        return transcript
+
+
+def voice_input_widget(answer_key: str, label: str = "🎤 Or speak your answer", question: str = ""):
+    """
+    Renders a mic input using st.audio_input.
+    Flow: record → Whisper transcription → GPT cleans answer → stored in _transcript_ buffer.
+    The text input above should use value=st.session_state.get(f"_transcript_{answer_key}", "")
     """
     transcript_key = f"_transcript_{answer_key}"
     last_hash_key  = f"_audio_hash_{answer_key}"
@@ -169,15 +195,21 @@ def voice_input_widget(answer_key: str, label: str = "🎤 Or speak your answer"
         return  # same clip already processed
 
     st.session_state[last_hash_key] = ah
-    with st.spinner("Transcribing…"):
-        text = transcribe_audio(ab)
 
-    if text and not text.startswith("(Transcription failed"):
-        # Write to buffer key — never to the widget key directly
-        st.session_state[transcript_key] = text
-        st.rerun()
-    else:
+    with st.spinner("Transcribing…"):
+        raw_text = transcribe_audio(ab)
+
+    if not raw_text or raw_text.startswith("(Transcription failed"):
         st.warning("Could not transcribe — please try again or type your answer.")
+        return
+
+    # Pass transcript through GPT to clean it up
+    with st.spinner("Processing your answer…"):
+        cleaned = interpret_voice_answer(raw_text, question) if question else raw_text
+
+    # Write to buffer — never to the widget key directly (Streamlit restriction)
+    st.session_state[transcript_key] = cleaned
+    st.rerun()
 
 
 # ============================================================
@@ -760,7 +792,7 @@ elif st.session_state.stage == 3:
                         value=_default_reason,
                         key=f"reason_{r}"
                     )
-                    voice_input_widget(f"reason_{r}", label="🎤 Or speak")
+                    voice_input_widget(f"reason_{r}", label="🎤 Or speak", question=question)
                     if answer:
                         st.session_state.pain_reason[r] = answer
                     elif _tr_reason:
@@ -910,7 +942,7 @@ elif st.session_state.stage == 4.5:
             key=f"followup_answer_{i}",
             height=80,
         )
-        voice_input_widget(f"followup_answer_{i}")
+        voice_input_widget(f"followup_answer_{i}", question=question)
         saved = answer or _tr_fup
         if saved:
             st.session_state.followup_answers[i] = saved
