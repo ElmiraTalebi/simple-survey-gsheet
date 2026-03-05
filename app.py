@@ -8,6 +8,131 @@ from google.oauth2.service_account import Credentials
 
 st.set_page_config(page_title="Cancer Symptom Check-In", page_icon="🩺", layout="centered")
 
+st.markdown("""
+<style>
+
+/* ---------- GLOBAL APP STYLE ---------- */
+
+html, body, [class*="css"]  {
+    font-family: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+/* App background */
+.stApp {
+    background-color: #f6f8fb;
+}
+
+/* ---------- MAIN CONTAINER ---------- */
+
+.main .block-container{
+    padding-top: 2rem;
+    padding-bottom: 2rem;
+    padding-left: 2rem;
+    padding-right: 2rem;
+}
+
+/* ---------- TITLES ---------- */
+
+h1 {
+    font-weight: 700;
+    letter-spacing: -0.5px;
+}
+
+h2, h3 {
+    font-weight: 600;
+}
+
+/* ---------- BUTTONS ---------- */
+
+.stButton > button {
+    border-radius: 12px;
+    border: 1px solid #e3e8ef;
+    padding: 10px 16px;
+    font-weight: 500;
+    background: white;
+    transition: all 0.2s ease;
+}
+
+.stButton > button:hover {
+    border-color: #5b8cff;
+    color: #5b8cff;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+}
+
+/* Primary button */
+
+.stButton > button[kind="primary"] {
+    background: #4a7cff;
+    color: white;
+    border: none;
+}
+
+.stButton > button[kind="primary"]:hover {
+    background: #3a67e0;
+}
+
+/* ---------- INPUT FIELDS ---------- */
+
+.stTextInput input,
+.stNumberInput input,
+textarea {
+    border-radius: 10px !important;
+    border: 1px solid #e4e7ec !important;
+}
+
+/* ---------- RADIO BUTTONS ---------- */
+
+.stRadio > div {
+    padding: 8px 0px;
+}
+
+/* ---------- INFO / DOCTOR MESSAGE ---------- */
+
+.stAlert {
+    border-radius: 12px;
+}
+
+/* ---------- BODY MAP CARD ---------- */
+
+svg {
+    background: white;
+    border-radius: 16px;
+    padding: 12px;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.06);
+}
+
+/* ---------- SECTION CARDS ---------- */
+
+.section-card {
+    background: white;
+    padding: 20px;
+    border-radius: 16px;
+    border: 1px solid #edf0f4;
+    box-shadow: 0 3px 12px rgba(0,0,0,0.05);
+    margin-bottom: 20px;
+}
+
+/* ---------- SLIDER STYLE ---------- */
+
+.stSlider > div > div {
+    padding-top: 10px;
+}
+
+/* ---------- NICE SCROLL ---------- */
+
+::-webkit-scrollbar {
+    width: 8px;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #d8dde6;
+    border-radius: 4px;
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+
 # ============================================================
 # Secrets helpers
 # ============================================================
