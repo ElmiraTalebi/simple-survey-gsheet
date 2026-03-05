@@ -13,7 +13,13 @@ st.set_page_config(page_title="Cancer Symptom Check-In", page_icon="🩺", layou
 # ── Secrets ────────────────────────────────────────────────
 def _secret(*keys, default=None):
     for k in keys:
-        if k in st.secrets: return st.secrets[k]
+        if k in st.secrets:
+            val = st.secrets[k]
+            # Return nested sections as dict (for gcp_service_account etc.)
+            try:
+                return dict(val) if hasattr(val, "keys") else val
+            except Exception:
+                return val
     return default
 
 def _require_secret(*keys):
@@ -70,17 +76,17 @@ def save_to_sheet():
         datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         st.session_state.get("patient_name", "Unknown"),
         json.dumps({
-            "feeling_level":    st.session_state.feeling_level,
-            "pain":             st.session_state.pain_yesno,
-            "pain_locations":   sorted(list(st.session_state.selected_parts)),
+            "feeling_level":    st.session_state.get("feeling_level"),
+            "pain":             st.session_state.get("pain_yesno"),
+            "pain_locations":   sorted(list(st.session_state.get("selected_parts", set()))),
             "pain_severities":  st.session_state.get("pain_severities", {}),
             "pain_timing":      st.session_state.get("pain_timing"),
             "eating":           st.session_state.get("eating_status"),
             "food_type":        st.session_state.get("food_type"),
             "shakes_per_day":   st.session_state.get("shakes_per_day"),
             "hydration":        st.session_state.get("hydration"),
-            "symptoms":         st.session_state.symptoms,
-            "conversation":     st.session_state.messages,
+            "symptoms":         st.session_state.get("symptoms", []),
+            "conversation":     st.session_state.get("messages", []),
             "fast_path":        st.session_state.get("fast_path", False),
         })
     ])
@@ -568,9 +574,11 @@ def toggle_body_part(part):
 
 def advance_stage():
     s = st.session_state.stage
-    if st.session_state.fast_path:
+    # Fast path only applies when leaving stage 0 (the "About the same" shortcut)
+    if st.session_state.fast_path and s == 0:
         st.session_state.stage = 5; return
     if   s == 0: st.session_state.stage = 2  # stage 1 (feeling) removed
+    elif s == 1: st.session_state.stage = 2  # new patients start at stage 1
     elif s == 2: st.session_state.stage = 3  # eating is always asked
     elif s == 3: st.session_state.stage = 4
     elif s == 4: st.session_state.stage = 5
@@ -651,15 +659,16 @@ def render_followup_input(stage_id: int):
 
 def render_other_input(stage_id: int, placeholder: str = "Describe…"):
     """Text input shown only after clicking 'Other'."""
+    ctr = st.session_state.mic_key_counter
     c_main, c_mic = st.columns([7, 2.5], gap="small")
     with c_main:
         typed = st.text_input("", placeholder=placeholder,
-                              key=f"other_txt_{stage_id}", label_visibility="collapsed")
-        send = st.button("↑", key=f"other_send_{stage_id}")
+                              key=f"other_txt_{stage_id}_{ctr}", label_visibility="collapsed")
+        send = st.button("↑", key=f"other_send_{stage_id}_{ctr}")
     with c_mic:
         audio = None
         if hasattr(st, "audio_input"):
-            audio = st.audio_input("", key=f"other_mic_{stage_id}_{st.session_state.mic_key_counter}",
+            audio = st.audio_input("", key=f"other_mic_{stage_id}_{ctr}",
                                    label_visibility="collapsed")
     if send and typed and typed.strip():
         on_answer(typed.strip(), stage_id); st.rerun()
@@ -676,6 +685,7 @@ def body_svg(selected: Set[str], prev_locs: Optional[Set[str]] = None) -> str:
     return f"""<svg width="200" height="325" viewBox="0 0 320 520" xmlns="http://www.w3.org/2000/svg">
   <defs><filter id="sh"><feDropShadow dx="0" dy="2" stdDeviation="2" flood-color="rgba(0,0,0,0.12)"/></filter></defs>
   <g filter="url(#sh)"><circle cx="160" cy="70" r="38" fill="{fill('Head')}" stroke="{s}" stroke-width="2"/></g>
+  <g filter="url(#sh)"><rect x="145" y="108" width="30" height="22" rx="8" fill="{fill('Throat/Neck')}" stroke="{s}" stroke-width="2"/></g>
   <g filter="url(#sh)"><rect x="110" y="120" width="100" height="70" rx="24" fill="{fill('Chest')}" stroke="{s}" stroke-width="2"/></g>
   <g filter="url(#sh)"><rect x="115" y="195" width="90" height="70" rx="22" fill="{fill('Abdomen')}" stroke="{s}" stroke-width="2"/></g>
   <g filter="url(#sh)"><path d="M110 132 C80 145,72 180,78 220 C82 250,92 270,100 290 C108 310,115 320,120 320 L120 130Z" fill="{fill('Left Arm')}" stroke="{s}" stroke-width="2"/></g>
@@ -907,12 +917,18 @@ elif stage == 2:
                 replies = ["A few days ago", "About a week ago", "Over a week ago"]
             else:
                 replies = ["Yes, a lot", "Somewhat", "Not really"]
-            rc = st.columns(len(replies), gap="small")
-            for i, r in enumerate(replies):
-                with rc[i]:
-                    if st.button(r, key=f"f2_r_{i}", use_container_width=True):
-                        on_followup_reply(r, 2); st.rerun()
-            render_followup_input(2)
+            replied = stage_msgs and stage_msgs[-1]["role"] == "patient"
+            if not replied:
+                rc = st.columns(len(replies), gap="small")
+                for i, r in enumerate(replies):
+                    with rc[i]:
+                        if st.button(r, key=f"f2_r_{i}", use_container_width=True):
+                            on_followup_reply(r, 2); st.rerun()
+                render_followup_input(2)
+            else:
+                st.markdown("<hr class='divider'>", unsafe_allow_html=True)
+                if st.button("Next →", key="pain_next", use_container_width=True, type="primary"):
+                    advance_stage(); st.rerun()
         else:
             # Show Next button — never auto-advance so patient isn't confused
             st.markdown("<hr class='divider'>", unsafe_allow_html=True)
