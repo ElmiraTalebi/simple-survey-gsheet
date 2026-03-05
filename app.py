@@ -8,74 +8,6 @@ from google.oauth2.service_account import Credentials
 
 st.set_page_config(page_title="Cancer Symptom Check-In", page_icon="🩺", layout="centered")
 
-# ------------------------------------------------------------
-# MODERN UI STYLING (appearance only)
-# ------------------------------------------------------------
-
-st.markdown("""
-<style>
-
-html, body, [class*="css"]  {
-    font-family: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
-}
-
-.stApp {
-    background-color: #f6f8fb;
-}
-
-.main .block-container{
-    padding-top: 2rem;
-    padding-bottom: 2rem;
-    padding-left: 2rem;
-    padding-right: 2rem;
-}
-
-h1 {
-    font-weight: 700;
-    letter-spacing: -0.5px;
-}
-
-h2, h3 {
-    font-weight: 600;
-}
-
-.stButton > button {
-    border-radius: 12px;
-    border: 1px solid #e3e8ef;
-    padding: 10px 16px;
-    font-weight: 500;
-    background: white;
-    transition: all 0.2s ease;
-}
-
-.stButton > button:hover {
-    border-color: #5b8cff;
-    color: #5b8cff;
-    box-shadow: 0 2px 6px rgba(0,0,0,0.08);
-}
-
-.stTextInput input,
-.stNumberInput input,
-textarea {
-    border-radius: 10px !important;
-    border: 1px solid #e4e7ec !important;
-}
-
-svg {
-    background: white;
-    border-radius: 16px;
-    padding: 12px;
-    box-shadow: 0 4px 14px rgba(0,0,0,0.06);
-}
-
-.stAlert {
-    border-radius: 12px;
-}
-
-</style>
-""", unsafe_allow_html=True)
-
-
 # ============================================================
 # Secrets helpers
 # ============================================================
@@ -179,6 +111,7 @@ GREEN = "#6fd08c"
 ORANGE = "#f5a623"
 RED = "#e74c3c"
 
+
 REGIONS = [
     "Head",
     "Chest",
@@ -277,7 +210,11 @@ elif st.session_state.stage == 3:
     col_map, col_opts = st.columns([1.1, 1])
 
     with col_map:
-        st.markdown(body_svg(current_svg_colors()), unsafe_allow_html=True)
+
+        st.markdown(
+            body_svg(current_svg_colors()),
+            unsafe_allow_html=True
+        )
 
     with col_opts:
 
