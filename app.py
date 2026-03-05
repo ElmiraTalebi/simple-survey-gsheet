@@ -437,65 +437,6 @@ def generate_followup_questions(payload: Dict, worse: Dict, last_summary: Dict) 
 
 
 
-# ============================================================
-# Voice input helper
-# ============================================================
-
-def voice_input_widget(input_key: str, label: str = ""):
-    """
-    Renders a mic button. On click, uses the Web Speech API to transcribe speech
-    and injects the result into the Streamlit text input with the given key.
-    """
-    components.html(f"""
-    <div style="margin-top:4px; margin-bottom:8px;">
-        <button id="mic_{input_key}" onclick="startVoice_{input_key}()"
-            style="background:#f1f6ff; border:1px solid #cfe0ff; border-radius:8px;
-                   padding:6px 14px; font-size:14px; cursor:pointer;">
-            🎤 Speak your answer
-        </button>
-        <span id="status_{input_key}" style="font-size:13px; color:#888; margin-left:10px;"></span>
-    </div>
-    <script>
-    function startVoice_{input_key}() {{
-        const btn = document.getElementById("mic_{input_key}");
-        const status = document.getElementById("status_{input_key}");
-        if (!("webkitSpeechRecognition" in window) && !("SpeechRecognition" in window)) {{
-            status.innerText = "Voice not supported in this browser.";
-            return;
-        }}
-        const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-        const rec = new SR();
-        rec.lang = "en-US";
-        rec.interimResults = false;
-        rec.maxAlternatives = 1;
-        btn.innerText = "🔴 Listening...";
-        status.innerText = "";
-        rec.start();
-        rec.onresult = function(event) {{
-            const transcript = event.results[0][0].transcript;
-            btn.innerText = "🎤 Speak your answer";
-            status.innerText = "✓ Got it!";
-            // Find the Streamlit textarea/input with the matching key and set its value
-            const inputs = window.parent.document.querySelectorAll("textarea, input[type=text]");
-            for (let el of inputs) {{
-                // Streamlit keys appear in the element id or aria-label
-                if (el.id && el.id.includes("{input_key}")) {{
-                    el.value = transcript;
-                    el.dispatchEvent(new Event("input", {{ bubbles: true }}));
-                    break;
-                }}
-            }}
-        }};
-        rec.onerror = function(e) {{
-            btn.innerText = "🎤 Speak your answer";
-            status.innerText = "Error: " + e.error;
-        }};
-        rec.onend = function() {{
-            if (btn.innerText === "🔴 Listening...") btn.innerText = "🎤 Speak your answer";
-        }};
-    }}
-    </script>
-    """, height=60)
 
 # ============================================================
 # UI
