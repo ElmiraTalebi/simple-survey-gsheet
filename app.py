@@ -462,27 +462,45 @@ if st.session_state.stage == 0:
 
         st.markdown(f'<div class="doctor-box">👩‍⚕️ {message}</div>', unsafe_allow_html=True)
 
+    else:
+
+        welcome = (
+            f"Welcome, {st.session_state.name}! 👋 It looks like this is your first check-in with us. "
+            f"We'll ask you a few short questions about how you're feeling today — "
+            f"it should only take a minute or two."
+        )
+        st.markdown(f'<div class="doctor-box">👩‍⚕️ {welcome}</div>', unsafe_allow_html=True)
+
     st.markdown("---")
 
     c1, c2 = st.columns(2)
 
-    with c1:
-        if st.button("Same as yesterday"):
+    if last:
 
-            payload = {
-                "name": st.session_state.name,
-                "note": "Same as yesterday"
-            }
+        with c1:
+            if st.button("Same as yesterday"):
 
-            save_to_sheet(payload)
+                payload = {
+                    "name": st.session_state.name,
+                    "note": "Same as yesterday"
+                }
 
-            st.session_state.stage = 5
-            st.rerun()
+                save_to_sheet(payload)
 
-    with c2:
-        if st.button("Something changed"):
-            st.session_state.stage = 1
-            st.rerun()
+                st.session_state.stage = 5
+                st.rerun()
+
+        with c2:
+            if st.button("Something changed"):
+                st.session_state.stage = 1
+                st.rerun()
+
+    else:
+
+        with c1:
+            if st.button("Start Check-In"):
+                st.session_state.stage = 1
+                st.rerun()
 
 
 # ------------------------------------------------------------
