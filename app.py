@@ -516,6 +516,9 @@ defaults = {
     "fast_path": False,
     "pain_sub": "map",   # sub-stages within pain: map → timing → done
     "eat_sub": "status", # sub-stages within eating: status → type → shakes → hydration → done
+    "part_followup_q": {},  # {body_part: question}
+    "part_followup_a": {},  # {body_part: answer}
+    "part_fu_logged":  False,
 }
 for k, v in defaults.items():
     if k not in st.session_state: st.session_state[k] = v
@@ -787,13 +790,34 @@ elif stage == 2:
             st.markdown(body_svg(st.session_state.selected_parts, prev_locs),
                         unsafe_allow_html=True)
 
+        # Ensure per-part followup state dicts exist
+        if "part_followup_q" not in st.session_state:
+            st.session_state.part_followup_q = {}   # {part: question_str}
+        if "part_followup_a" not in st.session_state:
+            st.session_state.part_followup_a = {}   # {part: answer_str}
+
+        def _part_followup_question(part: str, sev: int, is_new: bool) -> Optional[str]:
+            """Return a targeted follow-up question for this part, or None if not needed."""
+            if is_new:
+                return f"When did you first notice the pain in your {part.lower()}?"
+            if sev >= 6:
+                timing = st.session_state.get("pain_timing")
+                loc = part.lower()
+                if timing == "movement":
+                    return f"Is the {loc} pain limiting your movement or daily activities?"
+                else:
+                    return f"Is the {loc} pain making it hard to swallow or eat?"
+            prev_sev = prev_sevs.get(part, 0)
+            if sev > prev_sev + 1:
+                return f"Your {part.lower()} pain increased from {prev_sev} to {sev}/10 — what do you think made it worse?"
+            return None
+
         with col_btns:
             BODY_PARTS = ["Head", "Throat/Neck", "Chest", "Abdomen",
                           "Left Arm", "Right Arm", "Left Leg", "Right Leg"]
             for part in BODY_PARTS:
                 selected = part in st.session_state.selected_parts
                 from_last = part in prev_locs
-                # Color coding: red if selected, orange if from last visit only, green otherwise
                 if selected:
                     lbl = f"🔴 {part} ✓"
                 elif from_last:
@@ -802,13 +826,15 @@ elif stage == 2:
                     lbl = f"🟢 {part}"
                 if st.button(lbl, key=f"bp_{part}", use_container_width=True):
                     toggle_body_part(part)
-                    if part in st.session_state.pain_severities and part not in st.session_state.selected_parts:
-                        del st.session_state.pain_severities[part]
+                    if part not in st.session_state.selected_parts:
+                        # Deselected — clear severity and any followup for this part
+                        st.session_state.pain_severities.pop(part, None)
+                        st.session_state.part_followup_q.pop(part, None)
+                        st.session_state.part_followup_a.pop(part, None)
                     st.rerun()
 
                 # Inline severity slider — pre-seeded with last visit value
                 if part in st.session_state.selected_parts:
-                    # Default to last visit severity so patient just adjusts delta
                     default_sev = prev_sevs.get(part, 5)
                     current_sev = st.session_state.pain_severities.get(part, default_sev)
                     sev_val = st.slider(
@@ -834,6 +860,64 @@ elif stage == 2:
                         unsafe_allow_html=True
                     )
 
+                    # ── Inline per-part follow-up ──────────────────────────
+                    is_new = part not in prev_locs
+                    q = _part_followup_question(part, sev_val, is_new)
+
+                    if q:
+                        # Store the question so it persists across reruns
+                        if part not in st.session_state.part_followup_q:
+                            st.session_state.part_followup_q[part] = q
+
+                        stored_q = st.session_state.part_followup_q[part]
+                        existing_ans = st.session_state.part_followup_a.get(part)
+
+                        if existing_ans:
+                            # Already answered — show it quietly
+                            st.markdown(
+                                f'<div style="font-size:12px;color:#8a8075;margin:-4px 0 6px;'
+                                f'padding:4px 8px;border-left:2px solid var(--accent-md);">'
+                                f'🩺 {stored_q}<br>'
+                                f'<span style="color:var(--accent);font-weight:600;">✓ {existing_ans}</span></div>',
+                                unsafe_allow_html=True
+                            )
+                        else:
+                            # Show follow-up question + quick replies inline
+                            st.markdown(
+                                f'<div class="inline-followup" style="margin:4px 0;">🩺 {stored_q}</div>',
+                                unsafe_allow_html=True
+                            )
+                            # Build context-appropriate quick replies
+                            sq = stored_q.lower()
+                            if "first notice" in sq or "when did" in sq:
+                                quick = ["Today", "A few days ago", "About a week ago", "Over a week ago"]
+                            elif "swallow" in sq or "eat" in sq:
+                                quick = ["Yes, makes it hard", "Somewhat", "No, not really"]
+                            elif "movement" in sq or "activit" in sq:
+                                quick = ["Yes, limits me", "A little", "Not really"]
+                            elif "worse" in sq or "what made" in sq or "increased" in sq:
+                                quick = ["More activity", "Don't know", "It just got worse"]
+                            else:
+                                quick = ["Yes", "Somewhat", "No"]
+
+                            ctr = st.session_state.mic_key_counter
+                            qc = st.columns(len(quick), gap="small")
+                            for qi, qr in enumerate(quick):
+                                with qc[qi]:
+                                    if st.button(qr, key=f"pfu_{part}_{qi}_{ctr}",
+                                                 use_container_width=True):
+                                        st.session_state.part_followup_a[part] = qr
+                                        st.rerun()
+                            # Also allow free-text
+                            typed_fu = st.text_input(
+                                "", placeholder="Or type your answer…",
+                                key=f"pfu_txt_{part}_{ctr}",
+                                label_visibility="collapsed"
+                            )
+                            if st.button("↑", key=f"pfu_send_{part}_{ctr}") and typed_fu.strip():
+                                st.session_state.part_followup_a[part] = typed_fu.strip()
+                                st.rerun()
+
             # Other location — button-only until clicked
             if st.button("➕ Other location", key="bp_other", use_container_width=True):
                 st.session_state.show_other[2] = True; st.rerun()
@@ -856,6 +940,8 @@ elif stage == 2:
                 st.session_state.pain_yesno = False
                 st.session_state.selected_parts = set()
                 st.session_state.pain_severities = {}
+                st.session_state.part_followup_q = {}
+                st.session_state.part_followup_a = {}
                 on_answer("No pain today.", 2)
                 advance_stage(); st.rerun()
         with c_confirm:
@@ -883,38 +969,19 @@ elif stage == 2:
 
     elif pain_sub == "done":
         render_inline(2)
-        stage_msgs = [m for m in st.session_state.messages if m.get("stage") == 2]
-        last_is_doc = stage_msgs and stage_msgs[-1]["role"] == "doctor"
-        if last_is_doc and followup_fired(2):
-            # Context-specific quick reply buttons based on what was asked
-            last_q = stage_msgs[-1]["content"].lower()
-            if "swallow" in last_q or "eat" in last_q:
-                replies = ["Yes, makes it hard", "Somewhat", "No, not really"]
-            elif "movement" in last_q or "activit" in last_q:
-                replies = ["Yes, limits me", "A little", "Not really"]
-            elif "worse" in last_q or "what made" in last_q:
-                replies = ["More activity", "Don't know", "It just got worse"]
-            elif "first notice" in last_q or "when did" in last_q:
-                replies = ["A few days ago", "About a week ago", "Over a week ago"]
-            else:
-                replies = ["Yes, a lot", "Somewhat", "Not really"]
-            replied = stage_msgs and stage_msgs[-1]["role"] == "patient"
-            if not replied:
-                rc = st.columns(len(replies), gap="small")
-                for i, r in enumerate(replies):
-                    with rc[i]:
-                        if st.button(r, key=f"f2_r_{i}", use_container_width=True):
-                            on_followup_reply(r, 2); st.rerun()
-                render_followup_input(2)
-            else:
-                st.markdown("<hr class='divider'>", unsafe_allow_html=True)
-                if st.button("Next →", key="pain_next", use_container_width=True, type="primary"):
-                    advance_stage(); st.rerun()
-        else:
-            # Show Next button — never auto-advance so patient isn't confused
-            st.markdown("<hr class='divider'>", unsafe_allow_html=True)
-            if st.button("Next →", key="pain_next", use_container_width=True, type="primary"):
-                advance_stage(); st.rerun()
+        # Per-part follow-up answers were collected inline on the map screen.
+        # Fold them into the conversation log once, then show Next.
+        if not st.session_state.get("part_fu_logged"):
+            for part, ans in st.session_state.get("part_followup_a", {}).items():
+                q = st.session_state.get("part_followup_q", {}).get(part, "")
+                if q and ans:
+                    add_doctor(q, stage=2)
+                    add_patient(ans, stage=2)
+            st.session_state.part_fu_logged = True
+        render_inline(2)
+        st.markdown("<hr class='divider'>", unsafe_allow_html=True)
+        if st.button("Next →", key="pain_next", use_container_width=True, type="primary"):
+            advance_stage(); st.rerun()
 
     st.markdown("</div>", unsafe_allow_html=True)
 
