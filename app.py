@@ -924,37 +924,37 @@ elif stage == 2:
                     )
 
                     if stored_q and not existing_a:
-                        # Unanswered followup
+                        # Unanswered followup — amber/warm style distinct from teal buttons
                         quick = _quick_replies(stored_q)
                         pills = ""
                         for qr in quick:
                             p = urllib.parse.urlencode({"pfu_part": part, "pfu_ans": qr})
                             pills += (
                                 f'<a href="?{p}" target="_self" style="'
-                                f'display:inline-block;padding:3px 10px;margin:2px 2px 0 0;'
-                                f'background:rgba(42,157,143,0.12);color:#1d7a6e;'
-                                f'border:1.5px solid rgba(42,157,143,0.35);border-radius:14px;'
+                                f'display:inline-block;padding:3px 9px;margin:2px 3px 0 0;'
+                                f'background:#fff4ec;color:#c06020;'
+                                f'border:1.5px solid #f4a261;border-radius:12px;'
                                 f'font-size:11px;font-weight:700;font-family:Nunito,sans-serif;'
-                                f'text-decoration:none;white-space:nowrap;'
-                                f'cursor:pointer;">{qr}</a>'
+                                f'text-decoration:none;white-space:nowrap;">{qr}</a>'
                             )
                         right = (
-                            f'<div style="display:flex;flex-direction:column;gap:3px;'
-                            f'padding:6px 10px;background:rgba(42,157,143,0.06);'
-                            f'border-left:3px solid #2a9d8f;border-radius:0 10px 10px 0;">'
+                            f'<div style="display:flex;flex-direction:column;gap:2px;'
+                            f'padding:5px 9px 7px;background:#fff8f2;'
+                            f'border:1.5px solid #f4a261;border-radius:10px;">'
                             f'{sev_badge}'
-                            f'<div style="font-size:11px;color:#6b7a8a;margin-top:3px;">🩺 {stored_q}</div>'
-                            f'<div style="display:flex;flex-wrap:wrap;">{pills}</div>'
+                            f'<div style="font-size:11px;color:#9a4e10;margin-top:2px;'
+                            f'font-weight:600;">🩺 {stored_q}</div>'
+                            f'<div style="display:flex;flex-wrap:wrap;margin-top:1px;">{pills}</div>'
                             f'</div>'
                         )
                     elif stored_q and existing_a:
-                        # Answered: compact badge
+                        # Answered: compact amber badge, single line
                         right = (
-                            f'<div style="display:flex;flex-direction:column;gap:3px;'
-                            f'padding:5px 10px;background:rgba(42,157,143,0.06);'
-                            f'border-left:3px solid #2a9d8f;border-radius:0 10px 10px 0;">'
+                            f'<div style="display:flex;flex-direction:column;gap:2px;'
+                            f'padding:5px 9px;background:#fff8f2;'
+                            f'border:1.5px solid rgba(244,162,97,0.4);border-radius:10px;">'
                             f'{sev_badge}'
-                            f'<div style="font-size:10px;color:#2a9d8f;font-weight:700;">'
+                            f'<div style="font-size:10px;color:#c06020;font-weight:700;">'
                             f'✓ {existing_a}</div></div>'
                         )
                     else:
@@ -981,6 +981,7 @@ elif stage == 2:
                 sev_val = st.slider(
                     f"Severity — {part}", 0, 10, current_sev,
                     key=f"sev_{part}",
+                    label_visibility="collapsed",
                     help=f"{part}: 0=none 10=worst"
                 )
                 st.session_state.pain_severities[part] = sev_val
