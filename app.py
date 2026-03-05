@@ -1,3 +1,4 @@
+import hashlib
 import json
 from datetime import datetime
 from typing import Dict, List, Optional, Set
@@ -80,14 +81,6 @@ h2,h3{
     text-align:center;
 }
 
-.followup-box{
-    padding:18px;
-    border-radius:12px;
-    background:#fff8f0;
-    border:1px solid #ffd6a0;
-    font-size:15px;
-    margin-bottom:12px;
-}
 
 </style>
 """, unsafe_allow_html=True)
@@ -124,6 +117,69 @@ if OPENAI_API_KEY:
         openai_init_error = str(e)
 else:
     openai_init_error = "OpenAI API key not found."
+
+# ============================================================
+# Audio / Voice
+# ============================================================
+
+def transcribe_audio(audio_bytes: bytes) -> str:
+    """Send raw audio bytes to OpenAI Whisper and return transcript."""
+    if openai_client is None:
+        return "(Transcription failed: no OpenAI client)"
+    try:
+        import io
+        audio_file = io.BytesIO(audio_bytes)
+        audio_file.name = "audio.wav"
+        result = openai_client.audio.transcriptions.create(
+            model="whisper-1",
+            file=audio_file,
+        )
+        return result.text.strip()
+    except Exception as e:
+        return f"(Transcription failed: {e})"
+
+
+def voice_input_widget(answer_key: str, label: str = "🎤 Or speak your answer"):
+    """
+    Renders a mic recorder. On new audio, transcribes and writes into
+    st.session_state[answer_key].
+    Requires: streamlit-audiorecorder  (pip install streamlit-audiorecorder)
+    Falls back silently if not installed.
+    """
+    try:
+        from audiorecorder import audiorecorder
+    except ImportError:
+        return
+
+    last_hash_key = f"_audio_hash_{answer_key}"
+    if last_hash_key not in st.session_state:
+        st.session_state[last_hash_key] = None
+
+    audio = audiorecorder(label, "⏹ Stop", key=f"_rec_{answer_key}")
+
+    if audio is None:
+        return
+    try:
+        ab = audio.export(format="wav").read()
+    except Exception:
+        return
+    if not ab:
+        return
+
+    ah = hashlib.sha1(ab).hexdigest()
+    if ah == st.session_state[last_hash_key]:
+        return  # same clip, skip
+
+    st.session_state[last_hash_key] = ah
+    with st.spinner("Transcribing…"):
+        text = transcribe_audio(ab)
+
+    if text and not text.startswith("(Transcription failed"):
+        st.session_state[answer_key] = text
+        st.info(f'🎤 Heard: "{text}"')
+        st.rerun()
+    else:
+        st.warning("Could not transcribe — please try again or type your answer.")
 
 
 # ============================================================
@@ -901,6 +957,7 @@ elif st.session_state.stage == 4.5:
     for i, question in enumerate(questions):
         answer = st.text_area(
             question,
+            value=st.session_state.followup_answers.get(i, ""),
             key=f"followup_answer_{i}",
             height=80,
         )
