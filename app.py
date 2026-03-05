@@ -402,76 +402,80 @@ def detect_worsening(payload: Dict, last_summary: Optional[Dict]) -> Dict:
 # GPT follow-up question generation
 # ============================================================
 
-def generate_followup_questions(payload: Dict, worse: Dict, last_summary: Dict) -> List[str]:
+def generate_followup_questions(payload: Dict, worse: Dict, last_summary: Optional[Dict]) -> List[str]:
     """
-    Generates at most 1 specific follow-up question, only when clinically necessary
-    and not already answered by the patient in the body map stage.
+    Sends the full check-in to GPT and lets it decide if a follow-up question
+    is clinically necessary. Works for first-time and returning patients alike.
+    Returns 0 or 1 question — GPT decides, no hard-coded thresholds.
     """
     if openai_client is None:
         return []
 
-    pain_reason = payload.get("pain_reason", {})
+    lines = []
+
+    feeling = payload.get("feeling_level")
+    if feeling is not None:
+        entry = f"Overall feeling: {feeling}/10"
+        if last_summary:
+            prev = last_summary.get("feeling_level")
+            if prev is not None:
+                entry += f" (was {prev}/10 last visit)"
+        lines.append(entry)
+
     pain_severity = payload.get("pain_severity", {})
+    pain_reason   = payload.get("pain_reason", {})
+    if pain_severity:
+        for region, sev in pain_severity.items():
+            reason   = pain_reason.get(region, "")
+            prev_sev = (last_summary or {}).get("pain_severity", {}).get(region)
+            entry = f"Pain in {region}: {sev}/10"
+            if prev_sev is not None:
+                entry += f" (was {prev_sev}/10 last visit)"
+            entry += f' — explained: "{reason}"' if reason else " — no explanation given"
+            lines.append(entry)
+    else:
+        lines.append("No pain reported.")
 
-    # Find the single most critical unanswered issue — strict priority order
-    critical_issue = None
+    symptoms = payload.get("symptoms", [])
+    if symptoms:
+        prev_syms = set((last_summary or {}).get("symptoms", []))
+        new_syms  = [s for s in symptoms if s not in prev_syms]
+        lines.append(f"Symptoms: {", ".join(symptoms)}")
+        if new_syms:
+            lines.append(f"New since last visit: {", ".join(new_syms)}")
+    else:
+        lines.append("No symptoms reported.")
 
-    # 1. Severity >= 8 with no reason given
-    for region, sev in pain_severity.items():
-        if sev >= 8 and region not in pain_reason:
-            critical_issue = f"Pain in {region} is severe ({sev}/10) and no reason was provided."
-            break
-
-    # 2. Pain jumped by 3+ with no reason given
-    if not critical_issue and "worsened_pain" in worse:
-        for region, change in worse["worsened_pain"].items():
-            jump = change["to"] - change["from"]
-            if jump >= 3 and region not in pain_reason:
-                critical_issue = (
-                    f"Pain in {region} jumped from {change['from']}/10 to {change['to']}/10 "
-                    f"with no explanation provided."
-                )
-                break
-
-    # 3. New pain location with severity >= 6 and no reason
-    if not critical_issue and "new_pain_locations" in worse:
-        for region in worse["new_pain_locations"]:
-            sev = pain_severity.get(region, 0)
-            if sev >= 6 and region not in pain_reason:
-                critical_issue = f"New pain in {region} at {sev}/10 with no explanation."
-                break
-
-    # Nothing critical or everything already explained — no follow-up needed
-    if not critical_issue:
-        return []
+    summary_text = "\n".join(lines)
 
     prompt = (
-        f"You are a concise oncology nurse. A cancer patient has this unresolved clinical issue: "
-        f"{critical_issue} "
-        f"Ask exactly ONE specific, short question to clarify only this issue. "
-        f"Do not ask anything already covered. Do not be vague or generic. "
-        f'Return ONLY a JSON array with one question string. Example: ["Your question here?"]'
+        "You are a concise oncology nurse reviewing a cancer patient's symptom check-in.\n\n"
+        f"Check-in summary:\n{summary_text}\n\n"
+        "Decide if one follow-up question is clinically necessary. Rules:\n"
+        "- Return [] (empty) if everything important is already explained or nothing is alarming.\n"
+        "- Return exactly 1 question only about the single most important unanswered concern.\n"
+        "- Never ask about something the patient already explained.\n"
+        "- Be specific — reference the exact symptom or body part.\n"
+        "- Do NOT ask generic questions like 'how can I help' or 'do you need anything'.\n"
+        "Return ONLY valid JSON: [] or [\"Your specific question?\"]"
     )
 
     try:
         response = openai_client.chat.completions.create(
             model="gpt-4.1-mini",
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=80,
-            temperature=0.3,
+            max_tokens=100,
+            temperature=0.2,
         )
         raw = response.choices[0].message.content.strip()
         raw = raw.replace("```json", "").replace("```", "").strip()
         questions = json.loads(raw)
-        if isinstance(questions, list) and questions:
-            return [str(questions[0])]
+        if isinstance(questions, list):
+            return [str(q) for q in questions[:1]]
     except Exception:
         pass
 
     return []
-
-
-
 
 
 # ============================================================
@@ -889,18 +893,17 @@ elif st.session_state.stage == 4:
             "symptoms": list(st.session_state.symptoms),
         }
 
-        # Check if things got worse — if so, go to follow-up stage
+        # Always ask GPT if a follow-up question is needed (works for all patients)
         worse = detect_worsening(payload, st.session_state.last_summary)
 
-        if worse and openai_client is not None:
-            # Store payload temporarily so follow-up stage can access it
+        if openai_client is not None:
             st.session_state["_pending_payload"] = payload
             st.session_state["_worse_context"] = worse
 
-            # Generate follow-up questions via GPT
-            questions = generate_followup_questions(
-                payload, worse, st.session_state.last_summary
-            )
+            with st.spinner("Reviewing your check-in…"):
+                questions = generate_followup_questions(
+                    payload, worse, st.session_state.last_summary
+                )
             st.session_state.followup_questions = questions
             st.session_state.followup_answers = {}
             st.session_state.followup_generated = True
@@ -908,11 +911,10 @@ elif st.session_state.stage == 4:
             if questions:
                 st.session_state.stage = 4.5
             else:
-                # GPT returned nothing — save and move on
+                # GPT decided no follow-up needed
                 save_to_sheet(payload)
                 st.session_state.stage = 5
         else:
-            # No worsening detected — save directly
             save_to_sheet(payload)
             st.session_state.stage = 5
 
