@@ -1,13 +1,13 @@
 import json
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Optional
 
 import streamlit as st
 import gspread
 from google.oauth2.service_account import Credentials
 from openai import OpenAI
 
-st.set_page_config(page_title="Cancer Symptom Check-In", page_icon="🩺")
+st.set_page_config(page_title="Cancer Symptom Check-In", page_icon="🩺", layout="centered")
 
 # ============================================================
 # Secrets helper
@@ -21,12 +21,12 @@ def _secret(*keys, default=None):
 
 
 # ============================================================
-# OpenAI (used ONLY for optional summarization)
+# OpenAI (ONLY for optional summarization)
 # ============================================================
 
 OPENAI_API_KEY = _secret("OPENAI_API_KEY", "openai_api_key")
-
 openai_client: Optional[OpenAI] = None
+
 if OPENAI_API_KEY:
     try:
         openai_client = OpenAI(api_key=OPENAI_API_KEY)
@@ -43,13 +43,14 @@ sheet = None
 
 def init_sheets():
     global sheet
+
     if sheet:
         return
 
     try:
         creds = Credentials.from_service_account_info(
             st.secrets["gcp_service_account"],
-            scopes=["https://www.googleapis.com/auth/spreadsheets"]
+            scopes=["https://www.googleapis.com/auth/spreadsheets"],
         )
 
         gc = gspread.authorize(creds)
@@ -65,6 +66,25 @@ def init_sheets():
         st.warning(f"Sheets unavailable: {e}")
 
 
+def load_last_checkin(name):
+
+    init_sheets()
+
+    if sheet is None:
+        return None
+
+    rows = sheet.get_all_values()
+
+    for row in reversed(rows[1:]):
+        if row[1].lower() == name.lower():
+            try:
+                return json.loads(row[2])
+            except:
+                return None
+
+    return None
+
+
 def save_to_sheet(data):
 
     init_sheets()
@@ -72,18 +92,21 @@ def save_to_sheet(data):
     if sheet is None:
         return
 
-    sheet.append_row([
-        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        data["name"],
-        json.dumps(data)
-    ])
+    sheet.append_row(
+        [
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            data["name"],
+            json.dumps(data),
+        ]
+    )
 
 
 # ============================================================
-# Clinical Rules
+# Clinical logic
 # ============================================================
 
-def is_same_as_yesterday(text: str) -> bool:
+
+def is_same_as_yesterday(text):
 
     text = text.lower()
 
@@ -93,64 +116,27 @@ def is_same_as_yesterday(text: str) -> bool:
         "about the same",
         "no change",
         "nothing changed",
-        "all good"
+        "all good",
     ]
 
     return any(k in text for k in keywords)
 
 
-def is_concerning(stage: int, text: str):
-
-    t = text.lower()
-
-    if stage == 1:
-        return "poor" in t or "fair" in t or "worse" in t
-
-    if stage == 2:
-        return "yes" in t
-
-    if stage == 3:
-        return "severe" in t or "worse" in t
-
-    if stage == 4:
-        return "yes" in t
-
-    return False
-
-
-FOLLOWUPS = {
-
-    1: "What seems to be making you feel this way?",
-    2: "How severe is the pain?",
-    3: "Has the pain been getting worse?",
-    4: "Which symptom is bothering you most?"
-}
-
-
-QUESTIONS = {
-
-    0: "How have you been since your last visit?",
-    1: "How are you feeling today?",
-    2: "Do you have any pain today?",
-    3: "Where do you feel pain?",
-    4: "Are you experiencing any symptoms today?"
-}
-
-
 # ============================================================
-# Session State
+# Session state
 # ============================================================
 
 defaults = dict(
-
     stage=-1,
     name="",
     feeling=None,
     pain=None,
-    pain_location="",
+    pain_locations=set(),
+    pain_severity=0,
     symptoms="",
     submitted=False,
-    messages=[]
+    show_other_pain=False,
+    last_pain_severity=0,
 )
 
 for k, v in defaults.items():
@@ -159,30 +145,13 @@ for k, v in defaults.items():
 
 
 # ============================================================
-# Helpers
-# ============================================================
-
-def add_doctor(text):
-    st.session_state.messages.append(("doctor", text))
-
-
-def add_patient(text):
-    st.session_state.messages.append(("patient", text))
-
-
-def advance():
-    st.session_state.stage += 1
-
-
-# ============================================================
-# UI Header
+# UI header
 # ============================================================
 
 st.title("🩺 Cancer Symptom Check-In")
 
-
 # ============================================================
-# Stage -1: Name
+# Stage -1 : name entry
 # ============================================================
 
 if st.session_state.stage == -1:
@@ -194,44 +163,33 @@ if st.session_state.stage == -1:
         if name:
 
             st.session_state.name = name
-            st.session_state.stage = 0
-            add_doctor(QUESTIONS[0])
 
+            last = load_last_checkin(name)
+
+            if last:
+                st.session_state.last_pain_severity = last.get("pain_severity", 0)
+
+            st.session_state.stage = 0
             st.rerun()
 
     st.stop()
 
-
-# ============================================================
-# Chat History
-# ============================================================
-
-for role, msg in st.session_state.messages:
-
-    if role == "doctor":
-        st.info(msg)
-
-    else:
-        st.success(msg)
-
-
 stage = st.session_state.stage
 
-
 # ============================================================
-# Stage 0 — Fast Exit
+# Stage 0 : fast exit
 # ============================================================
 
 if stage == 0:
+
+    st.subheader("How have you been since your last visit?")
 
     col1, col2 = st.columns(2)
 
     with col1:
         if st.button("Same as yesterday"):
 
-            add_patient("Same as yesterday")
-
-            add_doctor("Great. Your check-in is complete.")
+            st.success("Check-in complete. Nothing changed.")
 
             st.session_state.submitted = True
             st.session_state.stage = 5
@@ -240,62 +198,48 @@ if stage == 0:
     with col2:
         if st.button("Something changed"):
 
-            add_patient("Something changed")
-
-            advance()
-            add_doctor(QUESTIONS[1])
-
+            st.session_state.stage = 1
             st.rerun()
 
     text = st.text_input("Or type your answer")
 
     if text:
 
-        add_patient(text)
-
         if is_same_as_yesterday(text):
 
-            add_doctor("Thanks for checking in. Your check-in is complete.")
+            st.success("Check-in complete.")
+
             st.session_state.submitted = True
             st.session_state.stage = 5
 
         else:
 
-            advance()
-            add_doctor(QUESTIONS[1])
+            st.session_state.stage = 1
 
         st.rerun()
 
 
 # ============================================================
-# Stage 1 — Feeling
+# Stage 1 : feeling
 # ============================================================
 
 elif stage == 1:
 
     feeling = st.radio(
-
         "How are you feeling today?",
-        ["Excellent", "Very good", "Good", "Fair", "Poor"]
+        ["Excellent", "Very good", "Good", "Fair", "Poor"],
     )
 
     if st.button("Next"):
 
         st.session_state.feeling = feeling
 
-        add_patient(feeling)
-
-        if is_concerning(1, feeling):
-            add_doctor(FOLLOWUPS[1])
-        else:
-            advance()
-            add_doctor(QUESTIONS[2])
-
+        st.session_state.stage = 2
         st.rerun()
 
 
 # ============================================================
-# Stage 2 — Pain
+# Stage 2 : pain yes/no
 # ============================================================
 
 elif stage == 2:
@@ -306,57 +250,106 @@ elif stage == 2:
 
         st.session_state.pain = pain
 
-        add_patient(pain)
-
         if pain == "Yes":
-            add_doctor(FOLLOWUPS[2])
+
+            st.session_state.stage = 3
+
         else:
-            advance()
-            add_doctor(QUESTIONS[4])
+
+            st.session_state.stage = 4
 
         st.rerun()
 
 
 # ============================================================
-# Stage 3 — Pain follow-up
+# Stage 3 : body map
 # ============================================================
 
 elif stage == 3:
 
-    severity = st.slider("Pain severity", 0, 10, 3)
+    st.subheader("Mark where you feel pain")
+
+    parts = [
+        "Head",
+        "Neck",
+        "Chest",
+        "Abdomen",
+        "Left Arm",
+        "Right Arm",
+        "Left Leg",
+        "Right Leg",
+    ]
+
+    cols = st.columns(2)
+
+    for i, part in enumerate(parts):
+
+        selected = part in st.session_state.pain_locations
+
+        color = "🔴" if selected else "🟢"
+
+        with cols[i % 2]:
+
+            if st.button(f"{color} {part}", key=part):
+
+                if selected:
+                    st.session_state.pain_locations.remove(part)
+                else:
+                    st.session_state.pain_locations.add(part)
+
+                st.rerun()
+
+    st.markdown("---")
+
+    st.subheader("Pain severity")
+
+    severity = st.slider(
+        "",
+        0,
+        10,
+        value=st.session_state.last_pain_severity,
+    )
+
+    st.session_state.pain_severity = severity
+
+    if st.button("Other location"):
+
+        st.session_state.show_other_pain = True
+
+    if st.session_state.show_other_pain:
+
+        other = st.text_input("Describe other pain location")
+
+        if other:
+            st.session_state.pain_locations.add(other)
 
     if st.button("Next"):
 
-        add_patient(f"Pain severity {severity}/10")
-
-        advance()
-        add_doctor(QUESTIONS[4])
-
+        st.session_state.stage = 4
         st.rerun()
 
 
 # ============================================================
-# Stage 4 — Symptoms
+# Stage 4 : symptoms
 # ============================================================
 
 elif stage == 4:
 
+    st.subheader("Symptoms today")
+
     symptoms = st.text_area("Describe any symptoms")
 
-    if st.button("Submit"):
+    if st.button("Submit Check-In"):
 
         st.session_state.symptoms = symptoms
 
-        add_patient(symptoms if symptoms else "No symptoms")
-
-        add_doctor("Thank you. Your check-in has been recorded.")
-
         data = dict(
-
             name=st.session_state.name,
             feeling=st.session_state.feeling,
             pain=st.session_state.pain,
-            symptoms=st.session_state.symptoms
+            pain_locations=list(st.session_state.pain_locations),
+            pain_severity=st.session_state.pain_severity,
+            symptoms=symptoms,
         )
 
         save_to_sheet(data)
@@ -368,7 +361,7 @@ elif stage == 4:
 
 
 # ============================================================
-# Stage 5 — Completed
+# Stage 5 : completed
 # ============================================================
 
 elif stage == 5:
