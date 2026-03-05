@@ -620,6 +620,94 @@ def render_other_input(stage_id: int, placeholder: str = "Describe…"):
     if handle_voice(audio, stage_id): st.rerun()
 
 
+def face_neck_svg(selected: set, prev_locs: set = set()) -> str:
+    """
+    SVG diagram of a face + neck with 6 labelled pain regions.
+    Selected regions → teal (#2a9d8f). Prev-visit-only → orange (#f4a261). Default → light grey.
+    Pure display — buttons in the adjacent column do the toggling.
+    """
+    def fill(p):
+        if p in selected:  return "#2a9d8f"   # teal  – currently selected
+        if p in prev_locs: return "#f4a261"   # orange – from last visit
+        return "#dde3ec"                       # grey   – unselected
+
+    def text_col(p):
+        return "#ffffff" if (p in selected or p in prev_locs) else "#4a5568"
+
+    # colours
+    s  = "#8a97aa"   # stroke
+    sw = "1.5"       # stroke-width
+
+    return f"""
+<svg width="190" height="340" viewBox="0 0 190 340"
+     xmlns="http://www.w3.org/2000/svg"
+     style="display:block;margin:0 auto;filter:drop-shadow(0 2px 6px rgba(0,0,0,0.10))">
+  <defs>
+    <filter id="sh2"><feDropShadow dx="0" dy="1" stdDeviation="1.5"
+      flood-color="rgba(0,0,0,0.13)"/></filter>
+  </defs>
+
+  <!-- ── Neck region ── -->
+  <rect x="65" y="218" width="60" height="68" rx="14"
+        fill="{fill('Neck')}" stroke="{s}" stroke-width="{sw}" filter="url(#sh2)"/>
+  <text x="95" y="257" text-anchor="middle" font-family="Nunito,sans-serif"
+        font-size="11" font-weight="700" fill="{text_col('Neck')}">Neck</text>
+
+  <!-- ── Throat region (lower neck / collar) ── -->
+  <rect x="60" y="285" width="70" height="46" rx="14"
+        fill="{fill('Throat')}" stroke="{s}" stroke-width="{sw}" filter="url(#sh2)"/>
+  <text x="95" y="313" text-anchor="middle" font-family="Nunito,sans-serif"
+        font-size="11" font-weight="700" fill="{text_col('Throat')}">Throat</text>
+
+  <!-- ── Face oval ── -->
+  <ellipse cx="95" cy="115" rx="68" ry="88"
+           fill="#f5f0ea" stroke="{s}" stroke-width="{sw}" filter="url(#sh2)"/>
+
+  <!-- ── Ear Left ── -->
+  <ellipse cx="22" cy="118" rx="14" ry="20"
+           fill="{fill('Ear(s)')}" stroke="{s}" stroke-width="{sw}" filter="url(#sh2)"/>
+  <!-- ── Ear Right ── -->
+  <ellipse cx="168" cy="118" rx="14" ry="20"
+           fill="{fill('Ear(s)')}" stroke="{s}" stroke-width="{sw}" filter="url(#sh2)"/>
+  <!-- Ear label centred between both ears, above face -->
+  <text x="95" y="44" text-anchor="middle" font-family="Nunito,sans-serif"
+        font-size="10" font-weight="700" fill="{text_col('Ear(s)')}">Ear(s)</text>
+  <!-- small arrows pointing to each ear -->
+  <line x1="64" y1="46" x2="36" y2="100" stroke="{text_col('Ear(s)')}" stroke-width="1" opacity="0.5"/>
+  <line x1="126" y1="46" x2="154" y2="100" stroke="{text_col('Ear(s)')}" stroke-width="1" opacity="0.5"/>
+
+  <!-- ── Jaw region (lower face arc) ── -->
+  <path d="M42 165 Q95 215 148 165 Q148 195 95 205 Q42 195 42 165Z"
+        fill="{fill('Jaw')}" stroke="{s}" stroke-width="{sw}" filter="url(#sh2)"/>
+  <text x="95" y="195" text-anchor="middle" font-family="Nunito,sans-serif"
+        font-size="11" font-weight="700" fill="{text_col('Jaw')}">Jaw</text>
+
+  <!-- ── Lips / Gums strip ── -->
+  <rect x="65" y="155" width="60" height="22" rx="11"
+        fill="{fill('Lips / Gums')}" stroke="{s}" stroke-width="{sw}" filter="url(#sh2)"/>
+  <text x="95" y="170" text-anchor="middle" font-family="Nunito,sans-serif"
+        font-size="9.5" font-weight="700" fill="{text_col('Lips / Gums')}">Lips / Gums</text>
+
+  <!-- ── Mouth / Tongue oval (mid face) ── -->
+  <ellipse cx="95" cy="133" rx="30" ry="16"
+           fill="{fill('Mouth / Tongue')}" stroke="{s}" stroke-width="{sw}" filter="url(#sh2)"/>
+  <text x="95" y="137" text-anchor="middle" font-family="Nunito,sans-serif"
+        font-size="9" font-weight="700" fill="{text_col('Mouth / Tongue')}">Mouth/Tongue</text>
+
+  <!-- ── Eyes (decorative, not clickable) ── -->
+  <ellipse cx="73" cy="100" rx="12" ry="8" fill="#c8d0dc" stroke="{s}" stroke-width="1"/>
+  <ellipse cx="117" cy="100" rx="12" ry="8" fill="#c8d0dc" stroke="{s}" stroke-width="1"/>
+  <circle  cx="73"  cy="100" r="4"  fill="#6b7a90"/>
+  <circle  cx="117" cy="100" r="4"  fill="#6b7a90"/>
+
+  <!-- ── Nose (decorative) ── -->
+  <path d="M90 108 Q95 122 100 108" fill="none" stroke="{s}" stroke-width="1.2"/>
+
+  <!-- ── Hair / head top (decorative) ── -->
+  <ellipse cx="95" cy="33" rx="62" ry="22" fill="#b0bac8" opacity="0.35"/>
+</svg>""".strip()
+
+
 def panel_q(text):
     """Render a panel-title question bubble."""
     st.markdown(f'<div class="panel-title"><div class="panel-title-avatar">🩺</div>'
@@ -778,10 +866,13 @@ elif stage == 2:
         prev_locs = set(past[-1].get("pain_locations", [])) if past else set()
 
         if prev_locs:
-            st.markdown('<div class="small-note">✓ = reported last visit. Tap to confirm or remove.</div>',
+            st.markdown('<div class="small-note">🟠 Orange = last visit. Tap the diagram or buttons to select.</div>',
+                        unsafe_allow_html=True)
+        else:
+            st.markdown('<div class="small-note">Tap the diagram or buttons to select all areas with pain.</div>',
                         unsafe_allow_html=True)
 
-        # Head & neck cancer specific locations — derived from clinical transcripts
+        # Head & neck cancer specific locations
         HN_LOCATIONS = [
             "Throat",
             "Mouth / Tongue",
@@ -791,22 +882,18 @@ elif stage == 2:
             "Lips / Gums",
         ]
 
-        cols = st.columns(2, gap="small")
-        for idx, part in enumerate(HN_LOCATIONS):
-            with cols[idx % 2]:
-                in_prev = part in prev_locs
+        col_svg, col_btns = st.columns([1, 1], gap="medium")
+        with col_svg:
+            st.markdown(face_neck_svg(st.session_state.selected_parts, prev_locs),
+                        unsafe_allow_html=True)
+        with col_btns:
+            for part in HN_LOCATIONS:
                 in_curr = part in st.session_state.selected_parts
-                if in_prev and not in_curr:
-                    lbl = f"✓ {part} (last visit)"
-                elif in_curr:
-                    lbl = f"✓ {part}"
-                else:
-                    lbl = part
+                lbl = f"✓ {part}" if in_curr else part
                 if st.button(lbl, key=f"bp_{part}", use_container_width=True):
                     toggle_body_part(part); st.rerun()
-
-        if st.button("➕ Other location", key="bp_other", use_container_width=True):
-            st.session_state.show_other[2] = True; st.rerun()
+            if st.button("➕ Other", key="bp_other", use_container_width=True):
+                st.session_state.show_other[2] = True; st.rerun()
 
         if st.session_state.show_other.get(2):
             c_m, c_mic = st.columns([7, 2.5], gap="small")
