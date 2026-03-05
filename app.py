@@ -140,10 +140,14 @@ def transcribe_audio(audio_bytes: bytes) -> str:
 
 def voice_input_widget(answer_key: str, label: str = "🎤 Or speak your answer"):
     """
-    Renders a mic input using Streamlit's built-in st.audio_input (no extra package needed).
-    On new audio, transcribes via Whisper and injects text into st.session_state[answer_key].
+    Renders a mic input using st.audio_input. Transcribes via Whisper and stores
+    the result in a separate _transcript_{answer_key} buffer to avoid the
+    Streamlit restriction on writing to active widget keys.
+    Callers should read: st.session_state.get(f"_transcript_{answer_key}", "")
     """
-    last_hash_key = f"_audio_hash_{answer_key}"
+    transcript_key = f"_transcript_{answer_key}"
+    last_hash_key  = f"_audio_hash_{answer_key}"
+
     if last_hash_key not in st.session_state:
         st.session_state[last_hash_key] = None
 
@@ -169,8 +173,8 @@ def voice_input_widget(answer_key: str, label: str = "🎤 Or speak your answer"
         text = transcribe_audio(ab)
 
     if text and not text.startswith("(Transcription failed"):
-        st.session_state[answer_key] = text
-        st.info(f'🎤 Heard: "{text}"')
+        # Write to buffer key — never to the widget key directly
+        st.session_state[transcript_key] = text
         st.rerun()
     else:
         st.warning("Could not transcribe — please try again or type your answer.")
@@ -749,10 +753,18 @@ elif st.session_state.stage == 3:
                             st.session_state[q_key] = "Can you describe what makes this pain better or worse?"
 
                     question = st.session_state.get(q_key) or "Can you describe what makes this pain better or worse?"
-                    answer = st.text_input(question, key=f"reason_{r}")
-                    voice_input_widget(f"reason_{r}")
+                    _tr_reason = st.session_state.get(f"_transcript_reason_{r}", "")
+                    _default_reason = _tr_reason or st.session_state.pain_reason.get(r, "")
+                    answer = st.text_input(
+                        question,
+                        value=_default_reason,
+                        key=f"reason_{r}"
+                    )
+                    voice_input_widget(f"reason_{r}", label="🎤 Or speak")
                     if answer:
                         st.session_state.pain_reason[r] = answer
+                    elif _tr_reason:
+                        st.session_state.pain_reason[r] = _tr_reason
 
         # Other / custom pain location
         st.markdown("---")
@@ -890,14 +902,18 @@ elif st.session_state.stage == 4.5:
     questions = st.session_state.followup_questions
 
     for i, question in enumerate(questions):
+        _tr_fup = st.session_state.get(f"_transcript_followup_answer_{i}", "")
+        _default_fup = _tr_fup or st.session_state.followup_answers.get(i, "")
         answer = st.text_area(
             question,
-            value=st.session_state.followup_answers.get(i, ""),
+            value=_default_fup,
             key=f"followup_answer_{i}",
             height=80,
         )
         voice_input_widget(f"followup_answer_{i}")
-        st.session_state.followup_answers[i] = answer
+        saved = answer or _tr_fup
+        if saved:
+            st.session_state.followup_answers[i] = saved
 
     st.markdown("---")
 
