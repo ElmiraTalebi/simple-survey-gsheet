@@ -1079,18 +1079,6 @@ elif stage == 5:
 </div>""", unsafe_allow_html=True)
 
     else:
-        # Show full chat history
-        st.markdown('<div class="chat-window">', unsafe_allow_html=True)
-        for msg in st.session_state.messages:
-            if msg["role"] == "doctor":
-                st.markdown(f'<div class="row-left"><div class="avatar">🩺</div>'
-                            f'<div class="bubble-doc">{msg["content"]}</div></div>',
-                            unsafe_allow_html=True)
-            else:
-                st.markdown(f'<div class="row-right"><div class="bubble-pat">{msg["content"]}</div>'
-                            f'<div class="avatar">🙂</div></div>', unsafe_allow_html=True)
-        st.markdown("</div>", unsafe_allow_html=True)
-
         st.markdown('<div class="panel">', unsafe_allow_html=True)
         panel_q("Ready to submit — anything else?")
 
