@@ -90,35 +90,68 @@ def _openai_ready():
     return openai_client is not None and openai_init_error is None
 
 def get_opening_message(last: Dict, name: str) -> str:
-    """Brief greeting referencing last visit — NO question, just a warm hello."""
+    """
+    Greeting that references the SPECIFIC most concerning item from last visit,
+    then asks ONE targeted yes/no or scale question about that exact thing.
+    This replaces the generic 'Compared to your last visit, how are things?' panel title.
+    """
     if not _openai_ready():
-        return f"Hi {name}! Good to see you again. Let's see how things are today."
+        # Fallback: build a specific question from data without GPT
+        syms  = last.get("symptoms", [])
+        locs  = last.get("pain_locations", [])
+        sevs  = last.get("pain_severities", {})
+        if syms:
+            top = syms[0]
+            return f"Hi {name}! Last time you reported {top.lower()}. Is that still bothering you, or has it improved?"
+        if locs:
+            top = locs[0]
+            sev = sevs.get(top)
+            sev_str = f" (severity {sev}/10)" if sev else ""
+            return f"Hi {name}! Last time you had pain in your {top.lower()}{sev_str}. How is that today — better, worse, or about the same?"
+        return f"Hi {name}! How have things been since your last visit — better, worse, or about the same?"
+
     fl   = last.get("feeling_level", "?")
     pn   = "yes" if last.get("pain") else "no"
     ploc = ", ".join(last.get("pain_locations", [])) or "none"
     sym  = ", ".join(last.get("symptoms", [])) or "none"
+    sevs = last.get("pain_severities", {})
+    sev_str = ", ".join(f"{k}: {v}/10" for k, v in sevs.items()) if sevs else "not recorded"
     ts   = last.get("timestamp", "your last visit")
+
     system = (
-        "You are a warm symptom-intake assistant for a cancer care clinic. "
-        "Write ONE sentence greeting the patient by name, briefly mention their "
-        "specific data from last time (actual symptoms, pain locations, or feeling). "
-        "End with: 'Let\\'s see how things are today.' "
-        "Do NOT ask a question. Max 2 sentences. No filler."
+        "You are a concise symptom-intake assistant for a cancer care clinic treating head/neck cancer patients. "
+        "Write exactly 2 sentences:\n"
+        "Sentence 1: Greet the patient by first name only. Reference the MOST SPECIFIC and MOST CONCERNING "
+        "item from their last visit — name the actual symptom, pain location, or severity score. "
+        "Do NOT be generic (e.g. do NOT say 'some concerns' or 'your symptoms'). "
+        "Sentence 2: Ask ONE short, direct follow-up question about that specific item — "
+        "e.g. 'Is your throat pain better, worse, or about the same?' or "
+        "'Last time your nausea was quite bad — are you still experiencing it?' "
+        "The question must be answerable with the three buttons: Better / About the same / Worse. "
+        "No filler. No 'Let's get started'. No 'How are you today?'. Just greet + targeted question."
     )
     try:
         r = openai_client.chat.completions.create(
             model=_secret("openai_model", default="gpt-4o-mini"),
             messages=[
                 {"role": "system", "content": system},
-                {"role": "user",   "content": f"Patient: {name}. Last: {ts}. "
-                                               f"Feeling: {fl}. Pain: {pn}. "
-                                               f"Locations: {ploc}. Symptoms: {sym}."}
+                {"role": "user",   "content": (
+                    f"Patient first name: {name}. Last visit: {ts}. "
+                    f"Feeling: {fl}. Pain: {pn}. Pain locations: {ploc}. "
+                    f"Pain severities: {sev_str}. Symptoms: {sym}."
+                )}
             ],
-            max_tokens=80, temperature=0.5,
+            max_tokens=100, temperature=0.4,
         )
         return (r.choices[0].message.content or "").strip()
     except:
-        return f"Hi {name}! Let's see how things are today."
+        syms = last.get("symptoms", [])
+        locs = last.get("pain_locations", [])
+        if syms:
+            return f"Hi {name}! Last time you reported {syms[0].lower()}. Is that still bothering you, or has it improved?"
+        if locs:
+            return f"Hi {name}! Last time you had pain in your {locs[0].lower()}. How is that today — better, worse, or about the same?"
+        return f"Hi {name}! How have things been since your last visit — better, worse, or about the same?"
 
 def transcribe_audio(audio_bytes: bytes) -> str:
     if not _openai_ready(): return "(Transcription unavailable.)"
@@ -695,23 +728,27 @@ render_chat_window()
 # ════════════════════════════════════════════════════════════
 if stage == 0:
     st.markdown('<div class="panel">', unsafe_allow_html=True)
-    panel_q("Compared to your last visit, how are things?")
+    # No panel_q() here — the GPT-generated opening message IS the question.
+    # It greets by name and asks something specific about the most concerning
+    # item from last visit, so the three buttons below answer that directly.
     render_inline(0)
 
     if not is_answered(0):
+        st.markdown('<div class="small-note">Choose the option that best describes how that has changed:</div>',
+                    unsafe_allow_html=True)
         c1, c2, c3 = st.columns(3, gap="small")
         with c1:
             if st.button("👍 Better", use_container_width=True, key="s0_better"):
-                on_answer("Things are better.", 0)
+                on_answer("Better since last visit.", 0)
                 advance_stage(); st.rerun()
         with c2:
             if st.button("➡️ About the same", use_container_width=True, key="s0_same"):
                 st.session_state.fast_path = True
-                on_answer("About the same.", 0)
+                on_answer("About the same as last visit.", 0)
                 advance_stage(); st.rerun()
         with c3:
             if st.button("⚠️ Worse", use_container_width=True, key="s0_worse"):
-                on_answer("Things are worse.", 0)
+                on_answer("Worse than last visit.", 0)
                 advance_stage(); st.rerun()
     else:
         # Fallback: if somehow landed here already answered, move on
