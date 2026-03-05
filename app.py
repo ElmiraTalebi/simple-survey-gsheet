@@ -588,6 +588,15 @@ elif st.session_state.stage == 3:
 
     st.markdown('<div class="section-title">Where do you feel pain?</div>', unsafe_allow_html=True)
 
+    # Color legend
+    st.markdown("""
+    <div style="display:flex; gap:18px; margin-bottom:14px; font-size:14px; flex-wrap:wrap;">
+        <span>🟢 <b>No pain</b> (not reported before)</span>
+        <span>🟠 <b>Known pain</b> (reported in last visit)</span>
+        <span>🔴 <b>New or worsened pain</b> (significantly worse or new)</span>
+    </div>
+    """, unsafe_allow_html=True)
+
     col1, col2 = st.columns([1,1])
 
     with col1:
@@ -608,7 +617,7 @@ elif st.session_state.stage == 3:
             if col == RED:
                 icon = "🔴"
 
-            if st.button(f"{icon} {r}"):
+            if st.button(f"{icon} {r}", key=f"btn_{r}"):
 
                 if r in st.session_state.selected_parts:
                     st.session_state.selected_parts.remove(r)
@@ -637,6 +646,37 @@ elif st.session_state.stage == 3:
 
                     if reason:
                         st.session_state.pain_reason[r] = reason
+
+        # Other / custom pain location
+        st.markdown("---")
+        other_selected = "Other" in st.session_state.selected_parts
+        other_icon = "🔴" if other_selected else "🟢"
+
+        if st.button(f"{other_icon} Other", key="btn_Other"):
+            if other_selected:
+                st.session_state.selected_parts.remove("Other")
+                st.session_state.pain_severity.pop("Other", None)
+                st.session_state.pain_reason.pop("Other", None)
+            else:
+                st.session_state.selected_parts.add("Other")
+            st.rerun()
+
+        if other_selected:
+            other_desc = st.text_input(
+                "Describe the location",
+                placeholder="e.g. lower back, behind the ear...",
+                key="other_location_desc"
+            )
+            if other_desc:
+                st.session_state.pain_reason["Other"] = other_desc
+
+            other_sev = st.number_input(
+                "Other severity",
+                0, 10,
+                value=0,
+                key="sev_Other"
+            )
+            st.session_state.pain_severity["Other"] = other_sev
 
     if st.button("Next"):
         st.session_state.stage = 4
