@@ -10,18 +10,24 @@ from openai import OpenAI
 
 st.set_page_config(page_title="Cancer Symptom Check-In", page_icon="🩺", layout="centered")
 
-# ── Query-param reply handler (for HTML pill buttons) ───────
-# HTML pill buttons set ?pfu_part=X&pfu_ans=Y in the URL.
-# We catch that here, store into session state, then clear the param.
+# ── Query-param handler (HTML button interactions) ───────────
 _qp = st.query_params
+if "bp_toggle" in _qp:
+    _part = _qp["bp_toggle"]
+    if "selected_parts" not in st.session_state:
+        st.session_state.selected_parts = set()
+    if _part in st.session_state.selected_parts:
+        st.session_state.selected_parts.discard(_part)
+        for _d in ("pain_severities", "part_followup_q", "part_followup_a"):
+            if _d in st.session_state: st.session_state[_d].pop(_part, None)
+    else:
+        st.session_state.selected_parts.add(_part)
+    st.query_params.clear(); st.rerun()
 if "pfu_part" in _qp and "pfu_ans" in _qp:
-    _part = _qp["pfu_part"]
-    _ans  = _qp["pfu_ans"]
     if "part_followup_a" not in st.session_state:
         st.session_state.part_followup_a = {}
-    st.session_state.part_followup_a[_part] = _ans
-    st.query_params.clear()
-    st.rerun()
+    st.session_state.part_followup_a[_qp["pfu_part"]] = _qp["pfu_ans"]
+    st.query_params.clear(); st.rerun()
 
 # ── Secrets ────────────────────────────────────────────────
 def _secret(*keys, default=None):
@@ -854,92 +860,135 @@ elif stage == 2:
         with col_btns:
             BODY_PARTS = ["Head", "Throat/Neck", "Chest", "Abdomen",
                           "Left Arm", "Right Arm", "Left Leg", "Right Leg"]
-            for part in BODY_PARTS:
-                selected = part in st.session_state.selected_parts
-                from_last = part in prev_locs
 
-                # ── Location select button ──
-                if selected:   lbl = f"🔴 {part} ✓"
-                elif from_last: lbl = f"🟠 {part}"
-                else:           lbl = f"🟢 {part}"
-                if st.button(lbl, key=f"bp_{part}", use_container_width=True):
-                    toggle_body_part(part)
-                    if part not in st.session_state.selected_parts:
-                        st.session_state.pain_severities.pop(part, None)
+            # Build the entire list as one HTML block for true side-by-side layout
+            rows_html = '<div style="display:flex;flex-direction:column;gap:6px;">'
+
+            for part in BODY_PARTS:
+                selected  = part in st.session_state.selected_parts
+                from_last = part in prev_locs
+                sev_val   = st.session_state.pain_severities.get(part, prev_sevs.get(part, 5))
+
+                # Compute followup state
+                if selected:
+                    is_new = part not in prev_locs
+                    q = _part_followup_question(part, sev_val, is_new)
+                    if q and part not in st.session_state.part_followup_q:
+                        st.session_state.part_followup_q[part] = q
+                    elif not q:
                         st.session_state.part_followup_q.pop(part, None)
                         st.session_state.part_followup_a.pop(part, None)
-                    st.rerun()
 
-                if part not in st.session_state.selected_parts:
-                    continue
+                stored_q   = st.session_state.part_followup_q.get(part)
+                existing_a = st.session_state.part_followup_a.get(part)
 
-                # ── Severity slider ──
+                # Toggle link
+                tog_params = urllib.parse.urlencode({"bp_toggle": part})
+
+                # Button label & colors
+                if selected:
+                    btn_bg = "#e63946"; btn_col = "#fff"; btn_br = "1.5px solid #b52535"
+                    dot = "🔴"; check = " ✓"
+                elif from_last:
+                    btn_bg = "#fff8f0"; btn_col = "#c47a3a"; btn_br = "1.5px solid #f4a261"
+                    dot = "🟠"; check = ""
+                else:
+                    btn_bg = "#f0faf5"; btn_col = "#3d7a5a"; btn_br = "1.5px solid #a8d5b5"
+                    dot = "🟢"; check = ""
+
+                # Left cell: location button
+                left = (
+                    f'<a href="?{tog_params}" target="_self" style="'
+                    f'display:flex;align-items:center;justify-content:center;gap:7px;'
+                    f'padding:8px 10px;background:{btn_bg};color:{btn_col};'
+                    f'border:{btn_br};border-radius:12px;font-size:13px;font-weight:700;'
+                    f'font-family:Nunito,sans-serif;text-decoration:none;'
+                    f'white-space:nowrap;min-width:110px;cursor:pointer;">'
+                    f'{dot} {part}{check}</a>'
+                )
+
+                # Right cell: slider badge + followup (only if selected)
+                right = ""
+                if selected:
+                    prev_val = prev_sevs.get(part)
+                    color = "#e63946" if sev_val >= 7 else "#f4a261" if sev_val >= 4 else "#2a9d8f"
+                    delta = ""
+                    if prev_val is not None:
+                        d = sev_val - prev_val
+                        delta = f" ▲{d}" if d > 0 else (f" ▼{abs(d)}" if d < 0 else " =")
+
+                    sev_badge = (
+                        f'<span style="font-size:11px;font-weight:800;color:{color};'
+                        f'background:rgba(0,0,0,0.04);border-radius:8px;padding:2px 7px;">'
+                        f'{sev_val}/10{delta}</span>'
+                    )
+
+                    if stored_q and not existing_a:
+                        # Unanswered followup
+                        quick = _quick_replies(stored_q)
+                        pills = ""
+                        for qr in quick:
+                            p = urllib.parse.urlencode({"pfu_part": part, "pfu_ans": qr})
+                            pills += (
+                                f'<a href="?{p}" target="_self" style="'
+                                f'display:inline-block;padding:3px 10px;margin:2px 2px 0 0;'
+                                f'background:rgba(42,157,143,0.12);color:#1d7a6e;'
+                                f'border:1.5px solid rgba(42,157,143,0.35);border-radius:14px;'
+                                f'font-size:11px;font-weight:700;font-family:Nunito,sans-serif;'
+                                f'text-decoration:none;white-space:nowrap;'
+                                f'cursor:pointer;">{qr}</a>'
+                            )
+                        right = (
+                            f'<div style="display:flex;flex-direction:column;gap:3px;'
+                            f'padding:6px 10px;background:rgba(42,157,143,0.06);'
+                            f'border-left:3px solid #2a9d8f;border-radius:0 10px 10px 0;">'
+                            f'{sev_badge}'
+                            f'<div style="font-size:11px;color:#6b7a8a;margin-top:3px;">🩺 {stored_q}</div>'
+                            f'<div style="display:flex;flex-wrap:wrap;">{pills}</div>'
+                            f'</div>'
+                        )
+                    elif stored_q and existing_a:
+                        # Answered: compact badge
+                        right = (
+                            f'<div style="display:flex;flex-direction:column;gap:3px;'
+                            f'padding:5px 10px;background:rgba(42,157,143,0.06);'
+                            f'border-left:3px solid #2a9d8f;border-radius:0 10px 10px 0;">'
+                            f'{sev_badge}'
+                            f'<div style="font-size:10px;color:#2a9d8f;font-weight:700;">'
+                            f'✓ {existing_a}</div></div>'
+                        )
+                    else:
+                        # No followup needed — just show severity
+                        right = (
+                            f'<div style="display:flex;align-items:center;'
+                            f'padding:6px 10px;">{sev_badge}</div>'
+                        )
+
+                rows_html += (
+                    f'<div style="display:flex;align-items:stretch;gap:6px;">'
+                    f'<div style="flex:0 0 auto;">{left}</div>'
+                    f'<div style="flex:1 1 auto;">{right}</div>'
+                    f'</div>'
+                )
+
+            rows_html += '</div>'
+            st.markdown(rows_html, unsafe_allow_html=True)
+
+            # Handle slider separately — render below the HTML list
+            for part in list(st.session_state.selected_parts):
                 default_sev = prev_sevs.get(part, 5)
                 current_sev = st.session_state.pain_severities.get(part, default_sev)
-                sev_val = st.slider(f"_{part}_sev", 0, 10, current_sev,
-                                    key=f"sev_{part}", label_visibility="collapsed",
-                                    help=f"{part}: 0=none 10=worst")
+                sev_val = st.slider(
+                    f"Severity — {part}", 0, 10, current_sev,
+                    key=f"sev_{part}",
+                    help=f"{part}: 0=none 10=worst"
+                )
                 st.session_state.pain_severities[part] = sev_val
-                prev_val = prev_sevs.get(part)
-                color = "#e63946" if sev_val >= 7 else "#f4a261" if sev_val >= 4 else "#2a9d8f"
-                delta_str = ""
-                if prev_val is not None:
-                    diff = sev_val - prev_val
-                    if diff > 0:    delta_str = f" ▲{diff}"
-                    elif diff < 0:  delta_str = f" ▼{abs(diff)}"
-                    else:           delta_str = " ="
-                st.markdown(
-                    f'<div style="text-align:right;font-size:12px;font-weight:700;'
-                    f'color:{color};margin:-8px 0 4px;">{sev_val}/10{delta_str}</div>',
-                    unsafe_allow_html=True)
 
-                # ── Compute & cache followup ──
-                is_new = part not in prev_locs
-                q = _part_followup_question(part, sev_val, is_new)
-                if q and part not in st.session_state.part_followup_q:
-                    st.session_state.part_followup_q[part] = q
-                elif not q:
-                    st.session_state.part_followup_q.pop(part, None)
-                    st.session_state.part_followup_a.pop(part, None)
-
-                # ── Inline followup as HTML — right side of this row ──
-                if part not in st.session_state.part_followup_q:
-                    continue
-                stored_q = st.session_state.part_followup_q[part]
-                existing_ans = st.session_state.part_followup_a.get(part)
-
-                if existing_ans:
-                    # Compact answered state — single teal line
-                    st.markdown(
-                        f'<div style="font-size:11px;color:var(--accent);font-weight:700;'
-                        f'padding:3px 8px;background:rgba(42,157,143,0.08);'
-                        f'border-radius:10px;margin:2px 0 6px;border:1px solid rgba(42,157,143,0.2);">'
-                        f'🩺 {stored_q} · <span style="opacity:.8;">✓ {existing_ans}</span></div>',
-                        unsafe_allow_html=True)
-                else:
-                    # Unanswered: compact question + horizontal pill links
-                    quick = _quick_replies(stored_q)
-                    pills = ""
-                    for qr in quick:
-                        params = urllib.parse.urlencode({"pfu_part": part, "pfu_ans": qr})
-                        pills += (
-                            f'<a href="?{params}" target="_self" style="'
-                            f'display:inline-block;padding:4px 11px;margin:2px 3px 2px 0;'
-                            f'background:rgba(42,157,143,0.13);color:#1d7a6e;'
-                            f'border:1.5px solid rgba(42,157,143,0.4);border-radius:16px;'
-                            f'font-size:11px;font-weight:700;font-family:Nunito,sans-serif;'
-                            f'text-decoration:none;white-space:nowrap;">{qr}</a>')
-                    st.markdown(
-                        f'<div style="margin:2px 0 8px;padding:7px 10px;'
-                        f'background:rgba(42,157,143,0.06);border-left:3px solid var(--accent);'
-                        f'border-radius:0 10px 10px 0;">'
-                        f'<div style="font-size:11px;color:var(--muted);margin-bottom:5px;">🩺 {stored_q}</div>'
-                        f'<div style="display:flex;flex-wrap:wrap;gap:0;">{pills}</div></div>',
-                        unsafe_allow_html=True)
-
-            # Other location — button-only until clicked
+            st.markdown('<div style="margin-top:4px;"></div>', unsafe_allow_html=True)
             if st.button("➕ Other location", key="bp_other", use_container_width=True):
                 st.session_state.show_other[2] = True; st.rerun()
+
 
         # Other location free-text input (outside columns so it spans full width)
         if st.session_state.show_other.get(2):
