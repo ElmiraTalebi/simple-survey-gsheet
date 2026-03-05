@@ -5,6 +5,7 @@ from typing import Dict, List, Optional, Set
 import streamlit as st
 import gspread
 from google.oauth2.service_account import Credentials
+from openai import OpenAI
 
 st.set_page_config(page_title="Cancer Symptom Check-In", page_icon="🩺", layout="centered")
 
@@ -78,6 +79,15 @@ h2,h3{
     text-align:center;
 }
 
+.followup-box{
+    padding:18px;
+    border-radius:12px;
+    background:#fff8f0;
+    border:1px solid #ffd6a0;
+    font-size:15px;
+    margin-bottom:12px;
+}
+
 </style>
 """, unsafe_allow_html=True)
 
@@ -96,6 +106,23 @@ def _require_secret(*keys):
     if v is None:
         raise KeyError(f"Missing secret. Tried: {', '.join(keys)}")
     return v
+
+
+# ============================================================
+# OpenAI
+# ============================================================
+
+OPENAI_API_KEY = _secret("openai_api_key", "OPENAI_API_KEY", "openai_key")
+openai_client: Optional[OpenAI] = None
+openai_init_error: Optional[str] = None
+
+if OPENAI_API_KEY:
+    try:
+        openai_client = OpenAI(api_key=OPENAI_API_KEY)
+    except Exception as e:
+        openai_init_error = str(e)
+else:
+    openai_init_error = "OpenAI API key not found."
 
 
 # ============================================================
@@ -197,6 +224,10 @@ DEFAULTS = {
     "pain_reason": {},
     "symptoms": set(),
     "submitted": False,
+    # Follow-up stage state
+    "followup_questions": [],       # list of question strings from GPT
+    "followup_answers": {},         # {question_index: answer_text}
+    "followup_generated": False,
 }
 
 for k, v in DEFAULTS.items():
@@ -239,6 +270,119 @@ def region_color_state(region: str) -> str:
 
 def current_svg_colors():
     return {r: region_color_state(r) for r in REGIONS}
+
+
+# ============================================================
+# Worsening detection
+# ============================================================
+
+def detect_worsening(payload: Dict, last_summary: Optional[Dict]) -> Dict:
+    """
+    Returns a dict describing what got worse, or empty dict if nothing significant.
+    """
+    if not last_summary:
+        return {}
+
+    worse = {}
+
+    # Pain severity worsened
+    last_sev = last_summary.get("pain_severity", {})
+    worsened_pain = {}
+    for region, sev in payload.get("pain_severity", {}).items():
+        prev = last_sev.get(region, 0)
+        if sev >= prev + 2:
+            worsened_pain[region] = {"from": prev, "to": sev}
+    if worsened_pain:
+        worse["worsened_pain"] = worsened_pain
+
+    # New pain locations
+    last_locs = set(last_summary.get("pain_locations", []))
+    cur_locs = set(payload.get("pain_locations", []))
+    new_locs = cur_locs - last_locs
+    if new_locs:
+        worse["new_pain_locations"] = list(new_locs)
+
+    # Feeling level dropped
+    last_feeling = last_summary.get("feeling_level")
+    cur_feeling = payload.get("feeling_level")
+    if last_feeling is not None and cur_feeling is not None:
+        if cur_feeling <= last_feeling - 2:
+            worse["feeling_dropped"] = {"from": last_feeling, "to": cur_feeling}
+
+    # New symptoms
+    last_symptoms = set(last_summary.get("symptoms", []))
+    cur_symptoms = set(payload.get("symptoms", []))
+    new_symptoms = cur_symptoms - last_symptoms
+    if len(new_symptoms) >= 1:
+        worse["new_symptoms"] = list(new_symptoms)
+
+    return worse
+
+
+# ============================================================
+# GPT follow-up question generation
+# ============================================================
+
+def generate_followup_questions(payload: Dict, worse: Dict, last_summary: Dict) -> List[str]:
+    """
+    Calls GPT-4.1-mini to generate 1-2 empathetic follow-up questions
+    based on what worsened since the last check-in.
+    Returns a list of question strings.
+    """
+    if openai_client is None:
+        return []
+
+    context_parts = []
+
+    if "worsened_pain" in worse:
+        for region, change in worse["worsened_pain"].items():
+            context_parts.append(
+                f"Pain in {region} worsened from {change['from']}/10 to {change['to']}/10."
+            )
+
+    if "new_pain_locations" in worse:
+        locs = ", ".join(worse["new_pain_locations"])
+        context_parts.append(f"New pain appeared in: {locs}.")
+
+    if "feeling_dropped" in worse:
+        fd = worse["feeling_dropped"]
+        context_parts.append(
+            f"Overall feeling dropped from {fd['from']}/10 to {fd['to']}/10."
+        )
+
+    if "new_symptoms" in worse:
+        syms = ", ".join(worse["new_symptoms"])
+        context_parts.append(f"New symptoms reported: {syms}.")
+
+    context = " ".join(context_parts)
+
+    prompt = (
+        f"You are a compassionate oncology nurse assistant. "
+        f"A cancer patient named {payload.get('name', 'the patient')} just completed a symptom check-in. "
+        f"Compared to their last visit, the following changes were noted: {context} "
+        f"Please ask exactly 1 to 2 short, empathetic, open-ended follow-up questions to better understand "
+        f"their situation. Focus on the most clinically significant change. "
+        f"Return ONLY a JSON array of question strings, nothing else. "
+        f'Example format: ["Question one?", "Question two?"]'
+    )
+
+    try:
+        response = openai_client.chat.completions.create(
+            model="gpt-4.1-mini",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=200,
+            temperature=0.5,
+        )
+        raw = response.choices[0].message.content.strip()
+        # Strip markdown fences if present
+        raw = raw.replace("```json", "").replace("```", "").strip()
+        questions = json.loads(raw)
+        if isinstance(questions, list):
+            return [str(q) for q in questions[:2]]
+    except Exception:
+        pass
+
+    return []
 
 
 # ============================================================
@@ -507,7 +651,84 @@ elif st.session_state.stage == 4:
             "symptoms": list(st.session_state.symptoms),
         }
 
+        # Check if things got worse — if so, go to follow-up stage
+        worse = detect_worsening(payload, st.session_state.last_summary)
+
+        if worse and openai_client is not None:
+            # Store payload temporarily so follow-up stage can access it
+            st.session_state["_pending_payload"] = payload
+            st.session_state["_worse_context"] = worse
+
+            # Generate follow-up questions via GPT
+            questions = generate_followup_questions(
+                payload, worse, st.session_state.last_summary
+            )
+            st.session_state.followup_questions = questions
+            st.session_state.followup_answers = {}
+            st.session_state.followup_generated = True
+
+            if questions:
+                st.session_state.stage = 4.5
+            else:
+                # GPT returned nothing — save and move on
+                save_to_sheet(payload)
+                st.session_state.stage = 5
+        else:
+            # No worsening detected — save directly
+            save_to_sheet(payload)
+            st.session_state.stage = 5
+
+        st.rerun()
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
+# ------------------------------------------------------------
+# Stage 4.5 : GPT Follow-up questions
+# ------------------------------------------------------------
+
+elif st.session_state.stage == 4.5:
+
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+
+    st.markdown('<div class="section-title">A few follow-up questions</div>', unsafe_allow_html=True)
+
+    st.markdown(
+        '<div class="followup-box">👩‍⚕️ I noticed some changes since your last visit. '
+        'Could you help me understand a bit more?</div>',
+        unsafe_allow_html=True,
+    )
+
+    questions = st.session_state.followup_questions
+
+    for i, question in enumerate(questions):
+        answer = st.text_area(
+            question,
+            key=f"followup_answer_{i}",
+            height=80,
+        )
+        st.session_state.followup_answers[i] = answer
+
+    st.markdown("---")
+
+    if st.button("Submit Answers"):
+
+        payload = st.session_state.get("_pending_payload", {})
+
+        # Attach follow-up Q&A to the payload before saving
+        payload["followup_qa"] = [
+            {
+                "question": questions[i],
+                "answer": st.session_state.followup_answers.get(i, ""),
+            }
+            for i in range(len(questions))
+        ]
+
         save_to_sheet(payload)
+
+        # Clean up temp keys
+        st.session_state.pop("_pending_payload", None)
+        st.session_state.pop("_worse_context", None)
 
         st.session_state.stage = 5
         st.rerun()
