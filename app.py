@@ -405,6 +405,28 @@ div:has(> iframe[title="streamlitApp"]) {
     color: #fff !important; transform: translateY(-1px) !important;
 }
 
+/* ── Followup reply buttons ── */
+.reply-btn-wrap .stButton > button {
+    background: var(--accent-lt) !important;
+    color: var(--accent) !important;
+    border: 1.5px solid var(--accent-md) !important;
+    border-radius: 20px !important;
+    font-size: 13px !important;
+    font-weight: 700 !important;
+    padding: 0.25rem 0.9rem !important;
+    min-height: 32px !important;
+    height: 32px !important;
+    box-shadow: none !important;
+    margin-bottom: 4px !important;
+    transition: background 0.15s, color 0.15s !important;
+}
+.reply-btn-wrap .stButton > button:hover {
+    background: var(--accent-md) !important;
+    color: var(--accent) !important;
+    border-color: var(--accent) !important;
+    transform: none !important;
+}
+
 [data-testid="stAudioInput"] { margin: 0 !important; padding: 0 !important; }
 [data-testid="stAudioInput"] > label { display: none !important; }
 [data-testid="stAudioInput"] > div {
@@ -902,12 +924,14 @@ elif stage == 2:
                                 quick = ["More activity", "Don't know", "Just got worse"]
                             else:
                                 quick = ["Yes", "Somewhat", "No"]
-                            # Render as stacked buttons (no nested columns)
+                            # Styled reply buttons via wrapper div
+                            st.markdown('<div class="reply-btn-wrap">', unsafe_allow_html=True)
                             for qi, qr in enumerate(quick):
                                 if st.button(qr, key=f"pfu_{part}_{qi}_{ctr}",
                                              use_container_width=True):
                                     st.session_state.part_followup_a[part] = qr
                                     st.rerun()
+                            st.markdown('</div>', unsafe_allow_html=True)
 
             # Other location — button-only until clicked
             if st.button("➕ Other location", key="bp_other", use_container_width=True):
