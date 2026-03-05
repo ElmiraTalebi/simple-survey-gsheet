@@ -1,7 +1,7 @@
 import hashlib
 import json
 from datetime import datetime
-from typing import Dict, List, Set, Optional
+from typing import Dict, List, Optional
 
 import streamlit as st
 import gspread
@@ -99,9 +99,9 @@ def get_opening_message(last: Dict, name: str) -> str:
     sym  = ", ".join(last.get("symptoms", [])) or "none"
     ts   = last.get("timestamp", "your last visit")
     system = (
-        "You are a warm symptom-intake assistant for a cancer care clinic. "
+        "You are a warm symptom-intake assistant for a head and neck cancer care clinic. "
         "Write ONE sentence greeting the patient by name, briefly mention their "
-        "specific data from last time (actual symptoms, pain locations, or feeling). "
+        "specific data from last time (e.g. throat pain, eating difficulty, fatigue, or symptoms). "
         "End with: 'Let\\'s see how things are today.' "
         "Do NOT ask a question. Max 2 sentences. No filler."
     )
@@ -135,8 +135,9 @@ def transcribe_audio(audio_bytes: bytes) -> str:
 # Follow-ups fire ONLY when concerning — "minimize time, only drill when needed."
 
 FEELING_FOLLOWUPS = {
-    "fair": "What's been the hardest part for you lately?",
-    "poor": "What is bothering you the most right now?",
+    "fair":       "What's been the hardest part — throat pain, eating, or fatigue?",
+    "unwell":     "What is bothering you the most right now?",
+    "very unwell":"What is bothering you the most right now?",
 }
 
 PAIN_DRILL = {
@@ -146,27 +147,30 @@ PAIN_DRILL = {
 }
 
 EATING_DRILL = {
-    "worse":    "What's making it harder to eat — pain, nausea, or no appetite?",
-    "cant_eat": "Are you able to get any fluids or shakes down at all?",
+    "worse":    "What's making it harder — throat pain, nausea, or no appetite?",
+    "cant_eat": "Are you able to get any fluids or shakes down at all, even small sips?",
 }
 
 SYMPTOM_FOLLOWUPS = {
-    "Nausea":                   "Are you able to keep food and fluids down?",
-    "Vomiting":                 "How many times in the last 24 hours?",
-    "Mouth sores":              "Are the sores making it hard to eat or drink?",
-    "Trouble swallowing":       "Are you coughing or choking when you swallow?",
-    "Fever / chills":           "Have you taken your temperature? What was it?",
-    "Constipation":             "How many days since your last bowel movement?",
-    "Diarrhea":                 "How many episodes today?",
-    "Dizziness / unsteadiness": "Does it happen when you change position (sitting to standing)?",
-    "Shortness of breath":      "Does it happen at rest or only with activity?",
+    "Nausea":                              "Are you able to keep food and fluids down?",
+    "Vomiting":                            "How many times in the last 24 hours?",
+    "Mouth sores / ulcers":               "Are the sores making it hard to eat or drink?",
+    "Trouble swallowing":                  "Are you coughing or choking when you swallow?",
+    "Fever / chills":                      "Have you taken your temperature? What was it?",
+    "Constipation":                        "How many days since your last bowel movement?",
+    "Diarrhea":                            "How many episodes today?",
+    "Dizziness / unsteadiness":           "Does it happen when you change position (sitting to standing)?",
+    "Ringing in ears / hearing changes":  "Is it affecting your ability to hear conversations?",
+    "Mucus / thick phlegm":               "Is the mucus making it hard to swallow or sleep?",
+    "Skin reaction / radiation burn":     "Is the skin open or just red and irritated?",
+    "Swelling (legs or ankles)":          "Is the swelling new, or has it been there a while?",
 }
 
 def get_curated_followup(stage_id: int) -> Optional[str]:
     """Return ONE curated follow-up ONLY if the answer is concerning."""
     if stage_id == 1:
         feeling = st.session_state.get("feeling_level")
-        return FEELING_FOLLOWUPS.get(feeling)  # None for excellent/good/very good
+        return FEELING_FOLLOWUPS.get(feeling)  # None for very well/well
 
     if stage_id == 2:
         if not st.session_state.pain_yesno:
@@ -195,7 +199,7 @@ def get_curated_followup(stage_id: int) -> Optional[str]:
         symptoms = st.session_state.get("symptoms", [])
         # Priority: concerning symptoms that need immediate drill-down
         priority = ["Fever / chills", "Vomiting", "Trouble swallowing",
-                     "Shortness of breath", "Dizziness / unsteadiness"]
+                     "Dizziness / unsteadiness", "Mouth sores / ulcers", "Skin reaction / radiation burn"]
         for s in priority:
             if s in symptoms and s in SYMPTOM_FOLLOWUPS:
                 return SYMPTOM_FOLLOWUPS[s]
@@ -615,22 +619,6 @@ def render_other_input(stage_id: int, placeholder: str = "Describe…"):
         on_answer(typed.strip(), stage_id); st.rerun()
     if handle_voice(audio, stage_id): st.rerun()
 
-def body_svg(selected: Set[str], prev_locs: Set[str] = set()) -> str:
-    def fill(p):
-        if p in selected: return "#1f7aff"
-        if p in prev_locs: return "#f4a261"
-        return "#cfd8e6"
-    s = "#6b7a90"
-    return f"""<svg width="200" height="325" viewBox="0 0 320 520" xmlns="http://www.w3.org/2000/svg">
-  <defs><filter id="sh"><feDropShadow dx="0" dy="2" stdDeviation="2" flood-color="rgba(0,0,0,0.12)"/></filter></defs>
-  <g filter="url(#sh)"><circle cx="160" cy="70" r="38" fill="{fill('Head')}" stroke="{s}" stroke-width="2"/></g>
-  <g filter="url(#sh)"><rect x="110" y="120" width="100" height="70" rx="24" fill="{fill('Chest')}" stroke="{s}" stroke-width="2"/></g>
-  <g filter="url(#sh)"><rect x="115" y="195" width="90" height="70" rx="22" fill="{fill('Abdomen')}" stroke="{s}" stroke-width="2"/></g>
-  <g filter="url(#sh)"><path d="M110 132 C80 145,72 180,78 220 C82 250,92 270,100 290 C108 310,115 320,120 320 L120 130Z" fill="{fill('Left Arm')}" stroke="{s}" stroke-width="2"/></g>
-  <g filter="url(#sh)"><path d="M210 132 C240 145,248 180,242 220 C238 250,228 270,220 290 C212 310,205 320,200 320 L200 130Z" fill="{fill('Right Arm')}" stroke="{s}" stroke-width="2"/></g>
-  <g filter="url(#sh)"><path d="M135 265 C120 310,118 360,126 410 C132 445,132 475,128 500 L155 500 C158 470,160 435,156 405 C150 355,152 312,165 265Z" fill="{fill('Left Leg')}" stroke="{s}" stroke-width="2"/></g>
-  <g filter="url(#sh)"><path d="M185 265 C200 310,202 360,194 410 C188 445,188 475,192 500 L165 500 C162 470,160 435,164 405 C170 355,168 312,155 265Z" fill="{fill('Right Leg')}" stroke="{s}" stroke-width="2"/></g>
-</svg>""".strip()
 
 def panel_q(text):
     """Render a panel-title question bubble."""
@@ -647,7 +635,7 @@ st.markdown('''
   <div class="app-header-icon">🩺</div>
   <div>
     <div class="app-header-title">Symptom Check-In</div>
-    <div class="app-header-sub">Cancer Care · Daily Check-In</div>
+    <div class="app-header-sub">Head &amp; Neck Cancer Care · Weekly Check-In</div>
   </div>
 </div>''', unsafe_allow_html=True)
 
@@ -656,7 +644,7 @@ st.markdown('''
 # ════════════════════════════════════════════════════════════
 if st.session_state.stage == -1:
     st.markdown('<div class="panel">', unsafe_allow_html=True)
-    panel_q("Welcome · Please enter your name")
+    panel_q("Welcome · Please enter your name to begin your check-in")
     name_input = st.text_input("Your name:", value=st.session_state.patient_name)
     if st.button("Start Check-In"):
         if name_input.strip():
@@ -675,7 +663,7 @@ if st.session_state.stage == -1:
                 add_doctor(opening, stage=0)
                 st.session_state.stage = 0
             else:
-                add_doctor(f"Hi {name_input.strip()}! Let's go through a few quick questions.", stage=1)
+                add_doctor(f"Hi {name_input.strip()}! I'm going to ask you a few questions about how you've been feeling since your last visit. This helps your care team prepare for today.", stage=1)
                 st.session_state.stage = 1
             st.rerun()
         else:
@@ -691,7 +679,7 @@ render_chat_window()
 # ════════════════════════════════════════════════════════════
 if stage == 0:
     st.markdown('<div class="panel">', unsafe_allow_html=True)
-    panel_q("Compared to your last visit, how are things?")
+    panel_q("Compared to your last visit, how are things going overall?")
     render_inline(0)
 
     if not is_answered(0):
@@ -725,8 +713,8 @@ elif stage == 1:
     if not is_answered(1):
         cols = st.columns(5, gap="small")
         for idx, (label, val) in enumerate([
-            ("Excellent","excellent"),("Very Good","very good"),
-            ("Good","good"),("Fair","fair"),("Poor","poor"),
+            ("Very Well","very well"),("Well","well"),
+            ("Fair","fair"),("Unwell","unwell"),("Very Unwell","very unwell"),
         ]):
             with cols[idx]:
                 if st.button(label, key=f"feel_{idx}", use_container_width=True):
@@ -739,9 +727,9 @@ elif stage == 1:
             # Show quick reply buttons for the curated follow-up
             feeling = st.session_state.feeling_level
             if feeling == "fair":
-                replies = ["Pain is worse", "Very tired", "Hard to eat"]
-            elif feeling == "poor":
-                replies = ["Pain is bad", "Can't eat", "Very weak"]
+                replies = ["Throat pain", "Very fatigued", "Hard to eat or drink"]
+            elif feeling in ("unwell", "very unwell"):
+                replies = ["Throat/mouth pain", "Can't eat or drink", "Very weak or dizzy"]
             else:
                 replies = []
             if replies:
@@ -785,25 +773,40 @@ elif stage == 2:
             advance_stage(); st.rerun()
 
     elif pain_sub == "map":
-        panel_q("Where do you feel pain?")
+        panel_q("Where do you feel pain? (Select all that apply)")
         past = st.session_state.get("past_checkins", [])
         prev_locs = set(past[-1].get("pain_locations", [])) if past else set()
 
         if prev_locs:
-            st.markdown('<div class="small-note">🟠 Orange = last visit. Tap to confirm or change.</div>',
+            st.markdown('<div class="small-note">✓ = reported last visit. Tap to confirm or remove.</div>',
                         unsafe_allow_html=True)
 
-        col_svg, col_btns = st.columns([1, 1], gap="medium")
-        with col_svg:
-            st.markdown(body_svg(st.session_state.selected_parts, prev_locs),
-                        unsafe_allow_html=True)
-        with col_btns:
-            for part in ["Head","Throat/Neck","Chest","Abdomen","Left Arm","Right Arm","Left Leg","Right Leg"]:
-                lbl = f"✓ {part}" if part in st.session_state.selected_parts else part
+        # Head & neck cancer specific locations — derived from clinical transcripts
+        HN_LOCATIONS = [
+            "Throat",
+            "Mouth / Tongue",
+            "Neck",
+            "Ear(s)",
+            "Jaw",
+            "Lips / Gums",
+        ]
+
+        cols = st.columns(2, gap="small")
+        for idx, part in enumerate(HN_LOCATIONS):
+            with cols[idx % 2]:
+                in_prev = part in prev_locs
+                in_curr = part in st.session_state.selected_parts
+                if in_prev and not in_curr:
+                    lbl = f"✓ {part} (last visit)"
+                elif in_curr:
+                    lbl = f"✓ {part}"
+                else:
+                    lbl = part
                 if st.button(lbl, key=f"bp_{part}", use_container_width=True):
                     toggle_body_part(part); st.rerun()
-            if st.button("➕ Other", key="bp_other", use_container_width=True):
-                st.session_state.show_other[2] = True; st.rerun()
+
+        if st.button("➕ Other location", key="bp_other", use_container_width=True):
+            st.session_state.show_other[2] = True; st.rerun()
 
         if st.session_state.show_other.get(2):
             c_m, c_mic = st.columns([7, 2.5], gap="small")
@@ -829,11 +832,11 @@ elif stage == 2:
             st.session_state.pain_sub = "timing"; st.rerun()
 
     elif pain_sub == "timing":
-        panel_q("Is your pain constant, or mainly at certain times?")
+        panel_q("When does the pain occur?")
         for idx, (lbl, val) in enumerate([
-            ("Constant", "constant"),
-            ("When eating/swallowing", "eating"),
-            ("When moving/standing", "movement"),
+            ("When swallowing", "swallowing"),
+            ("When talking", "talking"),
+            ("All the time / constant", "constant"),
             ("Comes and goes", "intermittent"),
         ]):
             if st.button(lbl, key=f"pt_{idx}", use_container_width=True):
@@ -850,7 +853,7 @@ elif stage == 2:
         last_is_doc = stage_msgs and stage_msgs[-1]["role"] == "doctor"
         if last_is_doc:
             # Curated follow-up for high severity / new pain
-            replies = ["Yes, a lot", "Somewhat", "Not really"]
+            replies = ["Yes, constant", "Only when swallowing", "Manageable with meds"]
             rc = st.columns(len(replies), gap="small")
             for i, r in enumerate(replies):
                 with rc[i]:
@@ -871,13 +874,13 @@ elif stage == 3:
     eat_sub = st.session_state.get("eat_sub", "status")
 
     if eat_sub == "status":
-        panel_q("How has eating been?")
+        panel_q("How has eating and drinking been since your last visit?")
         render_inline(3)
         for idx, (lbl, val) in enumerate([
             ("👍 Better than before", "better"),
             ("➡️ About the same", "same"),
-            ("👎 Harder to eat", "worse"),
-            ("🚫 Can't eat", "cant_eat"),
+            ("👎 Harder to eat or drink", "worse"),
+            ("🚫 Unable to eat or drink", "cant_eat"),
         ]):
             if st.button(lbl, key=f"eat_{idx}", use_container_width=True):
                 st.session_state.eating_status = val
@@ -885,12 +888,12 @@ elif stage == 3:
                 st.session_state.eat_sub = "type"; st.rerun()
 
     elif eat_sub == "type":
-        panel_q("What are you able to eat?")
+        panel_q("What are you currently able to eat?")
         for idx, (lbl, val) in enumerate([
-            ("Normal food", "normal"),
-            ("Soft food / purees", "soft"),
-            ("Liquids only", "liquids"),
-            ("Tube feeding", "tube"),
+            ("Regular / near-normal food", "normal"),
+            ("Soft foods (purees, soups, pudding)", "soft"),
+            ("Liquids only (shakes, broth)", "liquids"),
+            ("Tube feeding only", "tube"),
         ]):
             if st.button(lbl, key=f"food_{idx}", use_container_width=True):
                 st.session_state.food_type = val
@@ -898,7 +901,7 @@ elif stage == 3:
                 st.session_state.eat_sub = "shakes"; st.rerun()
 
     elif eat_sub == "shakes":
-        panel_q("How many supplement shakes/Boosts today?")
+        panel_q("How many protein shakes or supplement drinks (Boost / Ensure) per day?")
         cols = st.columns(4, gap="small")
         for idx, (lbl, val) in enumerate([("None","0"),("1–2","1-2"),("3–4","3-4"),("5+","5+")]):
             with cols[idx]:
@@ -908,9 +911,9 @@ elif stage == 3:
                     st.session_state.eat_sub = "hydration"; st.rerun()
 
     elif eat_sub == "hydration":
-        panel_q("Are you staying hydrated?")
+        panel_q("How has your fluid intake been?")
         cols = st.columns(3, gap="small")
-        for idx, (lbl, val) in enumerate([("Yes, well","yes"),("Trying","trying"),("Not enough","no")]):
+        for idx, (lbl, val) in enumerate([("Drinking well","yes"),("Getting some fluids","trying"),("Very little / not enough","no")]):
             with cols[idx]:
                 if st.button(lbl, key=f"hyd_{idx}", use_container_width=True):
                     st.session_state.hydration = val
@@ -922,7 +925,7 @@ elif stage == 3:
         stage_msgs = [m for m in st.session_state.messages if m.get("stage") == 3]
         last_is_doc = stage_msgs and stage_msgs[-1]["role"] == "doctor"
         if last_is_doc:
-            replies = ["Pain when eating", "No appetite", "Nausea"]
+            replies = ["Throat pain when swallowing", "No appetite", "Nausea / vomiting"]
             rc = st.columns(len(replies), gap="small")
             for i, r in enumerate(replies):
                 with rc[i]:
@@ -939,23 +942,26 @@ elif stage == 3:
 # ════════════════════════════════════════════════════════════
 elif stage == 4:
     st.markdown('<div class="panel">', unsafe_allow_html=True)
-    panel_q("Any of these symptoms today?")
+    panel_q("Are you experiencing any of the following? (Select all that apply)")
 
-    # Derived from what clinicians screen in EVERY transcript
+    # Head & neck oncology symptom list — derived from all 5 clinical transcripts
     SYMPTOM_LIST = [
         "Fatigue / low energy",
         "Nausea",
         "Vomiting",
-        "Mouth sores",
+        "Mouth sores / ulcers",
+        "Dry mouth",
         "Trouble swallowing",
+        "Coughing / choking when swallowing",
+        "Mucus / thick phlegm",
         "Constipation",
         "Diarrhea",
         "Fever / chills",
         "Dizziness / unsteadiness",
+        "Ringing in ears / hearing changes",
         "Numbness / tingling (hands or feet)",
-        "Hearing changes / ringing in ears",
-        "Coughing / choking",
-        "Anxiety / low mood",
+        "Skin reaction / radiation burn",
+        "Swelling (legs or ankles)",
     ]
 
     past = st.session_state.get("past_checkins", [])
@@ -1061,28 +1067,28 @@ elif stage == 5:
 <div class="summary-wrap">
   <div class="submitted-badge">✅ Submitted</div>
   <div class="summary-title">Check-In Summary — {name}</div>
-  <div class="summary-sub">Your care team will review this.</div>
+  <div class="summary-sub">Your care team will review this before your visit.</div>
   <table class="summary-table">
     <tr><td>Patient</td><td>{name}</td></tr>
     {fast_note}
-    <tr><td>Feeling</td><td>{feeling}</td></tr>
-    <tr><td>Pain</td><td>{pain_str}</td></tr>
-    <tr><td>Pain locations</td><td>{loc_html}</td></tr>
-    <tr><td>Pain timing</td><td>{timing}</td></tr>
-    <tr><td>Eating</td><td>{eating}</td></tr>
-    <tr><td>Diet type</td><td>{food}</td></tr>
-    <tr><td>Shakes/day</td><td>{shakes}</td></tr>
-    <tr><td>Hydration</td><td>{hydration}</td></tr>
+    <tr><td>Overall Feeling</td><td>{feeling}</td></tr>
+    <tr><td>Pain Today</td><td>{pain_str}</td></tr>
+    <tr><td>Pain Location(s)</td><td>{loc_html}</td></tr>
+    <tr><td>Pain Timing</td><td>{timing}</td></tr>
+    <tr><td>Eating & Drinking</td><td>{eating}</td></tr>
+    <tr><td>Diet Type</td><td>{food}</td></tr>
+    <tr><td>Supplement Shakes/day</td><td>{shakes}</td></tr>
+    <tr><td>Fluid Intake</td><td>{hydration}</td></tr>
     <tr><td>Symptoms</td><td>{sym_html}</td></tr>
-    <tr><td>Notes</td><td>{conv_cell}</td></tr>
+    <tr><td>Additional Notes</td><td>{conv_cell}</td></tr>
   </table>
 </div>""", unsafe_allow_html=True)
 
     else:
         st.markdown('<div class="panel">', unsafe_allow_html=True)
-        panel_q("Ready to submit — anything else?")
+        panel_q("Almost done — is there anything else you'd like your care team to know?")
 
-        note = st.text_input("", placeholder="Add a note for your care team (optional)…",
+        note = st.text_input("", placeholder="E.g. a new symptom, question for your doctor, medication concern… (optional)",
                              key="final_note", label_visibility="collapsed")
 
         if st.button("✅ Submit Check-In", use_container_width=True, type="primary"):
