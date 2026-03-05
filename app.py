@@ -3,6 +3,7 @@ from datetime import datetime
 from typing import Dict, List, Optional, Set
 
 import streamlit as st
+import streamlit.components.v1 as components
 import gspread
 from google.oauth2.service_account import Credentials
 
@@ -282,9 +283,118 @@ def body_svg(colors: Dict[str, str]) -> str:
 """
 
 
+
 # ============================================================
-# Session state
+# Voice input widget
 # ============================================================
+
+def voice_input_widget(placeholder: str = "Click the mic and speak…") -> None:
+    """Renders a Web Speech API microphone widget. Transcript is auto-copied to clipboard."""
+    html = f"""
+<style>
+  body {{ margin:0; padding:0; background:transparent; font-family:'DM Sans',sans-serif; }}
+  .vbox {{
+    display:flex; align-items:center; gap:12px;
+    padding:12px 16px; border-radius:12px;
+    background:#f0f5fb; border:1.5px solid #d4deef;
+  }}
+  #mic {{
+    width:42px; height:42px; border-radius:50%; flex-shrink:0;
+    background:linear-gradient(135deg,#3d8fc0,#5ab0d8);
+    border:none; cursor:pointer; font-size:18px;
+    box-shadow:0 3px 10px rgba(61,143,192,0.3);
+    transition:transform 0.15s;
+  }}
+  #mic:hover {{ transform:scale(1.08); }}
+  #mic.on {{ background:linear-gradient(135deg,#e74c3c,#ff6b6b); animation:pulse 1s infinite; }}
+  @keyframes pulse {{
+    0%,100% {{ box-shadow:0 3px 10px rgba(231,76,60,0.3); }}
+    50%      {{ box-shadow:0 3px 22px rgba(231,76,60,0.65); }}
+  }}
+  #txt {{
+    flex:1; font-size:14px; color:#1a3a5c; line-height:1.5;
+    min-height:20px; word-break:break-word;
+  }}
+  #txt.ph {{ color:#9aafc7; font-style:italic; }}
+  #cpybtn {{
+    background:#1a3a5c; color:#fff; border:none; cursor:pointer;
+    border-radius:8px; padding:6px 14px; font-size:12px; font-weight:500;
+    opacity:0; transition:opacity 0.2s; white-space:nowrap;
+  }}
+  #cpybtn.show {{ opacity:1; }}
+  #cpybtn:hover {{ background:#3d8fc0; }}
+  #note {{
+    font-size:11px; color:#9aafc7; margin-top:6px; padding-left:2px;
+  }}
+</style>
+<div class="vbox">
+  <button id="mic" onclick="toggleMic()">🎤</button>
+  <div id="txt" class="ph">{placeholder}</div>
+  <button id="cpybtn" onclick="doCopy()">Copy ↑</button>
+</div>
+<div id="note"></div>
+<script>
+var rec = null, final = '', going = false;
+function toggleMic() {{
+  var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) {{
+    document.getElementById('txt').textContent = '⚠ Voice not supported in this browser.';
+    document.getElementById('txt').classList.remove('ph');
+    return;
+  }}
+  if (going) {{ rec.stop(); return; }}
+  rec = new SR(); rec.continuous = false; rec.interimResults = true; rec.lang = 'en-US';
+  rec.onstart = function() {{
+    going = true; final = '';
+    document.getElementById('mic').classList.add('on');
+    document.getElementById('mic').textContent = '⏹';
+    document.getElementById('txt').textContent = 'Listening…';
+    document.getElementById('txt').classList.remove('ph');
+    document.getElementById('cpybtn').classList.remove('show');
+    document.getElementById('note').textContent = '';
+  }};
+  rec.onresult = function(e) {{
+    var interim = ''; final = '';
+    for (var i = e.resultIndex; i < e.results.length; i++) {{
+      if (e.results[i].isFinal) final += e.results[i][0].transcript;
+      else interim += e.results[i][0].transcript;
+    }}
+    document.getElementById('txt').textContent = final || interim || 'Listening…';
+  }};
+  rec.onend = function() {{
+    going = false;
+    document.getElementById('mic').classList.remove('on');
+    document.getElementById('mic').textContent = '🎤';
+    if (final) {{
+      document.getElementById('cpybtn').classList.add('show');
+      document.getElementById('note').textContent = '✔ Copied to clipboard — paste into the field above';
+      navigator.clipboard.writeText(final).catch(function(){{}});
+    }} else {{
+      document.getElementById('txt').textContent = '{placeholder}';
+      document.getElementById('txt').classList.add('ph');
+    }}
+  }};
+  rec.onerror = function(e) {{
+    going = false;
+    document.getElementById('mic').classList.remove('on');
+    document.getElementById('mic').textContent = '🎤';
+    document.getElementById('txt').textContent = 'Error: ' + e.error;
+  }};
+  rec.start();
+}}
+function doCopy() {{
+  if (!final) return;
+  navigator.clipboard.writeText(final).then(function() {{
+    var b = document.getElementById('cpybtn');
+    b.textContent = 'Copied!';
+    setTimeout(function(){{ b.textContent = 'Copy ↑'; }}, 1500);
+  }});
+}}
+</script>
+"""
+    components.html(html, height=90)
+
+
 
 DEFAULTS = {
     "stage": -1,
@@ -299,6 +409,10 @@ DEFAULTS = {
     "pain_reason": {},
     "symptoms": set(),
     "submitted": False,
+    "show_other_pain": False,
+    "other_pain_text": "",
+    "show_other_symptom": False,
+    "other_symptom_text": "",
 }
 
 for k, v in DEFAULTS.items():
@@ -549,6 +663,25 @@ elif st.session_state.stage == 3:
                     if reason:
                         st.session_state.pain_reason[r] = reason
 
+        # ── Other pain location ──────────────────────────────
+        other_pain_selected = st.session_state.show_other_pain
+        other_pain_icon = "🔴 Other" if other_pain_selected else "🟢 Other"
+
+        if st.button(other_pain_icon, key="other_pain_btn"):
+            st.session_state.show_other_pain = not st.session_state.show_other_pain
+            if not st.session_state.show_other_pain:
+                st.session_state.other_pain_text = ""
+            st.rerun()
+
+        if st.session_state.show_other_pain:
+            st.session_state.other_pain_text = st.text_input(
+                "Describe the pain location",
+                value=st.session_state.other_pain_text,
+                placeholder="Type here, or use the mic below and paste…",
+                key="other_pain_input",
+            )
+            voice_input_widget("Click mic, speak the location, then paste above ↑")
+
     if st.button("Next"):
         st.session_state.stage = 4
         st.rerun()
@@ -597,16 +730,45 @@ elif st.session_state.stage == 4:
 
     st.markdown("---")
 
+    # ── Other symptom ────────────────────────────────────────
+    other_sym_selected = st.session_state.show_other_symptom
+    other_sym_icon = "🔴 Other" if other_sym_selected else "🟢 Other"
+
+    if st.button(other_sym_icon, key="other_sym_btn"):
+        st.session_state.show_other_symptom = not st.session_state.show_other_symptom
+        if not st.session_state.show_other_symptom:
+            st.session_state.other_symptom_text = ""
+        st.rerun()
+
+    if st.session_state.show_other_symptom:
+        st.session_state.other_symptom_text = st.text_input(
+            "Describe the symptom",
+            value=st.session_state.other_symptom_text,
+            placeholder="Type here, or use the mic below and paste…",
+            key="other_sym_input",
+        )
+        voice_input_widget("Click mic, speak the symptom, then paste above ↑")
+
+    st.markdown("---")
+
     if st.button("Submit Check-In"):
+
+        all_symptoms = list(st.session_state.symptoms)
+        if st.session_state.other_symptom_text.strip():
+            all_symptoms.append(st.session_state.other_symptom_text.strip())
+
+        all_pain_locations = list(st.session_state.selected_parts)
+        if st.session_state.other_pain_text.strip():
+            all_pain_locations.append(st.session_state.other_pain_text.strip())
 
         payload = {
             "name": st.session_state.name,
             "feeling_level": st.session_state.feeling_level,
             "pain": st.session_state.pain_yesno,
-            "pain_locations": list(st.session_state.selected_parts),
+            "pain_locations": all_pain_locations,
             "pain_severity": st.session_state.pain_severity,
             "pain_reason": st.session_state.pain_reason,
-            "symptoms": list(st.session_state.symptoms),
+            "symptoms": all_symptoms,
         }
 
         save_to_sheet(payload)
