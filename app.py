@@ -833,42 +833,70 @@ elif stage == 2:
         panel_q("Where do you feel pain?")
         past = st.session_state.get("past_checkins", [])
         prev_locs = set(past[-1].get("pain_locations", [])) if past else set()
+        prev_sevs = dict(past[-1].get("pain_severities", {})) if past else {}
 
         if prev_locs:
-            st.markdown('<div class="small-note">🟠 Orange = last visit. Tap to confirm or change.</div>',
+            st.markdown('<div class="small-note">🟠 Orange = last visit. Tap a location to select it — a severity slider will appear inline.</div>',
+                        unsafe_allow_html=True)
+        else:
+            st.markdown('<div class="small-note">Tap a location to select it — a severity slider will appear inline.</div>',
                         unsafe_allow_html=True)
 
-        col_svg, col_btns = st.columns([1, 1], gap="medium")
+        col_svg, col_btns = st.columns([1, 1.4], gap="medium")
         with col_svg:
             st.markdown(body_svg(st.session_state.selected_parts, prev_locs),
                         unsafe_allow_html=True)
+
         with col_btns:
-            for part in ["Head","Throat/Neck","Chest","Abdomen","Left Arm","Right Arm","Left Leg","Right Leg"]:
-                lbl = f"✓ {part}" if part in st.session_state.selected_parts else part
+            BODY_PARTS = ["Head", "Throat/Neck", "Chest", "Abdomen",
+                          "Left Arm", "Right Arm", "Left Leg", "Right Leg"]
+            for part in BODY_PARTS:
+                selected = part in st.session_state.selected_parts
+                lbl = f"✓ {part}" if selected else part
                 if st.button(lbl, key=f"bp_{part}", use_container_width=True):
-                    toggle_body_part(part); st.rerun()
-            if st.button("➕ Other", key="bp_other", use_container_width=True):
+                    toggle_body_part(part)
+                    # If deselecting, remove its severity too
+                    if part in st.session_state.pain_severities and part not in st.session_state.selected_parts:
+                        del st.session_state.pain_severities[part]
+                    st.rerun()
+
+                # Inline severity slider — appears immediately under this button
+                # when the location is selected
+                if part in st.session_state.selected_parts:
+                    default_sev = prev_sevs.get(part, 3)
+                    current_sev = st.session_state.pain_severities.get(part, default_sev)
+                    sev_val = st.slider(
+                        f"_{part}_sev",          # label hidden via CSS
+                        0, 10, current_sev,
+                        key=f"sev_{part}",
+                        label_visibility="collapsed",
+                        help=f"{part} pain: 0 = none, 10 = worst"
+                    )
+                    st.session_state.pain_severities[part] = sev_val
+                    # Show the numeric value as a small badge
+                    color = "#e63946" if sev_val >= 7 else "#f4a261" if sev_val >= 4 else "#2a9d8f"
+                    st.markdown(
+                        f'<div style="text-align:right;font-size:12px;font-weight:700;'
+                        f'color:{color};margin:-8px 0 6px;">'
+                        f'{sev_val}/10</div>',
+                        unsafe_allow_html=True
+                    )
+
+            # Other location option
+            if st.button("➕ Other location", key="bp_other", use_container_width=True):
                 st.session_state.show_other[2] = True; st.rerun()
 
+        # Other location free-text input (outside columns so it spans full width)
         if st.session_state.show_other.get(2):
             c_m, c_mic = st.columns([7, 2.5], gap="small")
             with c_m:
-                other_loc = st.text_input("", placeholder="Other location…",
+                other_loc = st.text_input("", placeholder="Describe other location…",
                                           key="bp_other_txt", label_visibility="collapsed")
                 if st.button("↑", key="bp_other_send"):
                     if other_loc.strip():
                         st.session_state.selected_parts.add(other_loc.strip())
+                        st.session_state.show_other[2] = False
                         st.rerun()
-
-        if st.session_state.selected_parts:
-            st.markdown("<hr class='divider'>", unsafe_allow_html=True)
-            st.markdown('<div class="small-note">Rate severity (0 = none, 10 = worst):</div>',
-                        unsafe_allow_html=True)
-            prev_sevs = dict(past[-1].get("pain_severities", {})) if past else {}
-            for part in sorted(st.session_state.selected_parts):
-                default = prev_sevs.get(part, 3)
-                val = st.slider(part, 0, 10, default, key=f"sev_{part}")
-                st.session_state.pain_severities[part] = val
 
         if st.button("Confirm ➜", key="pain_confirm", use_container_width=True, type="primary"):
             st.session_state.pain_sub = "timing"; st.rerun()
