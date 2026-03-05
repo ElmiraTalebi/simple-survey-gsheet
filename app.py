@@ -799,11 +799,22 @@ def render_other_text(stage_id: int, placeholder: str = "Describe…"):
         st.rerun()
 
 def body_svg(selected: Set[str], prev_locs: Set[str] = set()) -> str:
-    """Body SVG with color coding: blue=selected, orange=was-painful-last-time, grey=normal."""
+    """Body SVG with color coding:
+    - red    = selected pain areas today
+    - orange = pain areas from last visit (history)
+    - green  = other body areas
+    """
+
+    COLOR_SELECTED_TODAY = "#e63946"   # red
+    COLOR_LAST_VISIT     = "#f4a261"   # orange
+    COLOR_OTHER          = "#7bc96f"   # green
+
     def fill(p):
-        if p in selected: return "#1f7aff"
-        if p in prev_locs: return "#f4a261"  # orange = last visit pain
-        return "#cfd8e6"
+        if p in selected:
+            return COLOR_SELECTED_TODAY
+        if p in prev_locs:
+            return COLOR_LAST_VISIT
+        return COLOR_OTHER
     s = "#6b7a90"
     return f"""<svg width="200" height="325" viewBox="0 0 320 520" xmlns="http://www.w3.org/2000/svg">
   <defs><filter id="sh"><feDropShadow dx="0" dy="2" stdDeviation="2" flood-color="rgba(0,0,0,0.12)"/></filter></defs>
@@ -1020,8 +1031,11 @@ elif stage == 3:
         render_inline_stage_messages(stage_id=3)
 
         if prev_locs:
-            st.markdown('<div class="small-note">🟠 Orange = pain areas from last visit. '
-                        'Tap to confirm or change.</div>', unsafe_allow_html=True)
+            st.markdown(
+                '<div class="small-note">🟠 Orange = pain areas from last visit · 🟢 Green = other areas · 🔴 Red = pain today. '
+                'Tap a body part to confirm or change.</div>',
+                unsafe_allow_html=True,
+            )
         else:
             st.markdown('<div class="small-note">Select areas where you feel pain:</div>',
                         unsafe_allow_html=True)
