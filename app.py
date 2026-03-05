@@ -10,6 +10,19 @@ from openai import OpenAI
 
 st.set_page_config(page_title="Cancer Symptom Check-In", page_icon="🩺", layout="centered")
 
+# ── Query-param reply handler (for HTML pill buttons) ───────
+# HTML pill buttons set ?pfu_part=X&pfu_ans=Y in the URL.
+# We catch that here, store into session state, then clear the param.
+_qp = st.query_params
+if "pfu_part" in _qp and "pfu_ans" in _qp:
+    _part = _qp["pfu_part"]
+    _ans  = _qp["pfu_ans"]
+    if "part_followup_a" not in st.session_state:
+        st.session_state.part_followup_a = {}
+    st.session_state.part_followup_a[_part] = _ans
+    st.query_params.clear()
+    st.rerun()
+
 # ── Secrets ────────────────────────────────────────────────
 def _secret(*keys, default=None):
     for k in keys:
@@ -922,13 +935,23 @@ elif stage == 2:
                                 quick = ["More activity", "Don't know", "Just got worse"]
                             else:
                                 quick = ["Yes", "Somewhat", "No"]
-                            st.markdown('<div class="reply-btn-wrap">', unsafe_allow_html=True)
-                            for qi, qr in enumerate(quick):
-                                if st.button(qr, key=f"pfu_{part}_{qi}_{ctr}",
-                                             use_container_width=True):
-                                    st.session_state.part_followup_a[part] = qr
-                                    st.rerun()
-                            st.markdown('</div>', unsafe_allow_html=True)
+                            # Render as styled HTML pill links — sets query params on click
+                            import urllib.parse
+                            pills_html = '<div style="display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 10px;">'
+                            for qr in quick:
+                                params = urllib.parse.urlencode({"pfu_part": part, "pfu_ans": qr})
+                                pills_html += (
+                                    f'<a href="?{params}" target="_self" style="'
+                                    f'display:inline-block;padding:5px 14px;'
+                                    f'background:rgba(42,157,143,0.12);'
+                                    f'color:#2a9d8f;border:1.5px solid rgba(42,157,143,0.35);'
+                                    f'border-radius:20px;font-size:12px;font-weight:700;'
+                                    f'font-family:Nunito,sans-serif;text-decoration:none;'
+                                    f'cursor:pointer;transition:background 0.15s;">'
+                                    f'{qr}</a>'
+                                )
+                            pills_html += '</div>'
+                            st.markdown(pills_html, unsafe_allow_html=True)
 
             # Other location — button-only until clicked
             if st.button("➕ Other location", key="bp_other", use_container_width=True):
