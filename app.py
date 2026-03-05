@@ -583,8 +583,16 @@ elif stage == 2:
     st.markdown('<div class="panel">', unsafe_allow_html=True)
     pain_sub = st.session_state.pain_sub
 
+    # Always show the conversation so far for this stage
+    render_inline(2)
+
     if pain_sub == "map":
-        panel_q("Where do you feel pain? Tap to select.")
+        # Log the opening question once
+        stage2_msgs = [m for m in st.session_state.messages if m.get("stage") == 2]
+        if not stage2_msgs:
+            add_doctor("Where do you feel pain? Tap to select.", stage=2)
+            st.rerun()
+
         past = st.session_state.get("past_checkins", [])
         prev_locs = set(past[-1].get("pain_locations", [])) if past else set()
 
@@ -612,13 +620,15 @@ elif stage == 2:
             if st.button("Confirm ➜", key="pain_confirm", use_container_width=True, type="primary"):
                 if st.session_state.selected_parts:
                     st.session_state.pain_yesno = True
+                    locs = sorted(st.session_state.selected_parts)
+                    add_patient(f"Pain in: {', '.join(locs)}.", stage=2)
+                    add_doctor(f"How bad is your pain overall? When does it happen?", stage=2)
                     st.session_state.pain_sub = "severity"; st.rerun()
                 else:
                     st.warning("Select at least one location, or tap 'No pain'.")
 
     elif pain_sub == "severity":
         locs = sorted(st.session_state.selected_parts)
-        panel_q(f"How bad is your pain overall? ({', '.join(locs)})")
         sev = st.slider("Overall pain severity", 0, 10, 5, key="pain_sev_slider",
                          label_visibility="collapsed")
         st.session_state.pain_severity = sev
@@ -626,6 +636,7 @@ elif stage == 2:
         st.markdown(f'<div style="text-align:center;font-size:24px;font-weight:800;color:{color};">'
                     f'{sev}/10</div>', unsafe_allow_html=True)
 
+        st.markdown('<div class="small-note">When does it happen?</div>', unsafe_allow_html=True)
         for idx, (lbl, val) in enumerate([
             ("Constant", "constant"),
             ("When eating/swallowing", "eating"),
@@ -635,11 +646,10 @@ elif stage == 2:
             if st.button(lbl, key=f"pt_{idx}", use_container_width=True):
                 st.session_state.pain_timing = val
                 summary = ", ".join(locs)
-                on_answer(f"Pain in {summary}, severity {sev}/10, timing: {val}.", 2)
+                on_answer(f"Severity {sev}/10, {val}.", 2)
                 st.session_state.pain_sub = "done"; st.rerun()
 
     elif pain_sub == "done":
-        render_inline(2)
         stage_msgs = [m for m in st.session_state.messages if m.get("stage") == 2]
         last_is_doc = stage_msgs and stage_msgs[-1]["role"] == "doctor"
         if last_is_doc:
@@ -660,10 +670,16 @@ elif stage == 2:
 # ════════════════════════════════════════════════════════════
 elif stage == 3:
     st.markdown('<div class="panel">', unsafe_allow_html=True)
-    panel_q("How has eating been?")
+
+    # Log the doctor question once
+    stage3_msgs = [m for m in st.session_state.messages if m.get("stage") == 3]
+    if not stage3_msgs:
+        add_doctor("How has eating been?", stage=3)
+        st.rerun()
+
+    render_inline(3)
 
     if not is_answered(3):
-        render_inline(3)
         for idx, (lbl, val) in enumerate([
             ("👍 Good / better", "better"),
             ("➡️ About the same", "same"),
@@ -675,7 +691,6 @@ elif stage == 3:
                 on_answer(f"Eating: {lbl.split(' ', 1)[1]}", 3)
                 st.rerun()
     else:
-        render_inline(3)
         stage_msgs = [m for m in st.session_state.messages if m.get("stage") == 3]
         last_is_doc = stage_msgs and stage_msgs[-1]["role"] == "doctor"
         if last_is_doc:
@@ -696,7 +711,6 @@ elif stage == 3:
 # ════════════════════════════════════════════════════════════
 elif stage == 4:
     st.markdown('<div class="panel">', unsafe_allow_html=True)
-    panel_q("Any of these symptoms today?")
 
     SYMPTOM_LIST = [
         "Fatigue / low energy", "Nausea", "Vomiting", "Mouth sores",
@@ -705,11 +719,18 @@ elif stage == 4:
         "Hearing changes / tinnitus", "Coughing / choking", "Anxiety / low mood",
     ]
 
+    # Log the doctor question once
+    stage4_msgs = [m for m in st.session_state.messages if m.get("stage") == 4]
+    if not stage4_msgs:
+        add_doctor("Any of these symptoms today?", stage=4)
+        st.rerun()
+
+    render_inline(4)
+
     past = st.session_state.get("past_checkins", [])
     prev_syms = set(past[-1].get("symptoms", [])) if past else set()
 
     if not is_answered(4):
-        render_inline(4)
         if prev_syms:
             st.markdown('<div class="small-note">✓ = from last visit. Tap to remove if resolved.</div>',
                         unsafe_allow_html=True)
@@ -740,7 +761,6 @@ elif stage == 4:
             sym_txt = "; ".join(st.session_state.symptoms) if st.session_state.symptoms else "none"
             on_answer(f"Symptoms: {sym_txt}", 4); st.rerun()
     else:
-        render_inline(4)
         stage_msgs = [m for m in st.session_state.messages if m.get("stage") == 4]
         last_is_doc = stage_msgs and stage_msgs[-1]["role"] == "doctor"
         if last_is_doc:
