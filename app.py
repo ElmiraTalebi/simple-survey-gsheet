@@ -167,11 +167,6 @@ def transcribe_audio(audio_bytes: bytes) -> str:
 # Derived from actual clinician-patient transcripts (Phase I Patients 1-5).
 # Follow-ups fire ONLY when concerning — "minimize time, only drill when needed."
 
-FEELING_FOLLOWUPS = {
-    "fair": "What's been the hardest part for you lately?",
-    "poor": "What is bothering you the most right now?",
-}
-
 PAIN_DRILL = {
     "severity_high": "Is this pain constant, or mainly when you swallow or eat?",
     "new_location":  "When did you first notice pain in this new area?",
@@ -197,10 +192,6 @@ SYMPTOM_FOLLOWUPS = {
 
 def get_curated_followup(stage_id: int) -> Optional[str]:
     """Return ONE curated follow-up ONLY if the answer is concerning."""
-    if stage_id == 1:
-        feeling = st.session_state.get("feeling_level")
-        return FEELING_FOLLOWUPS.get(feeling)  # None for excellent/good/very good
-
     if stage_id == 2:
         if not st.session_state.pain_yesno:
             return None
@@ -554,8 +545,7 @@ def advance_stage():
     s = st.session_state.stage
     if st.session_state.fast_path:
         st.session_state.stage = 5; return
-    if   s == 0: st.session_state.stage = 1
-    elif s == 1: st.session_state.stage = 2
+    if   s == 0: st.session_state.stage = 2  # stage 1 (feeling) removed
     elif s == 2: st.session_state.stage = 3  # eating is always asked
     elif s == 3: st.session_state.stage = 4
     elif s == 4: st.session_state.stage = 5
@@ -754,48 +744,6 @@ if stage == 0:
         # Fallback: if somehow landed here already answered, move on
         stage_msgs = [m for m in st.session_state.messages if m.get("stage") == 0]
         if stage_msgs and stage_msgs[-1]["role"] == "patient":
-            advance_stage(); st.rerun()
-
-    st.markdown("</div>", unsafe_allow_html=True)
-
-# ════════════════════════════════════════════════════════════
-# STAGE 1 — Overall feeling (follow-up ONLY if fair/poor)
-# ════════════════════════════════════════════════════════════
-elif stage == 1:
-    st.markdown('<div class="panel">', unsafe_allow_html=True)
-    panel_q("How are you feeling overall today?")
-    render_inline(1)
-
-    if not is_answered(1):
-        cols = st.columns(5, gap="small")
-        for idx, (label, val) in enumerate([
-            ("Excellent","excellent"),("Very Good","very good"),
-            ("Good","good"),("Fair","fair"),("Poor","poor"),
-        ]):
-            with cols[idx]:
-                if st.button(label, key=f"feel_{idx}", use_container_width=True):
-                    st.session_state.feeling_level = val
-                    on_answer(f"Feeling {val}.", 1); st.rerun()
-    else:
-        stage_msgs = [m for m in st.session_state.messages if m.get("stage") == 1]
-        last_is_doc = stage_msgs and stage_msgs[-1]["role"] == "doctor"
-        if last_is_doc and followup_fired(1):
-            # Show quick reply buttons for the curated follow-up
-            feeling = st.session_state.feeling_level
-            if feeling == "fair":
-                replies = ["Pain is worse", "Very tired", "Hard to eat"]
-            elif feeling == "poor":
-                replies = ["Pain is bad", "Can't eat", "Very weak"]
-            else:
-                replies = []
-            if replies:
-                rc = st.columns(len(replies), gap="small")
-                for i, r in enumerate(replies):
-                    with rc[i]:
-                        if st.button(r, key=f"f1_r_{i}", use_container_width=True):
-                            on_followup_reply(r, 1); st.rerun()
-            render_followup_input(1)
-        else:
             advance_stage(); st.rerun()
 
     st.markdown("</div>", unsafe_allow_html=True)
