@@ -168,9 +168,8 @@ def transcribe_audio(audio_bytes: bytes) -> str:
 # Follow-ups fire ONLY when concerning — "minimize time, only drill when needed."
 
 PAIN_DRILL = {
-    "severity_high": "Is this pain constant, or mainly when you swallow or eat?",
-    "new_location":  "When did you first notice pain in this new area?",
-    "worsening":     "When did it start getting worse?",
+    "new_location":  "When did you first notice pain in {loc}?",
+    "worsening":     "When did {loc} pain start getting worse?",
 }
 
 EATING_DRILL = {
@@ -191,22 +190,48 @@ SYMPTOM_FOLLOWUPS = {
 }
 
 def get_curated_followup(stage_id: int) -> Optional[str]:
-    """Return ONE curated follow-up ONLY if the answer is concerning."""
+    """Return ONE specific, data-driven follow-up ONLY if the answer is concerning."""
     if stage_id == 2:
         if not st.session_state.pain_yesno:
             return None
-        # Check for high severity or new locations
-        sevs = st.session_state.get("pain_severities", {})
-        past = st.session_state.get("past_checkins", [])
+        sevs     = st.session_state.get("pain_severities", {})
+        timing   = st.session_state.get("pain_timing")
+        past     = st.session_state.get("past_checkins", [])
         prev_locs = set(past[-1].get("pain_locations", [])) if past else set()
+        prev_sevs = dict(past[-1].get("pain_severities", {})) if past else {}
         curr_locs = st.session_state.get("selected_parts", set())
-        new_locs = curr_locs - prev_locs
+        new_locs  = curr_locs - prev_locs
 
-        high = [l for l, s in sevs.items() if s >= 5]
-        if high:
-            return PAIN_DRILL["severity_high"]
+        # Find the single highest-severity location
+        if sevs:
+            worst_loc = max(sevs, key=lambda l: sevs[l])
+            worst_sev = sevs[worst_loc]
+        else:
+            worst_loc, worst_sev = None, 0
+
+        # New location: ask when it started
         if new_locs:
-            return PAIN_DRILL["new_location"]
+            loc = next(iter(new_locs))
+            return f"When did you first notice the pain in your {loc.lower()}?"
+
+        # High severity (≥6): ask impact specific to location and timing
+        if worst_sev >= 6 and worst_loc:
+            loc = worst_loc.lower()
+            # If timing already collected, ask about functional impact instead
+            if timing in ("eating", None):
+                return f"Is the {loc} pain making it hard to swallow or eat?"
+            elif timing == "movement":
+                return f"Is the {loc} pain limiting your movement or daily activities?"
+            else:
+                return f"On a scale of 0–10, how would you rate the {loc} pain right now?"
+
+        # Worsening vs last visit
+        if prev_sevs and worst_loc:
+            prev_sev = prev_sevs.get(worst_loc, 0)
+            if worst_sev > prev_sev + 1:
+                loc = worst_loc.lower()
+                return f"Your {loc} pain went from {prev_sev} to {worst_sev}/10 — what do you think made it worse?"
+
         return None
 
     if stage_id == 3:  # eating
@@ -870,8 +895,18 @@ elif stage == 2:
         stage_msgs = [m for m in st.session_state.messages if m.get("stage") == 2]
         last_is_doc = stage_msgs and stage_msgs[-1]["role"] == "doctor"
         if last_is_doc and followup_fired(2):
-            # Curated follow-up for high severity / new pain
-            replies = ["Yes, a lot", "Somewhat", "Not really"]
+            # Context-specific quick reply buttons based on what was asked
+            last_q = stage_msgs[-1]["content"].lower()
+            if "swallow" in last_q or "eat" in last_q:
+                replies = ["Yes, makes it hard", "Somewhat", "No, not really"]
+            elif "movement" in last_q or "activit" in last_q:
+                replies = ["Yes, limits me", "A little", "Not really"]
+            elif "worse" in last_q or "what made" in last_q:
+                replies = ["More activity", "Don't know", "It just got worse"]
+            elif "first notice" in last_q or "when did" in last_q:
+                replies = ["A few days ago", "About a week ago", "Over a week ago"]
+            else:
+                replies = ["Yes, a lot", "Somewhat", "Not really"]
             rc = st.columns(len(replies), gap="small")
             for i, r in enumerate(replies):
                 with rc[i]:
@@ -879,7 +914,10 @@ elif stage == 2:
                         on_followup_reply(r, 2); st.rerun()
             render_followup_input(2)
         else:
-            advance_stage(); st.rerun()
+            # Show Next button — never auto-advance so patient isn't confused
+            st.markdown("<hr class='divider'>", unsafe_allow_html=True)
+            if st.button("Next →", key="pain_next", use_container_width=True, type="primary"):
+                advance_stage(); st.rerun()
 
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -951,7 +989,9 @@ elif stage == 3:
                         on_followup_reply(r, 3); st.rerun()
             render_followup_input(3)
         else:
-            advance_stage(); st.rerun()
+            st.markdown("<hr class='divider'>", unsafe_allow_html=True)
+            if st.button("Next →", key="eat_next", use_container_width=True, type="primary"):
+                advance_stage(); st.rerun()
 
     st.markdown("</div>", unsafe_allow_html=True)
 
