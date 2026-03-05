@@ -513,13 +513,41 @@ elif st.session_state.stage == 1:
 
     st.markdown('<div class="section-title">How are you feeling today?</div>', unsafe_allow_html=True)
 
-    last_feeling = st.session_state.last_summary.get("feeling_level", 7) if st.session_state.last_summary else 7
-    feeling = st.number_input("Feeling (0-10)", 0, 10, value=int(last_feeling) if last_feeling is not None else 7)
+    last_feeling = st.session_state.last_summary.get("feeling_level", None) if st.session_state.last_summary else None
+    default_feeling = int(last_feeling) if last_feeling is not None else 7
+    feeling = st.number_input("Feeling (0-10)", 0, 10, value=default_feeling)
 
-    if st.button("Next"):
-        st.session_state.feeling_level = feeling
-        st.session_state.stage = 2
-        st.rerun()
+    feeling_improved = (last_feeling is not None and feeling > int(last_feeling))
+
+    if feeling_improved:
+        st.markdown(
+            f'<div class="doctor-box">That\'s great to hear! Last time you were at {int(last_feeling)}/10 '
+            f'and now you\'re at {feeling}/10. Would you like to finish here, or continue to log any symptoms?</div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown("")
+        col_a, col_b = st.columns(2)
+        with col_a:
+            if st.button("I'm feeling better — submit"):
+                st.session_state.feeling_level = feeling
+                payload = {
+                    "name": st.session_state.name,
+                    "feeling_level": feeling,
+                    "note": "Patient reported feeling better than last visit. No further symptoms logged.",
+                }
+                save_to_sheet(payload)
+                st.session_state.stage = 5
+                st.rerun()
+        with col_b:
+            if st.button("Continue to log symptoms"):
+                st.session_state.feeling_level = feeling
+                st.session_state.stage = 2
+                st.rerun()
+    else:
+        if st.button("Next"):
+            st.session_state.feeling_level = feeling
+            st.session_state.stage = 2
+            st.rerun()
 
     st.markdown('</div>', unsafe_allow_html=True)
 
