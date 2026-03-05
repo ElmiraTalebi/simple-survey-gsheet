@@ -7,21 +7,11 @@ from google.oauth2.service_account import Credentials
 st.set_page_config(page_title="Cancer Symptom Check-In", page_icon="🩺", layout="centered")
 
 # ============================================================
-# Helpers
-# ============================================================
-
-def _secret(*keys, default=None):
-    for k in keys:
-        if k in st.secrets:
-            return st.secrets[k]
-    return default
-
-
-# ============================================================
 # Google Sheets
 # ============================================================
 
 sheet = None
+
 
 def init_sheets():
     global sheet
@@ -30,10 +20,9 @@ def init_sheets():
         return
 
     try:
-
         creds = Credentials.from_service_account_info(
             st.secrets["gcp_service_account"],
-            scopes=["https://www.googleapis.com/auth/spreadsheets"]
+            scopes=["https://www.googleapis.com/auth/spreadsheets"],
         )
 
         gc = gspread.authorize(creds)
@@ -76,28 +65,29 @@ def save_to_sheet(data):
     if sheet is None:
         return
 
-    sheet.append_row([
-        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        data["name"],
-        json.dumps(data)
-    ])
+    sheet.append_row(
+        [
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            data["name"],
+            json.dumps(data),
+        ]
+    )
 
 
 # ============================================================
-# Body map image
+# Body map SVG
 # ============================================================
 
 def body_svg():
-
     return """
-    <svg width="250" height="380" viewBox="0 0 320 520" xmlns="http://www.w3.org/2000/svg">
-        <circle cx="160" cy="70" r="38" fill="#e0e0e0"/>
-        <rect x="110" y="120" width="100" height="70" rx="24" fill="#e0e0e0"/>
-        <rect x="115" y="195" width="90" height="70" rx="22" fill="#e0e0e0"/>
-        <rect x="120" y="260" width="30" height="120" fill="#e0e0e0"/>
-        <rect x="170" y="260" width="30" height="120" fill="#e0e0e0"/>
-    </svg>
-    """
+<svg width="250" height="380" viewBox="0 0 320 520" xmlns="http://www.w3.org/2000/svg">
+<circle cx="160" cy="70" r="38" fill="#e0e0e0"/>
+<rect x="110" y="120" width="100" height="70" rx="24" fill="#e0e0e0"/>
+<rect x="115" y="195" width="90" height="70" rx="22" fill="#e0e0e0"/>
+<rect x="120" y="260" width="30" height="120" fill="#e0e0e0"/>
+<rect x="170" y="260" width="30" height="120" fill="#e0e0e0"/>
+</svg>
+"""
 
 
 # ============================================================
@@ -112,8 +102,8 @@ defaults = dict(
     pain_locations=set(),
     pain_severity={},
     last_severity={},
+    symptoms=set(),
     show_other=False,
-    submitted=False
 )
 
 for k, v in defaults.items():
@@ -129,7 +119,7 @@ st.title("🩺 Cancer Symptom Check-In")
 
 
 # ============================================================
-# Stage -1 : name
+# Stage -1 : Name
 # ============================================================
 
 if st.session_state.stage == -1:
@@ -159,7 +149,7 @@ stage = st.session_state.stage
 
 
 # ============================================================
-# Stage 0 fast exit
+# Stage 0 Fast exit
 # ============================================================
 
 if stage == 0:
@@ -170,39 +160,35 @@ if stage == 0:
 
     with col1:
         if st.button("Same as yesterday"):
-
             st.success("Check-in complete.")
-            st.session_state.submitted = True
             st.session_state.stage = 5
             st.rerun()
 
     with col2:
         if st.button("Something changed"):
-
             st.session_state.stage = 1
             st.rerun()
 
 
 # ============================================================
-# Stage 1 feeling
+# Stage 1 Feeling
 # ============================================================
 
 elif stage == 1:
 
     feeling = st.radio(
         "How are you feeling today?",
-        ["Excellent", "Very good", "Good", "Fair", "Poor"]
+        ["Excellent", "Very good", "Good", "Fair", "Poor"],
     )
 
     if st.button("Next"):
-
         st.session_state.feeling = feeling
         st.session_state.stage = 2
         st.rerun()
 
 
 # ============================================================
-# Stage 2 pain yes/no
+# Stage 2 Pain Yes/No
 # ============================================================
 
 elif stage == 2:
@@ -222,7 +208,7 @@ elif stage == 2:
 
 
 # ============================================================
-# Stage 3 body map
+# Stage 3 Body Map
 # ============================================================
 
 elif stage == 3:
@@ -239,7 +225,7 @@ elif stage == 3:
         "Left Arm",
         "Right Arm",
         "Left Leg",
-        "Right Leg"
+        "Right Leg",
     ]
 
     cols = st.columns(2)
@@ -265,16 +251,15 @@ elif stage == 3:
                 st.info("How severe is it (0-10)?")
 
                 last_val = 0
-
                 if isinstance(st.session_state.last_severity, dict):
                     last_val = st.session_state.last_severity.get(part, 0)
 
                 severity = st.number_input(
                     f"{part} severity",
-                    min_value=0,
-                    max_value=10,
+                    0,
+                    10,
                     value=last_val,
-                    key=f"sev_{part}"
+                    key=f"sev_{part}",
                 )
 
                 st.session_state.pain_severity[part] = severity
@@ -285,7 +270,7 @@ elif stage == 3:
 
                     st.text_input(
                         f"Reason for {part}",
-                        key=f"reason_{part}"
+                        key=f"reason_{part}",
                     )
 
     st.markdown("---")
@@ -303,26 +288,68 @@ elif stage == 3:
 
             sev = st.number_input(
                 "Severity (0-10)",
-                min_value=0,
-                max_value=10,
-                key="other_sev"
+                0,
+                10,
+                key="other_sev",
             )
 
             st.session_state.pain_severity[other] = sev
 
     if st.button("Next"):
-
         st.session_state.stage = 4
         st.rerun()
 
 
 # ============================================================
-# Stage 4 symptoms
+# Stage 4 Symptoms (Clickable)
 # ============================================================
 
 elif stage == 4:
 
-    symptoms = st.text_area("Describe any symptoms")
+    st.subheader("Symptoms today")
+
+    symptoms_list = [
+        "Fatigue",
+        "Nausea",
+        "Dry mouth",
+        "Difficulty swallowing",
+        "Hoarseness",
+        "Mouth sores",
+        "Skin irritation",
+        "Loss of taste",
+    ]
+
+    cols = st.columns(2)
+
+    for i, sym in enumerate(symptoms_list):
+
+        with cols[i % 2]:
+
+            selected = sym in st.session_state.symptoms
+            color = "🔴" if selected else "🟢"
+
+            if st.button(f"{color} {sym}", key=f"sym_{sym}"):
+
+                if selected:
+                    st.session_state.symptoms.remove(sym)
+                else:
+                    st.session_state.symptoms.add(sym)
+
+                st.rerun()
+
+    st.markdown("---")
+
+    if st.button("Other symptom"):
+        st.session_state.show_other = True
+
+    if st.session_state.show_other:
+
+        other = st.text_input("Describe other symptom")
+
+        if other:
+            st.session_state.symptoms.add(other)
+
+    st.markdown("---")
 
     if st.button("Submit Check-In"):
 
@@ -332,23 +359,23 @@ elif stage == 4:
             pain=st.session_state.pain,
             pain_locations=list(st.session_state.pain_locations),
             pain_severity=st.session_state.pain_severity,
-            symptoms=symptoms
+            symptoms=list(st.session_state.symptoms),
         )
 
         save_to_sheet(data)
 
-        st.session_state.submitted = True
         st.session_state.stage = 5
         st.rerun()
 
 
 # ============================================================
-# Stage 5 finished
+# Stage 5 Done
 # ============================================================
 
 elif stage == 5:
 
     st.success("Check-in complete.")
+
     st.write("Your care team will review your responses.")
 
     if st.button("Start another check-in"):
