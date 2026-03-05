@@ -852,71 +852,66 @@ elif stage == 2:
                         else:          delta_str = " = same as last visit"
                     st.markdown(
                         f'<div style="text-align:right;font-size:12px;font-weight:700;'
-                        f'color:{color};margin:-8px 0 6px;">{sev_val}/10{delta_str}</div>',
+                        f'color:{color};margin:-8px 0 4px;">{sev_val}/10{delta_str}</div>',
                         unsafe_allow_html=True
                     )
-                    # Compute & cache question — rendered outside columns below
+
+                    # Compute & cache followup question
                     is_new = part not in prev_locs
                     q = _part_followup_question(part, sev_val, is_new)
                     if q and part not in st.session_state.part_followup_q:
                         st.session_state.part_followup_q[part] = q
                     elif not q:
-                        # Severity dropped below threshold — clear stale followup
                         st.session_state.part_followup_q.pop(part, None)
                         st.session_state.part_followup_a.pop(part, None)
+
+                    # ── Chat-bubble followup, inline under this part ──
+                    if part in st.session_state.part_followup_q:
+                        stored_q = st.session_state.part_followup_q[part]
+                        existing_ans = st.session_state.part_followup_a.get(part)
+                        ctr = st.session_state.mic_key_counter
+
+                        if existing_ans:
+                            # Answered: show collapsed Q+A as a small confirmation
+                            st.markdown(
+                                f'<div style="margin:4px 0 8px;padding:6px 10px;'
+                                f'background:var(--accent-lt);border-left:3px solid var(--accent);'
+                                f'border-radius:8px;font-size:12px;color:var(--muted);">'
+                                f'🩺 {stored_q}<br>'
+                                f'<span style="color:var(--accent);font-weight:700;">'
+                                f'✓ {existing_ans}</span></div>',
+                                unsafe_allow_html=True
+                            )
+                        else:
+                            # Unanswered: doctor bubble + reply buttons (no nested columns)
+                            st.markdown(
+                                f'<div class="row-left" style="margin:6px 0 4px;">'
+                                f'<div class="avatar">🩺</div>'
+                                f'<div class="bubble-doc" style="font-size:13px;">'
+                                f'{stored_q}</div></div>',
+                                unsafe_allow_html=True
+                            )
+                            sq = stored_q.lower()
+                            if "first notice" in sq or "when did" in sq:
+                                quick = ["Today", "A few days ago", "~1 week ago", "Over a week"]
+                            elif "swallow" in sq or "eat" in sq:
+                                quick = ["Yes, makes it hard", "Somewhat", "Not really"]
+                            elif "movement" in sq or "activit" in sq:
+                                quick = ["Yes, limits me", "A little", "Not really"]
+                            elif "worse" in sq or "increased" in sq:
+                                quick = ["More activity", "Don't know", "Just got worse"]
+                            else:
+                                quick = ["Yes", "Somewhat", "No"]
+                            # Render as stacked buttons (no nested columns)
+                            for qi, qr in enumerate(quick):
+                                if st.button(qr, key=f"pfu_{part}_{qi}_{ctr}",
+                                             use_container_width=True):
+                                    st.session_state.part_followup_a[part] = qr
+                                    st.rerun()
 
             # Other location — button-only until clicked
             if st.button("➕ Other location", key="bp_other", use_container_width=True):
                 st.session_state.show_other[2] = True; st.rerun()
-
-        # ── Per-part follow-up questions — full width, below the columns ──
-        ctr = st.session_state.mic_key_counter
-        for part in list(st.session_state.part_followup_q.keys()):
-            if part not in st.session_state.selected_parts:
-                continue  # part was deselected
-            stored_q = st.session_state.part_followup_q[part]
-            existing_ans = st.session_state.part_followup_a.get(part)
-
-            if existing_ans:
-                st.markdown(
-                    f'<div style="font-size:13px;color:#8a8075;margin:6px 0;'
-                    f'padding:6px 12px;border-left:3px solid var(--accent-md);'
-                    f'background:var(--accent-lt);border-radius:8px;">'
-                    f'🩺 {stored_q}<br>'
-                    f'<span style="color:var(--accent);font-weight:700;">✓ {existing_ans}</span></div>',
-                    unsafe_allow_html=True
-                )
-            else:
-                st.markdown(
-                    f'<div class="inline-followup" style="margin:8px 0;">🩺 {stored_q}</div>',
-                    unsafe_allow_html=True
-                )
-                sq = stored_q.lower()
-                if "first notice" in sq or "when did" in sq:
-                    quick = ["Today", "A few days ago", "About a week ago", "Over a week ago"]
-                elif "swallow" in sq or "eat" in sq:
-                    quick = ["Yes, makes it hard", "Somewhat", "No, not really"]
-                elif "movement" in sq or "activit" in sq:
-                    quick = ["Yes, limits me", "A little", "Not really"]
-                elif "worse" in sq or "increased" in sq:
-                    quick = ["More activity", "Don't know", "It just got worse"]
-                else:
-                    quick = ["Yes", "Somewhat", "No"]
-                qc = st.columns(len(quick), gap="small")
-                for qi, qr in enumerate(quick):
-                    with qc[qi]:
-                        if st.button(qr, key=f"pfu_{part}_{qi}_{ctr}", use_container_width=True):
-                            st.session_state.part_followup_a[part] = qr
-                            st.rerun()
-                c_ft, c_fs = st.columns([6, 1], gap="small")
-                with c_ft:
-                    typed_fu = st.text_input("", placeholder="Or type your answer…",
-                                             key=f"pfu_txt_{part}_{ctr}",
-                                             label_visibility="collapsed")
-                with c_fs:
-                    if st.button("↑", key=f"pfu_send_{part}_{ctr}") and typed_fu.strip():
-                        st.session_state.part_followup_a[part] = typed_fu.strip()
-                        st.rerun()
 
         # Other location free-text input (outside columns so it spans full width)
         if st.session_state.show_other.get(2):
