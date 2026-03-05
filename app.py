@@ -189,49 +189,7 @@ SYMPTOM_FOLLOWUPS = {
     "Shortness of breath":      "Does it happen at rest or only with activity?",
 }
 
-def get_location_followup(part: str, sev: int, timing: Optional[str], prev_sev: Optional[int]) -> Optional[str]:
-    """
-    Return ONE specific follow-up question for a pain location, only if sev >= 6.
-    Tailored to the location and what we already know (timing, worsening vs last visit).
-    Returns None if no follow-up is needed.
-    """
-    if sev < 6:
-        return None
-    loc = part.lower()
-
-    # Location-specific high-value questions from clinical transcripts
-    if "throat" in loc or "neck" in loc:
-        if timing == "eating":
-            return f"Is the throat/neck pain making it hard to swallow — are you coughing or choking?"
-        return f"Is the throat/neck pain constant, or mainly when you swallow?"
-
-    if "mouth" in loc or "tongue" in loc:
-        return f"Are the mouth sores preventing you from eating or drinking?"
-
-    if "chest" in loc:
-        if timing == "eating":
-            return f"Does the chest pain feel like pressure, or more like a burning/heartburn?"
-        return f"Does the chest pain get worse when you breathe deeply or swallow?"
-
-    if "abdomen" in loc or "stomach" in loc or "belly" in loc:
-        return f"Is the abdominal pain cramping, constant, or related to eating?"
-
-    if "head" in loc:
-        return f"Is the headache constant, or does it come and go?"
-
-    if "arm" in loc or "leg" in loc or "hand" in loc or "foot" in loc or "feet" in loc:
-        if sev >= 8:
-            return f"Is the {loc} pain making it hard to move around or do daily activities?"
-        return f"Any numbness or tingling along with the {loc} pain?"
-
-    # Worsening vs last visit — always worth asking regardless of location
-    if prev_sev is not None and sev > prev_sev + 1:
-        return f"Your {loc} pain went from {prev_sev} to {sev}/10 — did anything specific make it worse?"
-
-    # Generic fallback for high severity with no specific match
-    return f"Is the {loc} pain constant, or does it come and go?"
-
-
+def get_curated_followup(stage_id: int) -> Optional[str]:
     """Return ONE specific, data-driven follow-up ONLY if the answer is concerning."""
     if stage_id == 2:
         if not st.session_state.pain_yesno:
@@ -580,7 +538,6 @@ defaults = {
     "last_audio_hash": None, "mic_key_counter": 0,
     "stage_answered": {}, "followup_fired": {},
     "pain_severities": {}, "pain_timing": None,
-    "pain_loc_followups": {},  # {location: replied_text} — inline follow-up per location
     "eating_status": None, "food_type": None,
     "shakes_per_day": None, "hydration": None,
     "show_other": {},  # {stage_id: bool}
@@ -852,13 +809,13 @@ elif stage == 2:
         prev_sevs = dict(past[-1].get("pain_severities", {})) if past else {}
 
         if prev_locs:
-            st.markdown('<div class="small-note">🟠 Orange = last visit. Tap a location, then rate your pain 0–10.</div>',
+            st.markdown('<div class="small-note">🟠 Orange = last visit. Tap a location to select it — a severity slider will appear inline.</div>',
                         unsafe_allow_html=True)
         else:
-            st.markdown('<div class="small-note">Tap a location, then rate your pain 0–10.</div>',
+            st.markdown('<div class="small-note">Tap a location to select it — a severity slider will appear inline.</div>',
                         unsafe_allow_html=True)
 
-        col_svg, col_btns = st.columns([1, 1.6], gap="medium")
+        col_svg, col_btns = st.columns([1, 1.4], gap="medium")
         with col_svg:
             st.markdown(body_svg(st.session_state.selected_parts, prev_locs),
                         unsafe_allow_html=True)
@@ -866,129 +823,45 @@ elif stage == 2:
         with col_btns:
             BODY_PARTS = ["Head", "Throat/Neck", "Chest", "Abdomen",
                           "Left Arm", "Right Arm", "Left Leg", "Right Leg"]
-
             for part in BODY_PARTS:
                 selected = part in st.session_state.selected_parts
                 lbl = f"✓ {part}" if selected else part
                 if st.button(lbl, key=f"bp_{part}", use_container_width=True):
                     toggle_body_part(part)
-                    if part not in st.session_state.selected_parts:
-                        # Deselected: clean up severity and follow-up
-                        st.session_state.pain_severities.pop(part, None)
-                        st.session_state.pain_loc_followups.pop(part, None)
+                    # If deselecting, remove its severity too
+                    if part in st.session_state.pain_severities and part not in st.session_state.selected_parts:
+                        del st.session_state.pain_severities[part]
                     st.rerun()
 
+                # Inline severity slider — appears immediately under this button
+                # when the location is selected
                 if part in st.session_state.selected_parts:
-                    cur_sev = st.session_state.pain_severities.get(part)
-                    prev_sev = prev_sevs.get(part)
-
-                    # ── Severity: 11 tap buttons 0–10 ──────────────────
+                    default_sev = prev_sevs.get(part, 3)
+                    current_sev = st.session_state.pain_severities.get(part, default_sev)
+                    sev_val = st.slider(
+                        f"_{part}_sev",          # label hidden via CSS
+                        0, 10, current_sev,
+                        key=f"sev_{part}",
+                        label_visibility="collapsed",
+                        help=f"{part} pain: 0 = none, 10 = worst"
+                    )
+                    st.session_state.pain_severities[part] = sev_val
+                    # Show the numeric value as a small badge
+                    color = "#e63946" if sev_val >= 7 else "#f4a261" if sev_val >= 4 else "#2a9d8f"
                     st.markdown(
-                        '<div style="font-size:11px;color:var(--muted);'
-                        'font-weight:600;margin:4px 0 3px;letter-spacing:.04em;">'
-                        'PAIN LEVEL (0 = none · 10 = worst)</div>',
+                        f'<div style="text-align:right;font-size:12px;font-weight:700;'
+                        f'color:{color};margin:-8px 0 6px;">'
+                        f'{sev_val}/10</div>',
                         unsafe_allow_html=True
                     )
-                    sev_cols = st.columns(11, gap="small")
-                    for n in range(11):
-                        with sev_cols[n]:
-                            is_selected = (cur_sev == n)
-                            # Color coding: green 0-3, orange 4-6, red 7-10
-                            if is_selected:
-                                bg = "#e63946" if n >= 7 else "#f4a261" if n >= 4 else "#2a9d8f"
-                                style = (f"background:{bg}!important;color:#fff!important;"
-                                         f"border-color:{bg}!important;font-weight:800!important;")
-                            else:
-                                style = ""
-                            if st.button(
-                                str(n),
-                                key=f"sev_{part}_{n}",
-                                use_container_width=True,
-                                help=f"Rate {part} pain as {n}/10"
-                            ):
-                                st.session_state.pain_severities[part] = n
-                                # Clear prior follow-up reply if severity changed
-                                st.session_state.pain_loc_followups.pop(part, None)
-                                st.rerun()
-
-                    # Show selected severity badge
-                    if cur_sev is not None:
-                        badge_color = "#e63946" if cur_sev >= 7 else "#f4a261" if cur_sev >= 4 else "#2a9d8f"
-                        prev_str = f" &nbsp;<span style='opacity:.5;font-size:11px;'>was {prev_sev}/10 last visit</span>" if prev_sev is not None else ""
-                        st.markdown(
-                            f'<div style="text-align:right;font-size:13px;font-weight:800;'
-                            f'color:{badge_color};margin:2px 0 6px;">'
-                            f'{cur_sev}/10{prev_str}</div>',
-                            unsafe_allow_html=True
-                        )
-
-                        # ── Inline follow-up question if severity ≥ 6 ──
-                        timing = st.session_state.get("pain_timing")
-                        fu_q = get_location_followup(part, cur_sev, timing, prev_sev)
-                        already_replied = part in st.session_state.pain_loc_followups
-
-                        if fu_q and not already_replied:
-                            st.markdown(
-                                f'<div style="background:var(--accent-lt);border-left:3px solid var(--accent);'
-                                f'border-radius:0 8px 8px 0;padding:8px 12px;margin:4px 0 6px;'
-                                f'font-size:13px;line-height:1.5;color:var(--text);">'
-                                f'🩺 {fu_q}</div>',
-                                unsafe_allow_html=True
-                            )
-                            # Quick reply buttons
-                            loc_lc = part.lower()
-                            if "throat" in loc_lc or "neck" in loc_lc:
-                                quick = ["Yes, hard to swallow", "Only sometimes", "No"]
-                            elif "chest" in loc_lc:
-                                quick = ["Pressure/tightness", "Burning/heartburn", "Sharp pain"]
-                            elif "abdomen" in loc_lc:
-                                quick = ["Cramping", "Constant", "After eating"]
-                            elif "head" in loc_lc:
-                                quick = ["Constant", "Comes and goes", "Worse in morning"]
-                            elif "arm" in loc_lc or "leg" in loc_lc:
-                                quick = ["Yes, limits movement", "Some tingling too", "Pain only"]
-                            else:
-                                quick = ["Constant", "Comes and goes", "Only with movement"]
-
-                            qr_cols = st.columns(len(quick), gap="small")
-                            for qi, qr in enumerate(quick):
-                                with qr_cols[qi]:
-                                    if st.button(qr, key=f"loc_fu_{part}_{qi}",
-                                                 use_container_width=True):
-                                        st.session_state.pain_loc_followups[part] = qr
-                                        st.rerun()
-
-                            # Free-text reply option
-                            ctr = st.session_state.mic_key_counter
-                            fu_typed = st.text_input(
-                                "", placeholder="Or type your answer…",
-                                key=f"loc_fu_txt_{part}_{ctr}",
-                                label_visibility="collapsed"
-                            )
-                            if st.button("↑", key=f"loc_fu_send_{part}_{ctr}") and fu_typed.strip():
-                                st.session_state.pain_loc_followups[part] = fu_typed.strip()
-                                st.rerun()
-
-                        elif fu_q and already_replied:
-                            # Show the replied answer as a compact badge
-                            replied = st.session_state.pain_loc_followups[part]
-                            st.markdown(
-                                f'<div style="font-size:12px;color:var(--muted);'
-                                f'margin:2px 0 8px;text-align:right;">'
-                                f'🩺 {fu_q}<br>'
-                                f'<span style="color:var(--text);font-weight:600;">→ {replied}</span></div>',
-                                unsafe_allow_html=True
-                            )
-
-                    st.markdown("<div style='margin-bottom:6px;'></div>", unsafe_allow_html=True)
 
             # Other location option
             if st.button("➕ Other location", key="bp_other", use_container_width=True):
                 st.session_state.show_other[2] = True; st.rerun()
 
-        # Other location free-text input
+        # Other location free-text input (outside columns so it spans full width)
         if st.session_state.show_other.get(2):
-            c_m, _ = st.columns([7, 2.5], gap="small")
+            c_m, c_mic = st.columns([7, 2.5], gap="small")
             with c_m:
                 other_loc = st.text_input("", placeholder="Describe other location…",
                                           key="bp_other_txt", label_visibility="collapsed")
@@ -998,12 +871,7 @@ elif stage == 2:
                         st.session_state.show_other[2] = False
                         st.rerun()
 
-        if st.session_state.selected_parts:
-            st.markdown("<hr class='divider'>", unsafe_allow_html=True)
         if st.button("Confirm ➜", key="pain_confirm", use_container_width=True, type="primary"):
-            # Bundle any inline follow-up replies into the patient message log
-            for loc, reply in st.session_state.pain_loc_followups.items():
-                add_patient(f"{loc} pain follow-up: {reply}", stage=2)
             st.session_state.pain_sub = "timing"; st.rerun()
 
     elif pain_sub == "timing":
