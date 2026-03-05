@@ -256,16 +256,8 @@ def region_color_state(region: str) -> str:
             return ORANGE
         return GREEN
 
-    last_val = last.get(region, 0)
-    cur = st.session_state.pain_severity.get(region, last_val)
-
-    if region not in last:
-        return RED
-
-    if cur >= last_val + 2:
-        return RED
-
-    return ORANGE
+    # Once selected, always RED — persistent or new pain is clinically significant
+    return RED
 
 
 def current_svg_colors():
@@ -664,12 +656,41 @@ elif st.session_state.stage == 3:
 
                 st.session_state.pain_severity[r] = sev
 
-                if sev > 6 or sev >= last_val + 2:
+                # Ask GPT-generated follow-up only when severity is high or significantly worsened
+                needs_followup = sev > 6 or sev >= last_val + 2
+                if needs_followup:
+                    q_key = f"gpt_question_{r}"
+                    if q_key not in st.session_state:
+                        st.session_state[q_key] = None
 
-                    reason = st.text_input("Reason", key=f"reason_{r}")
+                    # Generate question once per region if not yet done
+                    if st.session_state[q_key] is None and openai_client is not None:
+                        try:
+                            context = (
+                                f"A cancer patient has reported pain in their {r} "
+                                f"with severity {sev}/10."
+                            )
+                            if last_val > 0:
+                                context += f" Last visit it was {last_val}/10."
+                            prompt = (
+                                f"You are a compassionate oncology nurse. {context} "
+                                f"Ask ONE short, empathetic, open-ended question to understand "
+                                f"this pain better. Return ONLY the question string, no extra text."
+                            )
+                            resp = openai_client.chat.completions.create(
+                                model="gpt-4.1-mini",
+                                messages=[{"role": "user", "content": prompt}],
+                                max_tokens=80,
+                                temperature=0.5,
+                            )
+                            st.session_state[q_key] = resp.choices[0].message.content.strip().strip('"')
+                        except Exception:
+                            st.session_state[q_key] = "Can you describe what makes this pain better or worse?"
 
-                    if reason:
-                        st.session_state.pain_reason[r] = reason
+                    question = st.session_state.get(q_key) or "Can you describe what makes this pain better or worse?"
+                    answer = st.text_input(question, key=f"reason_{r}")
+                    if answer:
+                        st.session_state.pain_reason[r] = answer
 
         # Other / custom pain location
         st.markdown("---")
