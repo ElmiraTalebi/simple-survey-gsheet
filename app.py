@@ -405,27 +405,25 @@ div:has(> iframe[title="streamlitApp"]) {
     color: #fff !important; transform: translateY(-1px) !important;
 }
 
-/* ── Followup reply buttons ── */
-.reply-btn-wrap .stButton > button {
-    background: var(--accent-lt) !important;
+/* ── Followup reply pill buttons ── */
+/* Streamlit renders widgets AFTER markdown divs as siblings in the same container.
+   We use a sentinel div with a data attribute and the adjacent sibling combinator. */
+.stColumn:has(.reply-sentinel) .stButton > button,
+.reply-btn-wrap + div .stButton > button,
+div[data-reply-pills] ~ div .stButton > button {
+    background: rgba(42,157,143,0.12) !important;
     color: var(--accent) !important;
     border: 1.5px solid var(--accent-md) !important;
     border-radius: 20px !important;
-    font-size: 13px !important;
+    font-size: 12px !important;
     font-weight: 700 !important;
-    padding: 0.25rem 0.9rem !important;
-    min-height: 32px !important;
-    height: 32px !important;
+    padding: 0.2rem 0.75rem !important;
+    min-height: 28px !important;
+    height: 28px !important;
     box-shadow: none !important;
-    margin-bottom: 4px !important;
-    transition: background 0.15s, color 0.15s !important;
+    margin-bottom: 3px !important;
 }
-.reply-btn-wrap .stButton > button:hover {
-    background: var(--accent-md) !important;
-    color: var(--accent) !important;
-    border-color: var(--accent) !important;
-    transform: none !important;
-}
+
 
 [data-testid="stAudioInput"] { margin: 0 !important; padding: 0 !important; }
 [data-testid="stAudioInput"] > label { display: none !important; }
@@ -924,7 +922,6 @@ elif stage == 2:
                                 quick = ["More activity", "Don't know", "Just got worse"]
                             else:
                                 quick = ["Yes", "Somewhat", "No"]
-                            # Styled reply buttons via wrapper div
                             st.markdown('<div class="reply-btn-wrap">', unsafe_allow_html=True)
                             for qi, qr in enumerate(quick):
                                 if st.button(qr, key=f"pfu_{part}_{qi}_{ctr}",
