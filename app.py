@@ -861,132 +861,91 @@ elif stage == 2:
             BODY_PARTS = ["Head", "Throat/Neck", "Chest", "Abdomen",
                           "Left Arm", "Right Arm", "Left Leg", "Right Leg"]
 
-            # Build the entire list as one HTML block for true side-by-side layout
-            rows_html = '<div style="display:flex;flex-direction:column;gap:6px;">'
-
             for part in BODY_PARTS:
                 selected  = part in st.session_state.selected_parts
                 from_last = part in prev_locs
-                sev_val   = st.session_state.pain_severities.get(part, prev_sevs.get(part, 5))
 
-                # Compute followup state
-                if selected:
-                    is_new = part not in prev_locs
-                    q = _part_followup_question(part, sev_val, is_new)
-                    if q and part not in st.session_state.part_followup_q:
-                        st.session_state.part_followup_q[part] = q
-                    elif not q:
+                if selected:   lbl = f"🔴 {part} ✓"
+                elif from_last: lbl = f"🟠 {part}"
+                else:           lbl = f"🟢 {part}"
+
+                if st.button(lbl, key=f"bp_{part}", use_container_width=True):
+                    toggle_body_part(part)
+                    if part not in st.session_state.selected_parts:
+                        st.session_state.pain_severities.pop(part, None)
                         st.session_state.part_followup_q.pop(part, None)
                         st.session_state.part_followup_a.pop(part, None)
+                    st.rerun()
+
+                if not selected:
+                    continue
+
+                # Severity slider
+                default_sev = prev_sevs.get(part, 5)
+                current_sev = st.session_state.pain_severities.get(part, default_sev)
+                sev_val = st.slider(f"sev_{part}", 0, 10, current_sev,
+                                    key=f"sev_{part}", label_visibility="collapsed",
+                                    help=f"{part}: 0=none 10=worst")
+                st.session_state.pain_severities[part] = sev_val
+                prev_val = prev_sevs.get(part)
+                color = "#e63946" if sev_val >= 7 else "#f4a261" if sev_val >= 4 else "#2a9d8f"
+                delta_str = ""
+                if prev_val is not None:
+                    d = sev_val - prev_val
+                    delta_str = (f" ▲{d}" if d > 0 else f" ▼{abs(d)}" if d < 0 else " =same")
+
+                # Compute & cache followup
+                is_new = part not in prev_locs
+                q = _part_followup_question(part, sev_val, is_new)
+                if q and part not in st.session_state.part_followup_q:
+                    st.session_state.part_followup_q[part] = q
+                elif not q:
+                    st.session_state.part_followup_q.pop(part, None)
+                    st.session_state.part_followup_a.pop(part, None)
 
                 stored_q   = st.session_state.part_followup_q.get(part)
                 existing_a = st.session_state.part_followup_a.get(part)
 
-                # Toggle link
-                tog_params = urllib.parse.urlencode({"bp_toggle": part})
-
-                # Button label & colors
-                if selected:
-                    btn_bg = "#e63946"; btn_col = "#fff"; btn_br = "1.5px solid #b52535"
-                    dot = "🔴"; check = " ✓"
-                elif from_last:
-                    btn_bg = "#fff8f0"; btn_col = "#c47a3a"; btn_br = "1.5px solid #f4a261"
-                    dot = "🟠"; check = ""
+                if stored_q and not existing_a:
+                    quick = _quick_replies(stored_q)
+                    pills = "".join(
+                        f'<a href="?{urllib.parse.urlencode({"pfu_part": part, "pfu_ans": qr})}" '
+                        f'target="_self" style="display:inline-block;padding:3px 9px;'
+                        f'margin:2px 3px 0 0;background:#fff4ec;color:#b85c00;'
+                        f'border:1.5px solid #f4a261;border-radius:10px;font-size:11px;'
+                        f'font-weight:700;font-family:Nunito,sans-serif;text-decoration:none;">'
+                        f'{qr}</a>'
+                        for qr in quick)
+                    # negative margin-top closes the gap Streamlit adds after slider
+                    st.markdown(
+                        f'<div style="margin-top:-10px;margin-bottom:4px;">'
+                        f'<div style="display:flex;justify-content:flex-end;margin-bottom:2px;">'
+                        f'<span style="font-size:11px;font-weight:800;color:{color};">'
+                        f'{sev_val}/10{delta_str}</span></div>'
+                        f'<div style="padding:6px 10px 8px;background:#fff8f2;'
+                        f'border:1.5px solid #f4a261;border-radius:10px;">'
+                        f'<div style="font-size:11px;color:#9a4e10;font-weight:600;'
+                        f'margin-bottom:4px;">🩺 {stored_q}</div>'
+                        f'<div>{pills}</div></div></div>',
+                        unsafe_allow_html=True)
+                elif stored_q and existing_a:
+                    st.markdown(
+                        f'<div style="margin-top:-10px;margin-bottom:4px;">'
+                        f'<div style="display:flex;justify-content:flex-end;margin-bottom:2px;">'
+                        f'<span style="font-size:11px;font-weight:800;color:{color};">'
+                        f'{sev_val}/10{delta_str}</span></div>'
+                        f'<div style="padding:4px 10px;background:#fff8f2;'
+                        f'border:1px solid rgba(244,162,97,0.35);border-radius:8px;'
+                        f'font-size:11px;color:#b85c00;font-weight:700;">'
+                        f'🩺 {stored_q} · ✓ {existing_a}</div></div>',
+                        unsafe_allow_html=True)
                 else:
-                    btn_bg = "#f0faf5"; btn_col = "#3d7a5a"; btn_br = "1.5px solid #a8d5b5"
-                    dot = "🟢"; check = ""
+                    st.markdown(
+                        f'<div style="margin-top:-10px;margin-bottom:4px;'
+                        f'text-align:right;font-size:11px;font-weight:800;color:{color};">'
+                        f'{sev_val}/10{delta_str}</div>',
+                        unsafe_allow_html=True)
 
-                # Left cell: location button
-                left = (
-                    f'<a href="?{tog_params}" target="_self" style="'
-                    f'display:flex;align-items:center;justify-content:center;gap:7px;'
-                    f'padding:8px 10px;background:{btn_bg};color:{btn_col};'
-                    f'border:{btn_br};border-radius:12px;font-size:13px;font-weight:700;'
-                    f'font-family:Nunito,sans-serif;text-decoration:none;'
-                    f'white-space:nowrap;min-width:110px;cursor:pointer;">'
-                    f'{dot} {part}{check}</a>'
-                )
-
-                # Right cell: slider badge + followup (only if selected)
-                right = ""
-                if selected:
-                    prev_val = prev_sevs.get(part)
-                    color = "#e63946" if sev_val >= 7 else "#f4a261" if sev_val >= 4 else "#2a9d8f"
-                    delta = ""
-                    if prev_val is not None:
-                        d = sev_val - prev_val
-                        delta = f" ▲{d}" if d > 0 else (f" ▼{abs(d)}" if d < 0 else " =")
-
-                    sev_badge = (
-                        f'<span style="font-size:11px;font-weight:800;color:{color};'
-                        f'background:rgba(0,0,0,0.04);border-radius:8px;padding:2px 7px;">'
-                        f'{sev_val}/10{delta}</span>'
-                    )
-
-                    if stored_q and not existing_a:
-                        # Unanswered followup — amber/warm style distinct from teal buttons
-                        quick = _quick_replies(stored_q)
-                        pills = ""
-                        for qr in quick:
-                            p = urllib.parse.urlencode({"pfu_part": part, "pfu_ans": qr})
-                            pills += (
-                                f'<a href="?{p}" target="_self" style="'
-                                f'display:inline-block;padding:3px 9px;margin:2px 3px 0 0;'
-                                f'background:#fff4ec;color:#c06020;'
-                                f'border:1.5px solid #f4a261;border-radius:12px;'
-                                f'font-size:11px;font-weight:700;font-family:Nunito,sans-serif;'
-                                f'text-decoration:none;white-space:nowrap;">{qr}</a>'
-                            )
-                        right = (
-                            f'<div style="display:flex;flex-direction:column;gap:2px;'
-                            f'padding:5px 9px 7px;background:#fff8f2;'
-                            f'border:1.5px solid #f4a261;border-radius:10px;">'
-                            f'{sev_badge}'
-                            f'<div style="font-size:11px;color:#9a4e10;margin-top:2px;'
-                            f'font-weight:600;">🩺 {stored_q}</div>'
-                            f'<div style="display:flex;flex-wrap:wrap;margin-top:1px;">{pills}</div>'
-                            f'</div>'
-                        )
-                    elif stored_q and existing_a:
-                        # Answered: compact amber badge, single line
-                        right = (
-                            f'<div style="display:flex;flex-direction:column;gap:2px;'
-                            f'padding:5px 9px;background:#fff8f2;'
-                            f'border:1.5px solid rgba(244,162,97,0.4);border-radius:10px;">'
-                            f'{sev_badge}'
-                            f'<div style="font-size:10px;color:#c06020;font-weight:700;">'
-                            f'✓ {existing_a}</div></div>'
-                        )
-                    else:
-                        # No followup needed — just show severity
-                        right = (
-                            f'<div style="display:flex;align-items:center;'
-                            f'padding:6px 10px;">{sev_badge}</div>'
-                        )
-
-                rows_html += (
-                    f'<div style="display:flex;align-items:stretch;gap:6px;">'
-                    f'<div style="flex:0 0 auto;">{left}</div>'
-                    f'<div style="flex:1 1 auto;">{right}</div>'
-                    f'</div>'
-                )
-
-            rows_html += '</div>'
-            st.markdown(rows_html, unsafe_allow_html=True)
-
-            # Handle slider separately — render below the HTML list
-            for part in list(st.session_state.selected_parts):
-                default_sev = prev_sevs.get(part, 5)
-                current_sev = st.session_state.pain_severities.get(part, default_sev)
-                sev_val = st.slider(
-                    f"Severity — {part}", 0, 10, current_sev,
-                    key=f"sev_{part}",
-                    label_visibility="collapsed",
-                    help=f"{part}: 0=none 10=worst"
-                )
-                st.session_state.pain_severities[part] = sev_val
-
-            st.markdown('<div style="margin-top:4px;"></div>', unsafe_allow_html=True)
             if st.button("➕ Other location", key="bp_other", use_container_width=True):
                 st.session_state.show_other[2] = True; st.rerun()
 
