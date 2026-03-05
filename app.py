@@ -818,6 +818,8 @@ elif stage == 2:
                 'then rate severity with the slider.</div>',
                 unsafe_allow_html=True)
 
+        import urllib.parse
+
         col_svg, col_btns = st.columns([1, 1.4], gap="medium")
         with col_svg:
             st.markdown(body_svg(st.session_state.selected_parts, prev_locs),
@@ -825,25 +827,29 @@ elif stage == 2:
 
         # Ensure per-part followup state dicts exist
         if "part_followup_q" not in st.session_state:
-            st.session_state.part_followup_q = {}   # {part: question_str}
+            st.session_state.part_followup_q = {}
         if "part_followup_a" not in st.session_state:
-            st.session_state.part_followup_a = {}   # {part: answer_str}
+            st.session_state.part_followup_a = {}
 
         def _part_followup_question(part: str, sev: int, is_new: bool) -> Optional[str]:
-            """Return a targeted follow-up question for this part, or None if not needed."""
             if is_new:
-                return f"When did you first notice the pain in your {part.lower()}?"
+                return f"New pain here — when did it start?"
             if sev >= 6:
-                timing = st.session_state.get("pain_timing")
-                loc = part.lower()
-                if timing == "movement":
-                    return f"Is the {loc} pain limiting your movement or daily activities?"
-                else:
-                    return f"Is the {loc} pain making it hard to swallow or eat?"
+                return f"Is it hard to swallow or eat because of this?"
             prev_sev = prev_sevs.get(part, 0)
             if sev > prev_sev + 1:
-                return f"Your {part.lower()} pain increased from {prev_sev} to {sev}/10 — what do you think made it worse?"
+                return f"Up from {prev_sev}→{sev}/10. Any idea why it got worse?"
             return None
+
+        def _quick_replies(q: str):
+            sq = q.lower()
+            if "when did" in sq or "start" in sq:
+                return ["Today", "Few days ago", "~1 week", "Over a week"]
+            elif "swallow" in sq or "eat" in sq:
+                return ["Yes, makes it hard", "A little", "Not really"]
+            elif "worse" in sq or "why" in sq:
+                return ["More activity", "Don't know", "Just got worse"]
+            return ["Yes", "Somewhat", "No"]
 
         with col_btns:
             BODY_PARTS = ["Head", "Throat/Neck", "Chest", "Abdomen",
@@ -851,12 +857,11 @@ elif stage == 2:
             for part in BODY_PARTS:
                 selected = part in st.session_state.selected_parts
                 from_last = part in prev_locs
-                if selected:
-                    lbl = f"🔴 {part} ✓"
-                elif from_last:
-                    lbl = f"🟠 {part}"
-                else:
-                    lbl = f"🟢 {part}"
+
+                # ── Location select button ──
+                if selected:   lbl = f"🔴 {part} ✓"
+                elif from_last: lbl = f"🟠 {part}"
+                else:           lbl = f"🟢 {part}"
                 if st.button(lbl, key=f"bp_{part}", use_container_width=True):
                     toggle_body_part(part)
                     if part not in st.session_state.selected_parts:
@@ -865,93 +870,72 @@ elif stage == 2:
                         st.session_state.part_followup_a.pop(part, None)
                     st.rerun()
 
-                if part in st.session_state.selected_parts:
-                    default_sev = prev_sevs.get(part, 5)
-                    current_sev = st.session_state.pain_severities.get(part, default_sev)
-                    sev_val = st.slider(
-                        f"_{part}_sev", 0, 10, current_sev,
-                        key=f"sev_{part}",
-                        label_visibility="collapsed",
-                        help=f"{part} pain: 0 = none, 10 = worst"
-                    )
-                    st.session_state.pain_severities[part] = sev_val
-                    prev_val = prev_sevs.get(part)
-                    color = "#e63946" if sev_val >= 7 else "#f4a261" if sev_val >= 4 else "#2a9d8f"
-                    delta_str = ""
-                    if prev_val is not None:
-                        diff = sev_val - prev_val
-                        if diff > 0:   delta_str = f" ▲{diff} vs last visit"
-                        elif diff < 0: delta_str = f" ▼{abs(diff)} vs last visit"
-                        else:          delta_str = " = same as last visit"
+                if part not in st.session_state.selected_parts:
+                    continue
+
+                # ── Severity slider ──
+                default_sev = prev_sevs.get(part, 5)
+                current_sev = st.session_state.pain_severities.get(part, default_sev)
+                sev_val = st.slider(f"_{part}_sev", 0, 10, current_sev,
+                                    key=f"sev_{part}", label_visibility="collapsed",
+                                    help=f"{part}: 0=none 10=worst")
+                st.session_state.pain_severities[part] = sev_val
+                prev_val = prev_sevs.get(part)
+                color = "#e63946" if sev_val >= 7 else "#f4a261" if sev_val >= 4 else "#2a9d8f"
+                delta_str = ""
+                if prev_val is not None:
+                    diff = sev_val - prev_val
+                    if diff > 0:    delta_str = f" ▲{diff}"
+                    elif diff < 0:  delta_str = f" ▼{abs(diff)}"
+                    else:           delta_str = " ="
+                st.markdown(
+                    f'<div style="text-align:right;font-size:12px;font-weight:700;'
+                    f'color:{color};margin:-8px 0 4px;">{sev_val}/10{delta_str}</div>',
+                    unsafe_allow_html=True)
+
+                # ── Compute & cache followup ──
+                is_new = part not in prev_locs
+                q = _part_followup_question(part, sev_val, is_new)
+                if q and part not in st.session_state.part_followup_q:
+                    st.session_state.part_followup_q[part] = q
+                elif not q:
+                    st.session_state.part_followup_q.pop(part, None)
+                    st.session_state.part_followup_a.pop(part, None)
+
+                # ── Inline followup as HTML — right side of this row ──
+                if part not in st.session_state.part_followup_q:
+                    continue
+                stored_q = st.session_state.part_followup_q[part]
+                existing_ans = st.session_state.part_followup_a.get(part)
+
+                if existing_ans:
+                    # Compact answered state — single teal line
                     st.markdown(
-                        f'<div style="text-align:right;font-size:12px;font-weight:700;'
-                        f'color:{color};margin:-8px 0 4px;">{sev_val}/10{delta_str}</div>',
-                        unsafe_allow_html=True
-                    )
-
-                    # Compute & cache followup question
-                    is_new = part not in prev_locs
-                    q = _part_followup_question(part, sev_val, is_new)
-                    if q and part not in st.session_state.part_followup_q:
-                        st.session_state.part_followup_q[part] = q
-                    elif not q:
-                        st.session_state.part_followup_q.pop(part, None)
-                        st.session_state.part_followup_a.pop(part, None)
-
-                    # ── Chat-bubble followup, inline under this part ──
-                    if part in st.session_state.part_followup_q:
-                        stored_q = st.session_state.part_followup_q[part]
-                        existing_ans = st.session_state.part_followup_a.get(part)
-                        ctr = st.session_state.mic_key_counter
-
-                        if existing_ans:
-                            # Answered: show collapsed Q+A as a small confirmation
-                            st.markdown(
-                                f'<div style="margin:4px 0 8px;padding:6px 10px;'
-                                f'background:var(--accent-lt);border-left:3px solid var(--accent);'
-                                f'border-radius:8px;font-size:12px;color:var(--muted);">'
-                                f'🩺 {stored_q}<br>'
-                                f'<span style="color:var(--accent);font-weight:700;">'
-                                f'✓ {existing_ans}</span></div>',
-                                unsafe_allow_html=True
-                            )
-                        else:
-                            # Unanswered: doctor bubble + reply buttons (no nested columns)
-                            st.markdown(
-                                f'<div class="row-left" style="margin:6px 0 4px;">'
-                                f'<div class="avatar">🩺</div>'
-                                f'<div class="bubble-doc" style="font-size:13px;">'
-                                f'{stored_q}</div></div>',
-                                unsafe_allow_html=True
-                            )
-                            sq = stored_q.lower()
-                            if "first notice" in sq or "when did" in sq:
-                                quick = ["Today", "A few days ago", "~1 week ago", "Over a week"]
-                            elif "swallow" in sq or "eat" in sq:
-                                quick = ["Yes, makes it hard", "Somewhat", "Not really"]
-                            elif "movement" in sq or "activit" in sq:
-                                quick = ["Yes, limits me", "A little", "Not really"]
-                            elif "worse" in sq or "increased" in sq:
-                                quick = ["More activity", "Don't know", "Just got worse"]
-                            else:
-                                quick = ["Yes", "Somewhat", "No"]
-                            # Render as styled HTML pill links — sets query params on click
-                            import urllib.parse
-                            pills_html = '<div style="display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 10px;">'
-                            for qr in quick:
-                                params = urllib.parse.urlencode({"pfu_part": part, "pfu_ans": qr})
-                                pills_html += (
-                                    f'<a href="?{params}" target="_self" style="'
-                                    f'display:inline-block;padding:5px 14px;'
-                                    f'background:rgba(42,157,143,0.12);'
-                                    f'color:#2a9d8f;border:1.5px solid rgba(42,157,143,0.35);'
-                                    f'border-radius:20px;font-size:12px;font-weight:700;'
-                                    f'font-family:Nunito,sans-serif;text-decoration:none;'
-                                    f'cursor:pointer;transition:background 0.15s;">'
-                                    f'{qr}</a>'
-                                )
-                            pills_html += '</div>'
-                            st.markdown(pills_html, unsafe_allow_html=True)
+                        f'<div style="font-size:11px;color:var(--accent);font-weight:700;'
+                        f'padding:3px 8px;background:rgba(42,157,143,0.08);'
+                        f'border-radius:10px;margin:2px 0 6px;border:1px solid rgba(42,157,143,0.2);">'
+                        f'🩺 {stored_q} · <span style="opacity:.8;">✓ {existing_ans}</span></div>',
+                        unsafe_allow_html=True)
+                else:
+                    # Unanswered: compact question + horizontal pill links
+                    quick = _quick_replies(stored_q)
+                    pills = ""
+                    for qr in quick:
+                        params = urllib.parse.urlencode({"pfu_part": part, "pfu_ans": qr})
+                        pills += (
+                            f'<a href="?{params}" target="_self" style="'
+                            f'display:inline-block;padding:4px 11px;margin:2px 3px 2px 0;'
+                            f'background:rgba(42,157,143,0.13);color:#1d7a6e;'
+                            f'border:1.5px solid rgba(42,157,143,0.4);border-radius:16px;'
+                            f'font-size:11px;font-weight:700;font-family:Nunito,sans-serif;'
+                            f'text-decoration:none;white-space:nowrap;">{qr}</a>')
+                    st.markdown(
+                        f'<div style="margin:2px 0 8px;padding:7px 10px;'
+                        f'background:rgba(42,157,143,0.06);border-left:3px solid var(--accent);'
+                        f'border-radius:0 10px 10px 0;">'
+                        f'<div style="font-size:11px;color:var(--muted);margin-bottom:5px;">🩺 {stored_q}</div>'
+                        f'<div style="display:flex;flex-wrap:wrap;gap:0;">{pills}</div></div>',
+                        unsafe_allow_html=True)
 
             # Other location — button-only until clicked
             if st.button("➕ Other location", key="bp_other", use_container_width=True):
