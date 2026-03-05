@@ -1,7 +1,7 @@
 import hashlib
 import json
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, List, Set, Optional
 
 import streamlit as st
 import gspread
@@ -620,72 +620,22 @@ def render_other_input(stage_id: int, placeholder: str = "Describe…"):
     if handle_voice(audio, stage_id): st.rerun()
 
 
-def face_neck_svg(selected: set, prev_locs: set = set()) -> str:
-    """
-    SVG face+neck diagram with 6 labelled pain regions.
-    NO HTML comments inside SVG — they break Streamlit's markdown renderer.
-    Wrapped in a div so st.markdown renders it as a block element.
-    """
-    def fc(p):
-        if p in selected:  return "#2a9d8f"
+def body_svg(selected: Set[str], prev_locs: Set[str] = set()) -> str:
+    def fill(p):
+        if p in selected: return "#1f7aff"
         if p in prev_locs: return "#f4a261"
-        return "#dde3ec"
-
-    def tc(p):
-        return "#ffffff" if (p in selected or p in prev_locs) else "#4a5568"
-
-    sk = "#8a97aa"
-
-    svg = (
-        '<div style="text-align:center">'
-        '<svg width="180" height="330" viewBox="0 0 180 330" xmlns="http://www.w3.org/2000/svg">'
-
-        # ── hair / scalp (decorative) ──
-        f'<ellipse cx="90" cy="28" rx="58" ry="20" fill="#b0bac8" opacity="0.4"/>'
-
-        # ── face oval ──
-        f'<ellipse cx="90" cy="110" rx="64" ry="84" fill="#f5f0ea" stroke="{sk}" stroke-width="1.5"/>'
-
-        # ── left ear ──
-        f'<ellipse cx="22" cy="112" rx="13" ry="19" fill="{fc("Ear(s)")}" stroke="{sk}" stroke-width="1.5"/>'
-        # ── right ear ──
-        f'<ellipse cx="158" cy="112" rx="13" ry="19" fill="{fc("Ear(s)")}" stroke="{sk}" stroke-width="1.5"/>'
-        # ear labels (one on each ear)
-        f'<text x="22" y="116" text-anchor="middle" font-family="sans-serif" font-size="8" font-weight="700" fill="{tc("Ear(s)")}">Ear</text>'
-        f'<text x="158" y="116" text-anchor="middle" font-family="sans-serif" font-size="8" font-weight="700" fill="{tc("Ear(s)")}">Ear</text>'
-
-        # ── eyes (decorative) ──
-        f'<ellipse cx="70" cy="96" rx="11" ry="7" fill="#c8d0dc" stroke="{sk}" stroke-width="1"/>'
-        f'<ellipse cx="110" cy="96" rx="11" ry="7" fill="#c8d0dc" stroke="{sk}" stroke-width="1"/>'
-        f'<circle cx="70" cy="96" r="4" fill="#6b7a90"/>'
-        f'<circle cx="110" cy="96" r="4" fill="#6b7a90"/>'
-
-        # ── nose (decorative) ──
-        f'<path d="M86 104 Q90 117 94 104" fill="none" stroke="{sk}" stroke-width="1.2"/>'
-
-        # ── mouth / tongue region ──
-        f'<ellipse cx="90" cy="128" rx="28" ry="14" fill="{fc("Mouth / Tongue")}" stroke="{sk}" stroke-width="1.5"/>'
-        f'<text x="90" y="132" text-anchor="middle" font-family="sans-serif" font-size="8.5" font-weight="700" fill="{tc("Mouth / Tongue")}">Mouth/Tongue</text>'
-
-        # ── lips / gums strip ──
-        f'<rect x="64" y="148" width="52" height="19" rx="9" fill="{fc("Lips / Gums")}" stroke="{sk}" stroke-width="1.5"/>'
-        f'<text x="90" y="161" text-anchor="middle" font-family="sans-serif" font-size="8.5" font-weight="700" fill="{tc("Lips / Gums")}">Lips/Gums</text>'
-
-        # ── jaw (lower face arc) ──
-        f'<path d="M38 160 Q90 208 142 160 Q142 188 90 198 Q38 188 38 160Z" fill="{fc("Jaw")}" stroke="{sk}" stroke-width="1.5"/>'
-        f'<text x="90" y="190" text-anchor="middle" font-family="sans-serif" font-size="10" font-weight="700" fill="{tc("Jaw")}">Jaw</text>'
-
-        # ── neck ──
-        f'<rect x="62" y="205" width="56" height="58" rx="12" fill="{fc("Neck")}" stroke="{sk}" stroke-width="1.5"/>'
-        f'<text x="90" y="238" text-anchor="middle" font-family="sans-serif" font-size="10" font-weight="700" fill="{tc("Neck")}">Neck</text>'
-
-        # ── throat ──
-        f'<rect x="57" y="266" width="66" height="52" rx="12" fill="{fc("Throat")}" stroke="{sk}" stroke-width="1.5"/>'
-        f'<text x="90" y="296" text-anchor="middle" font-family="sans-serif" font-size="10" font-weight="700" fill="{tc("Throat")}">Throat</text>'
-
-        '</svg></div>'
-    )
-    return svg
+        return "#cfd8e6"
+    s = "#6b7a90"
+    return f"""<svg width="200" height="325" viewBox="0 0 320 520" xmlns="http://www.w3.org/2000/svg">
+  <defs><filter id="sh"><feDropShadow dx="0" dy="2" stdDeviation="2" flood-color="rgba(0,0,0,0.12)"/></filter></defs>
+  <g filter="url(#sh)"><circle cx="160" cy="70" r="38" fill="{fill('Head')}" stroke="{s}" stroke-width="2"/></g>
+  <g filter="url(#sh)"><rect x="110" y="120" width="100" height="70" rx="24" fill="{fill('Chest')}" stroke="{s}" stroke-width="2"/></g>
+  <g filter="url(#sh)"><rect x="115" y="195" width="90" height="70" rx="22" fill="{fill('Abdomen')}" stroke="{s}" stroke-width="2"/></g>
+  <g filter="url(#sh)"><path d="M110 132 C80 145,72 180,78 220 C82 250,92 270,100 290 C108 310,115 320,120 320 L120 130Z" fill="{fill('Left Arm')}" stroke="{s}" stroke-width="2"/></g>
+  <g filter="url(#sh)"><path d="M210 132 C240 145,248 180,242 220 C238 250,228 270,220 290 C212 310,205 320,200 320 L200 130Z" fill="{fill('Right Arm')}" stroke="{s}" stroke-width="2"/></g>
+  <g filter="url(#sh)"><path d="M135 265 C120 310,118 360,126 410 C132 445,132 475,128 500 L155 500 C158 470,160 435,156 405 C150 355,152 312,165 265Z" fill="{fill('Left Leg')}" stroke="{s}" stroke-width="2"/></g>
+  <g filter="url(#sh)"><path d="M185 265 C200 310,202 360,194 410 C188 445,188 475,192 500 L165 500 C162 470,160 435,164 405 C170 355,168 312,155 265Z" fill="{fill('Right Leg')}" stroke="{s}" stroke-width="2"/></g>
+</svg>""".strip()
 
 
 def panel_q(text):
@@ -841,35 +791,21 @@ elif stage == 2:
             advance_stage(); st.rerun()
 
     elif pain_sub == "map":
-        panel_q("Where do you feel pain? (Select all that apply)")
+        panel_q("Where do you feel pain?")
         past = st.session_state.get("past_checkins", [])
         prev_locs = set(past[-1].get("pain_locations", [])) if past else set()
 
         if prev_locs:
-            st.markdown('<div class="small-note">🟠 Orange = last visit. Tap the diagram or buttons to select.</div>',
+            st.markdown('<div class="small-note">🟠 Orange = last visit. Tap to confirm or change.</div>',
                         unsafe_allow_html=True)
-        else:
-            st.markdown('<div class="small-note">Tap the diagram or buttons to select all areas with pain.</div>',
-                        unsafe_allow_html=True)
-
-        # Head & neck cancer specific locations
-        HN_LOCATIONS = [
-            "Throat",
-            "Mouth / Tongue",
-            "Neck",
-            "Ear(s)",
-            "Jaw",
-            "Lips / Gums",
-        ]
 
         col_svg, col_btns = st.columns([1, 1], gap="medium")
         with col_svg:
-            st.markdown(face_neck_svg(st.session_state.selected_parts, prev_locs),
+            st.markdown(body_svg(st.session_state.selected_parts, prev_locs),
                         unsafe_allow_html=True)
         with col_btns:
-            for part in HN_LOCATIONS:
-                in_curr = part in st.session_state.selected_parts
-                lbl = f"✓ {part}" if in_curr else part
+            for part in ["Head","Throat/Neck","Chest","Abdomen","Left Arm","Right Arm","Left Leg","Right Leg"]:
+                lbl = f"✓ {part}" if part in st.session_state.selected_parts else part
                 if st.button(lbl, key=f"bp_{part}", use_container_width=True):
                     toggle_body_part(part); st.rerun()
             if st.button("➕ Other", key="bp_other", use_container_width=True):
