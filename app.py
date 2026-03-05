@@ -72,6 +72,7 @@ def save_to_sheet():
         json.dumps({
             "feeling_level":  st.session_state.feeling_level,
             "pain":           st.session_state.pain_yesno,
+            "pain_trend":     st.session_state.get("pain_trend"),
             "pain_locations": sorted(list(st.session_state.selected_parts)),
             "pain_severities": st.session_state.get("pain_severities", {}),
             "symptoms":       st.session_state.symptoms,
@@ -148,39 +149,39 @@ PAIN_FOLLOWUPS = {
 }
 
 SYMPTOM_FOLLOWUPS = {
-    "fatigue": "How is the fatigue affecting your daily activities?",
-    "nausea": "Are you able to keep food and fluids down?",
-    "vomiting": "How many times have you vomited in the last 24 hours?",
-    "poor_appetite": "Have you been able to eat anything today?",
-    "mouth_sores": "Are the sores making it hard to eat or drink?",
-    "trouble_swallowing": "Are you able to take your medications?",
-    "shortness_of_breath": "Does it happen at rest or only with activity?",
-    "fever_chills": "Have you taken your temperature? What was it?",
-    "constipation": "How many days has it been since your last bowel movement?",
-    "diarrhea": "How many episodes today?",
-    "sleep_problems": "Is pain or another symptom keeping you awake?",
-    "anxiety_low_mood": "Would you like to talk to someone about how you're feeling?",
+    "eating_drinking_less": "Are you mostly on liquids, or are you able to eat soft foods too?",
+    "mouth_tongue_sore": "Is the sore making it hard to eat or drink?",
+    "trouble_swallowing": "Are you coughing or choking when you swallow?",
+    "dry_mouth_thick_mucus": "Is the dryness or mucus making swallowing more painful?",
+    "constipation": "About how many days has it been since your last bowel movement?",
+    "nausea_vomiting": "Are you able to keep food and fluids down?",
+    "dizziness_weakness": "Does it happen when you stand up or walk around?",
+    "fever_chills": "Have you had any recent fevers or chills?",
+    "cough_breathing": "Are you breathing okay, or is the cough getting worse?",
+    "hearing_ringing": "Is it affecting your hearing, or is it more like ringing or fullness?",
+    "numbness_tingling": "Is the numbness or tingling getting worse or staying mild?",
+    "trouble_sleeping": "Is pain or another symptom keeping you awake?",
 }
 
 # Map UI symptom labels to canonical keys in SYMPTOM_FOLLOWUPS
 SYMPTOM_KEY_MAP = {
-    "Fatigue / low energy": "fatigue",
-    "Nausea": "nausea",
-    "Vomiting": "vomiting",
-    "Poor appetite": "poor_appetite",
-    "Mouth sores": "mouth_sores",
+    "Eating or drinking less": "eating_drinking_less",
+    "Mouth or tongue sore": "mouth_tongue_sore",
     "Trouble swallowing": "trouble_swallowing",
-    "Shortness of breath": "shortness_of_breath",
-    "Fever / chills": "fever_chills",
+    "Dry mouth / thick mucus": "dry_mouth_thick_mucus",
     "Constipation": "constipation",
-    "Diarrhea": "diarrhea",
-    "Sleep problems": "sleep_problems",
-    "Anxiety / low mood": "anxiety_low_mood",
+    "Nausea / vomiting": "nausea_vomiting",
+    "Dizziness / weakness": "dizziness_weakness",
+    "Fever / chills": "fever_chills",
+    "Cough / breathing trouble": "cough_breathing",
+    "Hearing change / ringing": "hearing_ringing",
+    "Numbness / tingling": "numbness_tingling",
+    "Trouble sleeping": "trouble_sleeping",
 }
 
 FEELING_FOLLOWUPS = {
-    "fair": "What's been the hardest part of your day so far?",
-    "poor": "What is bothering you the most right now?",
+    "a little worse": "What has been harder this week — pain, eating, or energy?",
+    "much worse": "What is bothering you the most right now?",
 }
 
 def get_curated_followup(stage_id: int) -> Optional[str]:
@@ -189,15 +190,15 @@ def get_curated_followup(stage_id: int) -> Optional[str]:
     ONLY if the answer is concerning. Returns None if no follow-up needed.
     """
     if stage_id == 1:
-        feeling = st.session_state.get("feeling_level")
-        if feeling in ("fair", "poor"):
-            return FEELING_FOLLOWUPS.get(feeling)
-        return None  # excellent/very good/good → no follow-up
+        energy = st.session_state.get("feeling_level")
+        if energy in ("a little worse", "much worse"):
+            return FEELING_FOLLOWUPS.get(energy)
+        return None
 
     if stage_id == 2:
         if st.session_state.pain_yesno is False:
-            return None  # no pain → no follow-up
-        return "On a scale of 0 to 10, how would you rate your pain right now?"
+            return None
+        return "What is your pain right now, from 0 to 10?"
 
     if stage_id == 3:
         locs = st.session_state.get("selected_parts", set())
@@ -219,14 +220,19 @@ def get_curated_followup(stage_id: int) -> Optional[str]:
         prev_syms = set(past[-1].get("symptoms", [])) if past else set()
         new_syms = set(symptoms) - prev_syms
 
-        # Prioritize concerning new symptoms
-        priority = ["Shortness of breath", "Fever / chills", "Vomiting",
-                     "Trouble swallowing"]
+        priority = [
+            "Trouble swallowing",
+            "Cough / breathing trouble",
+            "Fever / chills",
+            "Dizziness / weakness",
+            "Eating or drinking less",
+            "Mouth or tongue sore",
+        ]
         for s in priority:
             if s in symptoms:
                 key = SYMPTOM_KEY_MAP.get(s)
-            if key and key in SYMPTOM_FOLLOWUPS:
-                return SYMPTOM_FOLLOWUPS[key]
+                if key and key in SYMPTOM_FOLLOWUPS:
+                    return SYMPTOM_FOLLOWUPS[key]
 
         if new_syms:
             first_new = sorted(new_syms)[0]
@@ -234,7 +240,7 @@ def get_curated_followup(stage_id: int) -> Optional[str]:
             if key and key in SYMPTOM_FOLLOWUPS:
                 return SYMPTOM_FOLLOWUPS[key]
 
-        return None  # no concerning symptoms → no follow-up
+        return None
 
     return None
 
@@ -636,7 +642,7 @@ div:has(> iframe[title="streamlitApp"]) {
 #   5 = submit (direct submit with optional note)
 defaults = {
     "messages": [], "stage": -1, "patient_name": "",
-    "selected_parts": set(), "pain_yesno": None, "feeling_level": None,
+    "selected_parts": set(), "pain_yesno": None, "pain_trend": None, "feeling_level": None,
     "symptoms": [], "submitted": False, "past_checkins": [],
     "last_audio_hash": None, "mic_key_counter": 0,
     "followup_counts": {}, "stage_answered": {},
@@ -890,12 +896,15 @@ if stage == 0:
 elif stage == 1:
     st.markdown('<div class="panel">', unsafe_allow_html=True)
     st.markdown('<div class="panel-title"><div class="panel-title-avatar">🩺</div>'
-                '<div class="panel-title-bubble">How are you feeling overall today?</div></div>',
+                '<div class="panel-title-bubble">How has your energy been since your last visit?</div></div>',
                 unsafe_allow_html=True)
 
     FEELING_OPTIONS = [
-        ("Excellent", "excellent"), ("Very Good", "very good"),
-        ("Good", "good"), ("Fair", "fair"), ("Poor", "poor"),
+        ("Much more energy", "much better"),
+        ("A little more energy", "a little better"),
+        ("About the same", "about the same"),
+        ("A little less energy", "a little worse"),
+        ("Much less energy", "much worse"),
     ]
 
     if not is_answered(1):
@@ -913,13 +922,13 @@ elif stage == 1:
         stage1_msgs = [m for m in st.session_state.messages if m.get("stage") == 1]
         last_is_doctor = stage1_msgs and stage1_msgs[-1].get("role") == "doctor"
         if last_is_doctor:
-            # Curated follow-up for fair/poor — show quick replies + text
+            # Curated follow-up only when energy is worse
             feeling = st.session_state.feeling_level
             replies = []
-            if feeling == "fair":
-                replies = ["Pain is worse", "Feeling tired", "Just a rough day"]
-            elif feeling == "poor":
-                replies = ["Pain is bad", "Can't eat", "Very weak"]
+            if feeling == "a little worse":
+                replies = ["Pain is worse", "Eating is harder", "More tired"]
+            elif feeling == "much worse":
+                replies = ["Pain is bad", "Very weak", "Can't eat"]
             if replies:
                 cols = st.columns(len(replies), gap="small")
                 for idx, r in enumerate(replies):
@@ -938,21 +947,33 @@ elif stage == 1:
 elif stage == 2:
     st.markdown('<div class="panel">', unsafe_allow_html=True)
     st.markdown('<div class="panel-title"><div class="panel-title-avatar">🩺</div>'
-                '<div class="panel-title-bubble">Do you have any pain today?</div></div>',
+                '<div class="panel-title-bubble">How has your pain been since your last visit?</div></div>',
                 unsafe_allow_html=True)
 
     if not is_answered(2):
         render_inline_stage_messages(stage_id=2)
 
-        c1, c2 = st.columns(2, gap="small")
+        c1, c2, c3, c4 = st.columns(4, gap="small")
         with c1:
-            if st.button("✅ Yes, pain", use_container_width=True, key="pain_yes"):
-                st.session_state.pain_yesno = True
-                on_patient_answer("Yes, I have pain today.", 2); st.rerun()
-        with c2:
             if st.button("🙂 No pain", use_container_width=True, key="pain_no"):
                 st.session_state.pain_yesno = False
+                st.session_state.pain_trend = "no pain"
                 on_patient_answer("No pain today.", 2); st.rerun()
+        with c2:
+            if st.button("⬇️ Better", use_container_width=True, key="pain_better"):
+                st.session_state.pain_yesno = True
+                st.session_state.pain_trend = "better"
+                on_patient_answer("Pain is better than last visit.", 2); st.rerun()
+        with c3:
+            if st.button("➡️ About the same", use_container_width=True, key="pain_same"):
+                st.session_state.pain_yesno = True
+                st.session_state.pain_trend = "about the same"
+                on_patient_answer("Pain is about the same as last visit.", 2); st.rerun()
+        with c4:
+            if st.button("⬆️ Worse", use_container_width=True, key="pain_worse"):
+                st.session_state.pain_yesno = True
+                st.session_state.pain_trend = "worse"
+                on_patient_answer("Pain is worse than last visit.", 2); st.rerun()
     else:
         render_inline_stage_messages(stage_id=2)
         stage2_msgs = [m for m in st.session_state.messages if m.get("stage") == 2]
@@ -978,7 +999,7 @@ elif stage == 2:
 elif stage == 3:
     st.markdown('<div class="panel">', unsafe_allow_html=True)
     st.markdown('<div class="panel-title"><div class="panel-title-avatar">🩺</div>'
-                '<div class="panel-title-bubble">Where do you feel pain?</div></div>',
+                '<div class="panel-title-bubble">Where is the pain right now?</div></div>',
                 unsafe_allow_html=True)
 
     past = st.session_state.get("past_checkins", [])
@@ -1027,11 +1048,11 @@ elif stage == 3:
                 st.session_state.pain_severities[part] = val
 
         st.markdown("<div style='margin-top:8px;'></div>", unsafe_allow_html=True)
-        if st.button("Done with pain areas", key="send_locs", use_container_width=True, type="primary"):
+        if st.button("Save pain areas", key="send_locs", use_container_width=True, type="primary"):
             locs = sorted(st.session_state.selected_parts)
             sevs = st.session_state.pain_severities
             loc_txt = ", ".join(f"{l} ({sevs.get(l,'?')}/10)" for l in locs) if locs else "no pain areas selected"
-            on_patient_answer(f"Pain: {loc_txt}", 3)
+            on_patient_answer(f"Pain locations right now: {loc_txt}", 3)
             st.rerun()
 
     else:
@@ -1051,13 +1072,14 @@ elif stage == 3:
 elif stage == 4:
     st.markdown('<div class="panel">', unsafe_allow_html=True)
     st.markdown('<div class="panel-title"><div class="panel-title-avatar">🩺</div>'
-                '<div class="panel-title-bubble">Any of these symptoms today?</div></div>',
+                '<div class="panel-title-bubble">Are any of these bothering you since your last visit?</div></div>',
                 unsafe_allow_html=True)
 
     symptom_options = [
-        "Fatigue / low energy","Nausea","Vomiting","Poor appetite",
-        "Mouth sores","Trouble swallowing","Shortness of breath",
-        "Fever / chills","Constipation","Diarrhea","Sleep problems","Anxiety / low mood",
+        "Eating or drinking less", "Mouth or tongue sore", "Trouble swallowing",
+        "Dry mouth / thick mucus", "Constipation", "Nausea / vomiting",
+        "Dizziness / weakness", "Fever / chills", "Cough / breathing trouble",
+        "Hearing change / ringing", "Numbness / tingling", "Trouble sleeping",
     ]
 
     past = st.session_state.get("past_checkins", [])
@@ -1070,7 +1092,7 @@ elif stage == 4:
             st.markdown('<div class="small-note">✓ = carried over from last visit. '
                         'Tap to remove if resolved.</div>', unsafe_allow_html=True)
         else:
-            st.markdown('<div class="small-note">Tap all that apply:</div>',
+            st.markdown('<div class="small-note">Tap any issues that sound like what the clinic usually asks about.</div>',
                         unsafe_allow_html=True)
 
         sc = st.columns(2, gap="small")
@@ -1096,17 +1118,17 @@ elif stage == 4:
                     st.rerun()
 
         # "Other" button — hidden text input
-        if st.button("➕ Other symptom", key="other_sym_btn", use_container_width=True):
+        if st.button("➕ Other issue", key="other_sym_btn", use_container_width=True):
             st.session_state.show_other_text[4] = True
             st.rerun()
 
         if st.session_state.show_other_text.get(4, False):
-            render_other_text(stage_id=4, placeholder="Describe other symptom…")
+            render_other_text(stage_id=4, placeholder="Describe another issue the care team should know about…")
 
         st.markdown("<div style='margin-top:8px;'></div>", unsafe_allow_html=True)
-        if st.button("Done with symptoms", key="send_syms", use_container_width=True, type="primary"):
+        if st.button("Save issues", key="send_syms", use_container_width=True, type="primary"):
             sym_txt = "; ".join(st.session_state.symptoms) if st.session_state.symptoms else "no symptoms"
-            on_patient_answer(f"Symptoms: {sym_txt}", 4)
+            on_patient_answer(f"Current issues: {sym_txt}", 4)
             st.rerun()
 
     else:
@@ -1178,7 +1200,7 @@ elif stage == 5:
   <table class="summary-table">
     <tr><td>Patient</td><td>{name}</td></tr>
     {fast_note}
-    <tr><td>Feeling</td><td>{feeling_display}</td></tr>
+    <tr><td>Energy since last visit</td><td>{feeling_display}</td></tr>
     <tr><td>Pain</td><td>{pain_str}</td></tr>
     <tr><td>Pain locations</td><td>{loc_html}</td></tr>
     <tr><td>Symptoms</td><td>{sym_html}</td></tr>
