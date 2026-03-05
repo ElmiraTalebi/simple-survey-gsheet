@@ -831,13 +831,7 @@ elif st.session_state.stage == 4.5:
 
     st.markdown('<div class="card">', unsafe_allow_html=True)
 
-    st.markdown('<div class="section-title">A few follow-up questions</div>', unsafe_allow_html=True)
-
-    st.markdown(
-        '<div class="followup-box">👩‍⚕️ I noticed some changes since your last visit. '
-        'Could you help me understand a bit more?</div>',
-        unsafe_allow_html=True,
-    )
+    st.markdown('<div class="section-title">One follow-up question</div>', unsafe_allow_html=True)
 
     questions = st.session_state.followup_questions
 
