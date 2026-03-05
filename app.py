@@ -647,20 +647,24 @@ def body_svg(selected: Set[str], prev_locs: Optional[Set[str]] = None) -> str:
     if prev_locs is None:
         prev_locs = set()
     def fill(p):
-        if p in selected: return "#1f7aff"
-        if p in prev_locs: return "#f4a261"
-        return "#cfd8e6"
+        if p in selected: return "#e63946"    # red — pain selected
+        if p in prev_locs: return "#f4a261"   # orange — pain last visit
+        return "#a8d5b5"                       # green — no pain
+    def stroke(p):
+        if p in selected: return "#b52535"
+        if p in prev_locs: return "#c47a3a"
+        return "#6daa82"
     s = "#6b7a90"
     return f"""<svg width="200" height="325" viewBox="0 0 320 520" xmlns="http://www.w3.org/2000/svg">
   <defs><filter id="sh"><feDropShadow dx="0" dy="2" stdDeviation="2" flood-color="rgba(0,0,0,0.12)"/></filter></defs>
-  <g filter="url(#sh)"><circle cx="160" cy="70" r="38" fill="{fill('Head')}" stroke="{s}" stroke-width="2"/></g>
-  <g filter="url(#sh)"><rect x="145" y="108" width="30" height="22" rx="8" fill="{fill('Throat/Neck')}" stroke="{s}" stroke-width="2"/></g>
-  <g filter="url(#sh)"><rect x="110" y="120" width="100" height="70" rx="24" fill="{fill('Chest')}" stroke="{s}" stroke-width="2"/></g>
-  <g filter="url(#sh)"><rect x="115" y="195" width="90" height="70" rx="22" fill="{fill('Abdomen')}" stroke="{s}" stroke-width="2"/></g>
-  <g filter="url(#sh)"><path d="M110 132 C80 145,72 180,78 220 C82 250,92 270,100 290 C108 310,115 320,120 320 L120 130Z" fill="{fill('Left Arm')}" stroke="{s}" stroke-width="2"/></g>
-  <g filter="url(#sh)"><path d="M210 132 C240 145,248 180,242 220 C238 250,228 270,220 290 C212 310,205 320,200 320 L200 130Z" fill="{fill('Right Arm')}" stroke="{s}" stroke-width="2"/></g>
-  <g filter="url(#sh)"><path d="M135 265 C120 310,118 360,126 410 C132 445,132 475,128 500 L155 500 C158 470,160 435,156 405 C150 355,152 312,165 265Z" fill="{fill('Left Leg')}" stroke="{s}" stroke-width="2"/></g>
-  <g filter="url(#sh)"><path d="M185 265 C200 310,202 360,194 410 C188 445,188 475,192 500 L165 500 C162 470,160 435,164 405 C170 355,168 312,155 265Z" fill="{fill('Right Leg')}" stroke="{s}" stroke-width="2"/></g>
+  <g filter="url(#sh)"><circle cx="160" cy="70" r="38" fill="{fill('Head')}" stroke="{stroke('Head')}" stroke-width="2"/></g>
+  <g filter="url(#sh)"><rect x="145" y="108" width="30" height="22" rx="8" fill="{fill('Throat/Neck')}" stroke="{stroke('Throat/Neck')}" stroke-width="2"/></g>
+  <g filter="url(#sh)"><rect x="110" y="120" width="100" height="70" rx="24" fill="{fill('Chest')}" stroke="{stroke('Chest')}" stroke-width="2"/></g>
+  <g filter="url(#sh)"><rect x="115" y="195" width="90" height="70" rx="22" fill="{fill('Abdomen')}" stroke="{stroke('Abdomen')}" stroke-width="2"/></g>
+  <g filter="url(#sh)"><path d="M110 132 C80 145,72 180,78 220 C82 250,92 270,100 290 C108 310,115 320,120 320 L120 130Z" fill="{fill('Left Arm')}" stroke="{stroke('Left Arm')}" stroke-width="2"/></g>
+  <g filter="url(#sh)"><path d="M210 132 C240 145,248 180,242 220 C238 250,228 270,220 290 C212 310,205 320,200 320 L200 130Z" fill="{fill('Right Arm')}" stroke="{stroke('Right Arm')}" stroke-width="2"/></g>
+  <g filter="url(#sh)"><path d="M135 265 C120 310,118 360,126 410 C132 445,132 475,128 500 L155 500 C158 470,160 435,156 405 C150 355,152 312,165 265Z" fill="{fill('Left Leg')}" stroke="{stroke('Left Leg')}" stroke-width="2"/></g>
+  <g filter="url(#sh)"><path d="M185 265 C200 310,202 360,194 410 C188 445,188 475,192 500 L165 500 C162 470,160 435,164 405 C170 355,168 312,155 265Z" fill="{fill('Right Leg')}" stroke="{stroke('Right Leg')}" stroke-width="2"/></g>
 </svg>""".strip()
 
 def panel_q(text):
