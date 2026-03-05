@@ -9,7 +9,7 @@ from google.oauth2.service_account import Credentials
 st.set_page_config(page_title="Cancer Symptom Check-In", page_icon="🩺", layout="centered")
 
 # ============================================================
-# Secrets helper
+# Secrets helpers
 # ============================================================
 
 def _secret(*keys, default=None):
@@ -43,11 +43,11 @@ def _init_sheets():
         )
         book = gspread.authorize(creds).open_by_key(_require_secret("gsheet_id"))
         try:
-            sheet_local = book.worksheet("Form")
+            ws = book.worksheet("Form")
         except Exception:
-            sheet_local = book.add_worksheet(title="Form", rows=2000, cols=20)
-            sheet_local.append_row(["timestamp", "name", "json"])
-        sheet = sheet_local
+            ws = book.add_worksheet(title="Form", rows=2000, cols=20)
+            ws.append_row(["timestamp", "name", "json"])
+        sheet = ws
     except Exception as e:
         sheets_init_error = str(e)
 
@@ -57,7 +57,8 @@ def load_past_checkins(name: str) -> List[Dict]:
         return []
     try:
         past: List[Dict] = []
-        for row in sheet.get_all_values()[1:]:
+        rows = sheet.get_all_values()
+        for row in rows[1:]:
             if len(row) >= 3 and row[1].strip().lower() == name.strip().lower():
                 try:
                     d = json.loads(row[2])
@@ -81,15 +82,19 @@ def save_to_sheet(payload: Dict):
 
 
 # ============================================================
-# Body map SVG (from your original version, with fill-on-select)
+# Body map SVG (fills regions by state)
 # ============================================================
 
-def body_svg(selected: Set[str]) -> str:
-    # Same style/colors as your original file
-    def fill(p): 
-        return "#1f7aff" if p in selected else "#cfd8e6"
-    s = "#6b7a90"
-    return f"""<svg width="240" height="390" viewBox="0 0 320 520" xmlns="http://www.w3.org/2000/svg">
+def body_svg(colors: Dict[str, str]) -> str:
+    """
+    colors: dict mapping region -> hex color
+    Regions used: Head, Chest, Abdomen, Left Arm, Right Arm, Left Leg, Right Leg
+    """
+    def c(p): return colors.get(p, "#cfd8e6")
+    stroke = "#6b7a90"
+
+    return f"""
+<svg width="260" height="410" viewBox="0 0 320 520" xmlns="http://www.w3.org/2000/svg">
   <defs>
     <filter id="sh">
       <feDropShadow dx="0" dy="2" stdDeviation="2" flood-color="rgba(0,0,0,0.12)"/>
@@ -97,41 +102,42 @@ def body_svg(selected: Set[str]) -> str:
   </defs>
 
   <g filter="url(#sh)">
-    <circle cx="160" cy="70" r="38" fill="{fill('Head')}" stroke="{s}" stroke-width="2"/>
+    <circle cx="160" cy="70" r="38" fill="{c('Head')}" stroke="{stroke}" stroke-width="2"/>
   </g>
 
   <g filter="url(#sh)">
-    <rect x="110" y="120" width="100" height="70" rx="24" fill="{fill('Chest')}" stroke="{s}" stroke-width="2"/>
+    <rect x="110" y="120" width="100" height="70" rx="24" fill="{c('Chest')}" stroke="{stroke}" stroke-width="2"/>
   </g>
 
   <g filter="url(#sh)">
-    <rect x="115" y="195" width="90" height="70" rx="22" fill="{fill('Abdomen')}" stroke="{s}" stroke-width="2"/>
+    <rect x="115" y="195" width="90" height="70" rx="22" fill="{c('Abdomen')}" stroke="{stroke}" stroke-width="2"/>
   </g>
 
   <g filter="url(#sh)">
     <path d="M110 132 C80 145,72 180,78 220 C82 250,92 270,100 290 C108 310,115 320,120 320 L120 130Z"
-          fill="{fill('Left Arm')}" stroke="{s}" stroke-width="2"/>
+          fill="{c('Left Arm')}" stroke="{stroke}" stroke-width="2"/>
   </g>
 
   <g filter="url(#sh)">
     <path d="M210 132 C240 145,248 180,242 220 C238 250,228 270,220 290 C212 310,205 320,200 320 L200 130Z"
-          fill="{fill('Right Arm')}" stroke="{s}" stroke-width="2"/>
+          fill="{c('Right Arm')}" stroke="{stroke}" stroke-width="2"/>
   </g>
 
   <g filter="url(#sh)">
     <path d="M135 265 C120 310,118 360,126 410 C132 445,132 475,128 500 L155 500 C158 470,160 435,156 405 C150 355,152 312,165 265Z"
-          fill="{fill('Left Leg')}" stroke="{s}" stroke-width="2"/>
+          fill="{c('Left Leg')}" stroke="{stroke}" stroke-width="2"/>
   </g>
 
   <g filter="url(#sh)">
     <path d="M185 265 C200 310,202 360,194 410 C188 445,188 475,192 500 L165 500 C162 470,160 435,164 405 C170 355,168 312,155 265Z"
-          fill="{fill('Right Leg')}" stroke="{s}" stroke-width="2"/>
+          fill="{c('Right Leg')}" stroke="{stroke}" stroke-width="2"/>
   </g>
-</svg>""".strip()
+</svg>
+""".strip()
 
 
 # ============================================================
-# Session state
+# Session state defaults
 # ============================================================
 
 DEFAULTS = {
@@ -139,22 +145,22 @@ DEFAULTS = {
     "name": "",
     "past_checkins": [],
 
-    # last-visit memory (deterministic)
     "last_summary": None,
-    "last_pain_severity": {},
+    "last_pain_severity": {},  # dict region -> int
 
-    # today's responses
-    "feeling_level": None,          # int 0-10
-    "pain_yesno": None,             # bool
-    "selected_parts": set(),         # body regions
-    "pain_severity": {},            # dict region->int
-    "pain_reason": {},              # dict region->str
+    "feeling_level": None,
+    "pain_yesno": None,
+
+    "selected_parts": set(),   # regions chosen today
+    "pain_severity": {},       # region -> int
+    "pain_reason": {},         # region -> str
+
     "other_pain_enabled": False,
     "other_pain_location": "",
     "other_pain_severity": None,
     "other_pain_reason": "",
 
-    "symptoms": set(),              # selected symptoms
+    "symptoms": set(),
     "other_symptom_enabled": False,
     "other_symptom_text": "",
 
@@ -167,13 +173,10 @@ for k, v in DEFAULTS.items():
 
 
 # ============================================================
-# Deterministic highlight recap (only important items)
+# Deterministic highlight recap
 # ============================================================
 
 def make_highlight_recap(last: Dict) -> List[str]:
-    """
-    Return 1-3 short highlight bullets (important only).
-    """
     bullets: List[str] = []
 
     fl = last.get("feeling_level")
@@ -181,22 +184,18 @@ def make_highlight_recap(last: Dict) -> List[str]:
     pain_locs = last.get("pain_locations", []) or []
     syms = last.get("symptoms", []) or []
 
-    # 1) Low feeling is important
     try:
         if fl is not None and str(fl).isdigit() and int(fl) <= 4:
             bullets.append(f"Feeling was low: {int(fl)}/10.")
     except Exception:
         pass
 
-    # 2) Pain (if present)
     if pain and pain_locs:
         bullets.append(f"Pain reported in: {', '.join(pain_locs[:3])}{'…' if len(pain_locs) > 3 else ''}.")
 
-    # 3) Symptoms (if any)
     if syms:
         bullets.append(f"Symptoms included: {', '.join(syms[:3])}{'…' if len(syms) > 3 else ''}.")
 
-    # If nothing “important”, keep one neutral anchor
     if not bullets:
         if fl is not None:
             bullets.append(f"Last time feeling: {fl}/10.")
@@ -207,12 +206,57 @@ def make_highlight_recap(last: Dict) -> List[str]:
 
 
 # ============================================================
+# Helpers for body-map colors and inline logic
+# ============================================================
+
+REGIONS = ["Head", "Chest", "Abdomen", "Left Arm", "Right Arm", "Left Leg", "Right Leg"]
+
+GREEN = "#6fd08c"
+ORANGE = "#f5a623"
+RED = "#e74c3c"
+DEFAULT = "#cfd8e6"
+
+def region_color_state(region: str) -> str:
+    """
+    Returns hex color based on rules:
+    - Green: never reported before (not in last visit) and not selected today
+    - Orange: reported last visit but unchanged
+    - Red: new today OR severity increased by >= 2
+    """
+    last = st.session_state.last_pain_severity or {}
+    selected = region in st.session_state.selected_parts
+
+    if not selected:
+        if region in last:
+            return ORANGE
+        return GREEN
+
+    # selected today
+    last_val = int(last.get(region, 0))
+    cur = int(st.session_state.pain_severity.get(region, last_val))
+
+    if region not in last:
+        return RED  # new pain
+
+    if cur >= last_val + 2:
+        return RED  # worsening
+
+    return ORANGE  # same as before
+
+
+def current_svg_colors() -> Dict[str, str]:
+    colors = {}
+    for r in REGIONS:
+        colors[r] = region_color_state(r)
+    return colors
+
+
+# ============================================================
 # UI
 # ============================================================
 
 st.title("🩺 Cancer Symptom Check-In")
 
-# Warn if sheets not ready (but don’t crash)
 _init_sheets()
 if sheets_init_error:
     st.warning(f"Sheets not ready: {sheets_init_error}")
@@ -233,7 +277,6 @@ if st.session_state.stage == -1:
             if past:
                 last = past[-1]
                 st.session_state.last_summary = last
-                # last visit pain severity mapping (if present)
                 lps = last.get("pain_severity", {})
                 st.session_state.last_pain_severity = lps if isinstance(lps, dict) else {}
             else:
@@ -249,7 +292,7 @@ stage = st.session_state.stage
 
 
 # ---------------------------
-# Stage 0: Highlight recap + same-as-yesterday shortcut
+# Stage 0: Highlight recap + shortcut
 # ---------------------------
 if stage == 0:
     last = st.session_state.last_summary
@@ -271,7 +314,6 @@ if stage == 0:
     c1, c2 = st.columns(2)
     with c1:
         if st.button("Same as yesterday", use_container_width=True, type="primary"):
-            # Save a minimal “no change” check-in (still deterministic)
             payload = {
                 "name": st.session_state.name,
                 "feeling_level": None,
@@ -285,7 +327,7 @@ if stage == 0:
             try:
                 save_to_sheet(payload)
             except Exception as e:
-                st.warning(f"Could not save (Sheets issue): {e}")
+                st.warning(f"Could not save: {e}")
 
             st.session_state.submitted = True
             st.session_state.stage = 5
@@ -298,7 +340,7 @@ if stage == 0:
 
 
 # ---------------------------
-# Stage 1: Feeling (0-10)
+# Stage 1: Feeling (0–10)
 # ---------------------------
 elif stage == 1:
     st.subheader("How are you feeling today (0–10)?")
@@ -331,92 +373,77 @@ elif stage == 2:
 
 
 # ---------------------------
-# Stage 3: Body map (pretty SVG) + mark-on-select + per-option bubbles
+# Stage 3: Body map + inline per-option UI
 # ---------------------------
 elif stage == 3:
     st.subheader("Where do you feel pain?")
 
-    parts = ["Head", "Chest", "Abdomen", "Left Arm", "Right Arm", "Left Leg", "Right Leg"]
-
-    col_svg, col_btns = st.columns([1.05, 1], gap="large")
+    col_svg, col_opts = st.columns([1.1, 1], gap="large")
 
     with col_svg:
-        st.markdown(body_svg(st.session_state.selected_parts), unsafe_allow_html=True)
-        st.caption("Selected areas turn blue on the body map.")
+        st.markdown(body_svg(current_svg_colors()), unsafe_allow_html=True)
+        st.caption("🟢 New area  •  🟠 Same as last visit  •  🔴 New or worsened")
 
-    with col_btns:
+    with col_opts:
         st.write("**Tap a region**")
-        for part in parts:
-            selected = part in st.session_state.selected_parts
-            label = f"🔴 {part}" if selected else f"🟢 {part}"
 
-            if st.button(label, key=f"toggle_{part}", use_container_width=True):
-                if selected:
-                    st.session_state.selected_parts.remove(part)
-                    # also clean stored details
-                    st.session_state.pain_severity.pop(part, None)
-                    st.session_state.pain_reason.pop(part, None)
+        last = st.session_state.last_pain_severity or {}
+
+        for r in REGIONS:
+            icon = "🟢"
+            col_hex = region_color_state(r)
+            if col_hex == ORANGE:
+                icon = "🟠"
+            elif col_hex == RED:
+                icon = "🔴"
+
+            clicked = st.button(f"{icon} {r}", key=f"toggle_{r}", use_container_width=True)
+
+            if clicked:
+                if r in st.session_state.selected_parts:
+                    st.session_state.selected_parts.remove(r)
+                    st.session_state.pain_severity.pop(r, None)
+                    st.session_state.pain_reason.pop(r, None)
                 else:
-                    st.session_state.selected_parts.add(part)
+                    st.session_state.selected_parts.add(r)
                 st.rerun()
 
-        st.markdown("---")
+            # Inline block for THIS option only
+            if r in st.session_state.selected_parts:
+                last_val = int(last.get(r, 0))
+                cur_default = int(st.session_state.pain_severity.get(r, last_val))
 
-        # Per-selected-region “bubble” questions under THAT region (deterministic)
-        for part in parts:
-            if part not in st.session_state.selected_parts:
-                continue
+                sev = st.number_input(
+                    f"{r} severity (0–10)",
+                    min_value=0,
+                    max_value=10,
+                    value=cur_default,
+                    step=1,
+                    key=f"sev_{r}"
+                )
+                st.session_state.pain_severity[r] = int(sev)
 
-            st.info(f"**{part}:** How severe is it (0–10)?")
+                if int(sev) > 6 or int(sev) >= last_val + 2:
+                    st.warning("What seems to be causing the worsening?")
+                    reason = st.text_input("Reason (optional)", key=f"why_{r}")
+                    if reason.strip():
+                        st.session_state.pain_reason[r] = reason.strip()
 
-            # last visit severity for that same region
-            last_val = 0
-            if isinstance(st.session_state.last_pain_severity, dict):
-                try:
-                    last_val = int(st.session_state.last_pain_severity.get(part, 0))
-                except Exception:
-                    last_val = 0
+                st.markdown("---")
 
-            sev_key = f"sev_{part}"
-            if sev_key not in st.session_state:
-                st.session_state[sev_key] = last_val
-
-            severity = st.number_input(
-                f"{part} severity",
-                min_value=0,
-                max_value=10,
-                value=int(st.session_state[sev_key]),
-                step=1,
-                key=sev_key
-            )
-            st.session_state.pain_severity[part] = int(severity)
-
-            # Follow-up only if concerning: >6 OR worse than last time
-            if int(severity) > 6 or int(severity) > int(last_val):
-                st.warning("What seems to be causing the worsening?")
-                reason = st.text_input("Reason (optional)", key=f"why_{part}")
-                if reason.strip():
-                    st.session_state.pain_reason[part] = reason.strip()
-
-            st.markdown("---")
-
-        # "Other" pain location hidden until clicked
         if st.button("Other location", use_container_width=True):
             st.session_state.other_pain_enabled = True
             st.rerun()
 
         if st.session_state.other_pain_enabled:
-            other_loc = st.text_input("Describe other pain location", value=st.session_state.other_pain_location)
-            st.session_state.other_pain_location = other_loc
+            other = st.text_input("Describe other pain location", value=st.session_state.other_pain_location)
+            st.session_state.other_pain_location = other
 
-            if other_loc.strip():
-                # severity
-                default_other = 0
-                other_sev = st.number_input("Severity (0–10)", 0, 10, value=default_other, step=1, key="other_pain_sev")
-                st.session_state.other_pain_severity = int(other_sev)
+            if other.strip():
+                sev = st.number_input("Severity (0–10)", 0, 10, value=0, step=1, key="other_pain_sev")
+                st.session_state.other_pain_severity = int(sev)
 
-                # follow-up only if concerning
-                if int(other_sev) > 6:
+                if int(sev) > 6:
                     st.warning("What seems to be causing the worsening?")
                     other_reason = st.text_input("Reason (optional)", key="other_pain_why")
                     st.session_state.other_pain_reason = other_reason.strip()
@@ -427,7 +454,7 @@ elif stage == 3:
 
 
 # ---------------------------
-# Stage 4: Symptoms clickable (like before) + Other button
+# Stage 4: Symptoms (clickable)
 # ---------------------------
 elif stage == 4:
     st.subheader("Symptoms today")
@@ -443,7 +470,7 @@ elif stage == 4:
         "Loss of taste",
     ]
 
-    c1, c2 = st.columns(2, gap="medium")
+    c1, c2 = st.columns(2)
 
     for i, sym in enumerate(symptom_options):
         col = c1 if i % 2 == 0 else c2
@@ -464,10 +491,10 @@ elif stage == 4:
         st.rerun()
 
     if st.session_state.other_symptom_enabled:
-        other_sym = st.text_input("Describe other symptom", value=st.session_state.other_symptom_text)
-        st.session_state.other_symptom_text = other_sym
-        if other_sym.strip():
-            st.session_state.symptoms.add(other_sym.strip())
+        other = st.text_input("Describe other symptom", value=st.session_state.other_symptom_text)
+        st.session_state.other_symptom_text = other
+        if other.strip():
+            st.session_state.symptoms.add(other.strip())
 
     st.markdown("---")
 
@@ -476,7 +503,6 @@ elif stage == 4:
         pain_severity = dict(st.session_state.pain_severity)
         pain_reason = dict(st.session_state.pain_reason)
 
-        # include "Other pain location" if used
         if st.session_state.other_pain_enabled and st.session_state.other_pain_location.strip():
             loc = st.session_state.other_pain_location.strip()
             pain_locations.append(loc)
@@ -498,7 +524,7 @@ elif stage == 4:
         try:
             save_to_sheet(payload)
         except Exception as e:
-            st.warning(f"Could not save (Sheets issue): {e}")
+            st.warning(f"Could not save: {e}")
 
         st.session_state.submitted = True
         st.session_state.stage = 5
@@ -513,7 +539,6 @@ elif stage == 5:
     st.write("Your care team will review your responses.")
 
     if st.button("Start another check-in"):
-        # reset everything
         for k, v in DEFAULTS.items():
             st.session_state[k] = v
         st.rerun()
