@@ -518,10 +518,11 @@ elif st.session_state.stage == 1:
     feeling = st.number_input("Feeling (0-10)", 0, 10, value=default_feeling)
 
     feeling_improved = (last_feeling is not None and feeling > int(last_feeling))
+    feeling_worse = (last_feeling is not None and feeling < int(last_feeling))
 
     if feeling_improved:
         st.markdown(
-            f'<div class="doctor-box">That\'s great to hear! Last time you were at {int(last_feeling)}/10 '
+            f'<div class="doctor-box">\U0001f60a That\'s great to hear! Last time you were at {int(last_feeling)}/10 '
             f'and now you\'re at {feeling}/10. Would you like to finish here, or continue to log any symptoms?</div>',
             unsafe_allow_html=True,
         )
@@ -543,6 +544,29 @@ elif st.session_state.stage == 1:
                 st.session_state.feeling_level = feeling
                 st.session_state.stage = 2
                 st.rerun()
+
+    elif feeling_worse:
+        st.markdown(
+            f'<div class="doctor-box">\U0001f614 I\'m sorry to hear that. Last time you were at {int(last_feeling)}/10 '
+            f'and today you\'re at {feeling}/10. Let\'s make sure we capture what\'s going on. '
+            f'Do you have any pain today?</div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown("")
+        col_a, col_b = st.columns(2)
+        with col_a:
+            if st.button("No pain"):
+                st.session_state.feeling_level = feeling
+                st.session_state.pain_yesno = False
+                st.session_state.stage = 4
+                st.rerun()
+        with col_b:
+            if st.button("Yes, I have pain"):
+                st.session_state.feeling_level = feeling
+                st.session_state.pain_yesno = True
+                st.session_state.stage = 3
+                st.rerun()
+
     else:
         if st.button("Next"):
             st.session_state.feeling_level = feeling
