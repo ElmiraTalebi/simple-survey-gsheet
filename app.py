@@ -647,6 +647,7 @@ defaults = {
     "last_audio_hash": None, "mic_key_counter": 0,
     "followup_counts": {}, "stage_answered": {},
     "pain_severities": {},  # {location: severity_int}
+    "active_body_part": None,  # which body option is currently expanded inline
     "show_other_text": {},  # {stage_id: bool} — whether "Other" text is expanded
     "fast_path": False,     # True if patient said "nothing changed"
 }
@@ -672,8 +673,11 @@ def toggle_body_part(part):
             st.session_state.pain_severities.pop(part, None)
         except Exception:
             pass
+        if st.session_state.get("active_body_part") == part:
+            st.session_state.active_body_part = None
     else:
         st.session_state.selected_parts.add(part)
+        st.session_state.active_body_part = part
 
 def followup_count(sid): return st.session_state.followup_counts.get(sid, 0)
 def record_followup(sid): st.session_state.followup_counts[sid] = followup_count(sid)+1
@@ -1029,29 +1033,48 @@ elif stage == 3:
         with col_btns:
             # Pre-populate per-location severities from last visit.
             prev_sevs = dict(past[-1].get("pain_severities", {})) if past else {}
-            for part in ["Head","Chest","Abdomen","Left Arm","Right Arm","Left Leg","Right Leg"]:
-                label = f"✓ {part}" if part in st.session_state.selected_parts else part
-                # Show previous status
-                if part in prev_locs and part in st.session_state.selected_parts:
-                    label += " (was painful)"
+            body_parts = ["Head","Chest","Abdomen","Left Arm","Right Arm","Left Leg","Right Leg"]
+            for part in body_parts:
+                is_selected = part in st.session_state.selected_parts
+                label = f"✓ {part}" if is_selected else part
+                if part in prev_locs:
+                    label += " · last visit"
                 if st.button(label, key=f"toggle_{part}", use_container_width=True):
-                    toggle_body_part(part); st.rerun()
+                    if is_selected:
+                        # Clicking the same selected option collapses it and removes the pain mark.
+                        toggle_body_part(part)
+                    else:
+                        toggle_body_part(part)
+                    st.rerun()
 
-                # Drawer-style severity control (hidden unless selected)
-                if part in st.session_state.selected_parts:
-                    last_val = prev_sevs.get(part)
-                    hint = f"last: {last_val}/10" if last_val is not None else "last: —"
-                    with st.expander(f"▸ {part} severity ({hint})", expanded=False):
-                        default_val = int(prev_sevs.get(part, st.session_state.pain_severities.get(part, 3)))
-                        val = st.slider(
-                            label="Severity",
-                            min_value=0,
-                            max_value=10,
-                            value=default_val,
-                            key=f"sev_{part}",
-                            label_visibility="collapsed",
-                        )
-                        st.session_state.pain_severities[part] = int(val)
+                # Inline slider directly from this option, not in a separate section.
+                if part in st.session_state.selected_parts and st.session_state.get("active_body_part") == part:
+                    default_val = int(prev_sevs.get(part, st.session_state.pain_severities.get(part, 3)))
+                    current_val = int(st.session_state.pain_severities.get(part, default_val))
+                    st.markdown(
+                        f"<div class='small-note' style='margin:4px 0 2px 8px;'>Set {part.lower()} pain now"
+                        + (f" &nbsp;•&nbsp; last visit: {prev_sevs.get(part)}/10" if prev_sevs.get(part) is not None else "")
+                        + "</div>",
+                        unsafe_allow_html=True,
+                    )
+                    val = st.slider(
+                        label=f"{part} severity",
+                        min_value=0,
+                        max_value=10,
+                        value=current_val,
+                        key=f"sev_{part}",
+                        label_visibility="collapsed",
+                    )
+                    st.session_state.pain_severities[part] = int(val)
+                    slider_cols = st.columns([1,1])
+                    with slider_cols[0]:
+                        if st.button(f"Done with {part}", key=f"done_{part}", use_container_width=True):
+                            st.session_state.active_body_part = None
+                            st.rerun()
+                    with slider_cols[1]:
+                        if st.button(f"Remove {part}", key=f"remove_{part}", use_container_width=True):
+                            toggle_body_part(part)
+                            st.rerun()
 
             # "Other" button for unlisted locations
             if st.button("➕ Other location", key="other_loc_btn", use_container_width=True):
