@@ -334,11 +334,33 @@ def detect_followups(
     flagged = []
     prev = previous_answers or {}
     for symptom, curr_score in current_answers.items():
-        prev_score = prev.get(symptom, 0)
-        increased_significantly = (curr_score - prev_score) > 2
-        is_maximum = curr_score == 5
-        if is_maximum or increased_significantly:
-            flagged.append((symptom, prev_score, curr_score))
+        # If no previous visit at all, treat every score=5 as new
+        # If previous visit exists but symptom wasn't recorded, use None (unknown)
+        if previous_answers is None:
+            prev_score = None
+        else:
+            prev_score = previous_answers.get(symptom)  # None if not in previous visit
+
+        # Determine numeric previous for comparison (use curr as fallback so no false increase)
+        prev_numeric = prev_score if prev_score is not None else 0
+
+        # Skip entirely if patient already had this score last visit — nothing changed
+        if prev_score is not None and curr_score == prev_score:
+            continue
+
+        # Skip if patient already had 5 last visit (established maximum, already known)
+        if prev_score is not None and prev_score >= 5:
+            continue
+
+        # Trigger 1: newly reaching maximum (5) this visit
+        is_new_maximum = curr_score == 5
+
+        # Trigger 2: score jumped by more than 2 points vs last visit
+        increased_significantly = (curr_score - prev_numeric) > 2
+
+        if is_new_maximum or increased_significantly:
+            flagged.append((symptom, prev_score if prev_score is not None else 0, curr_score))
+
     return flagged
 
 
