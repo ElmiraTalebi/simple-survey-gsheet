@@ -806,21 +806,19 @@ elif st.session_state.stage == 3:
                         if _tr_reason and not st.session_state[widget_key]:
                             st.session_state[widget_key] = _tr_reason
 
-                        st.text_input(question, key=widget_key)
+                        def _save_reason(rr=r, wk=widget_key):
+                            val = st.session_state.get(wk, "").strip()
+                            if val:
+                                st.session_state.pain_reason[rr] = val
+
+                        st.text_input(question, key=widget_key, on_change=_save_reason)
                         voice_input_widget(f"reason_{r}", label="🎤 Speak your answer")
 
                         # Read value AFTER widget renders (never set it after this point)
                         current_val = st.session_state.get(widget_key, "").strip()
 
-                        # Save button — moves value out of widget into pain_reason
-                        if current_val and st.button("✅ Save answer", key=f"save_{r}"):
-                            st.session_state.pain_reason[r] = current_val
-                            # Delete the widget key so it resets cleanly on next render
-                            del st.session_state[widget_key]
-                            st.rerun()
-
                         # Voice auto-save: if transcript has landed and matches widget, commit
-                        elif _tr_reason and current_val == _tr_reason:
+                        if _tr_reason and current_val == _tr_reason:
                             st.session_state.pain_reason[r] = current_val
                             del st.session_state[widget_key]
                             st.rerun()
@@ -974,17 +972,17 @@ elif st.session_state.stage == 4:
                     if _tr_sym and not st.session_state[widget_key]:
                         st.session_state[widget_key] = _tr_sym
 
-                    st.text_input(question, key=widget_key)
+                    def _save_sym(ss=sym, wk=widget_key):
+                        val = st.session_state.get(wk, "").strip()
+                        if val:
+                            st.session_state.symptom_answers[ss] = val
+
+                    st.text_input(question, key=widget_key, on_change=_save_sym)
                     voice_input_widget(f"sym_{sym}", label="🎤 Speak your answer")
 
                     current_val = st.session_state.get(widget_key, "").strip()
 
-                    if current_val and st.button("✅ Save answer", key=f"save_sym_{sym}"):
-                        st.session_state.symptom_answers[sym] = current_val
-                        del st.session_state[widget_key]
-                        st.rerun()
-
-                    elif _tr_sym and current_val == _tr_sym:
+                    if _tr_sym and current_val == _tr_sym:
                         st.session_state.symptom_answers[sym] = current_val
                         del st.session_state[widget_key]
                         st.rerun()
