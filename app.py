@@ -817,8 +817,10 @@ elif st.session_state.stage == 3:
                         # Read value AFTER widget renders (never set it after this point)
                         current_val = st.session_state.get(widget_key, "").strip()
 
-                        # Voice auto-save: if transcript has landed and matches widget, commit
-                        if _tr_reason and current_val == _tr_reason:
+                        # Rerun after on_change saved the answer, or after voice auto-save
+                        if st.session_state.pain_reason.get(r):
+                            st.rerun()
+                        elif _tr_reason and current_val == _tr_reason:
                             st.session_state.pain_reason[r] = current_val
                             del st.session_state[widget_key]
                             st.rerun()
@@ -982,7 +984,9 @@ elif st.session_state.stage == 4:
 
                     current_val = st.session_state.get(widget_key, "").strip()
 
-                    if _tr_sym and current_val == _tr_sym:
+                    if st.session_state.symptom_answers.get(sym):
+                        st.rerun()
+                    elif _tr_sym and current_val == _tr_sym:
                         st.session_state.symptom_answers[sym] = current_val
                         del st.session_state[widget_key]
                         st.rerun()
