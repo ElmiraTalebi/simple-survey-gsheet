@@ -798,21 +798,37 @@ elif st.session_state.stage == 3:
                             st.session_state.pop(f"_transcript_reason_{r}", None)
                             st.rerun()
                     else:
-                        # Show the question input + voice widget
-                        _default_r = _tr_reason or ""
-                        answer = st.text_input(
+                        # Draft key holds the typed/spoken value between reruns
+                        draft_key = f"_draft_reason_{r}"
+                        if draft_key not in st.session_state:
+                            st.session_state[draft_key] = ""
+
+                        # Voice path: seed draft as soon as transcript lands
+                        if _tr_reason and not st.session_state[draft_key]:
+                            st.session_state[draft_key] = _tr_reason
+
+                        st.text_input(
                             question,
-                            value=_default_r,
-                            key=f"reason_{r}",
+                            key=draft_key,
                         )
                         voice_input_widget(
                             f"reason_{r}",
                             label="🎤 Speak your answer",
                         )
-                        saved_r = answer or _tr_reason
-                        if saved_r:
-                            st.session_state.pain_reason[r] = saved_r
-                            st.rerun()  # collapse immediately once answered
+
+                        draft_val = st.session_state.get(draft_key, "").strip()
+
+                        # Auto-collapse as soon as voice transcript arrives
+                        if _tr_reason and draft_val:
+                            st.session_state.pain_reason[r] = draft_val
+                            st.session_state[draft_key] = ""
+                            st.rerun()
+
+                        # Save button for typed answers
+                        if draft_val and st.button("✅ Save answer", key=f"save_{r}"):
+                            st.session_state.pain_reason[r] = draft_val
+                            st.session_state[draft_key] = ""
+                            st.rerun()
 
         # Other / custom pain location
         st.markdown("---")
