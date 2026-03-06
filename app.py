@@ -1,724 +1,526 @@
 import json
-from datetime import datetime
 from typing import Dict, List, Optional
 
 import streamlit as st
-import streamlit.components.v1 as components
 import gspread
 from google.oauth2.service_account import Credentials
+from openai import OpenAI
 
-st.set_page_config(
-    page_title="Symptom Questionnaire",
-    page_icon="🏥",
-    layout="wide",
-)
+st.set_page_config(page_title="Provider Dashboard", page_icon="🏥", layout="centered")
 
-# ============================================================
-# CSS
-# ============================================================
-
-st.markdown("""
-<style>
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap');
-
-html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
-
-.block-container { padding: 1.5rem 2rem 2rem 2rem; max-width: 1100px; }
-
-.page-header {
-    padding: 1.2rem 1.6rem;
-    background: #f8faff;
-    border: 1px solid #e2e8f4;
-    border-radius: 12px;
-    margin-bottom: 1.4rem;
-    display: flex;
-    align-items: center;
-    gap: 14px;
-}
-.page-header h1 { font-size: 1.25rem; font-weight: 600; color: #1a2540; margin: 0; }
-.page-header p  { font-size: 0.82rem; color: #6b7a99; margin: 2px 0 0 0; }
-
-.name-card {
-    max-width: 460px;
-    margin: 3rem auto;
-    background: #f8faff;
-    border: 1px solid #e2e8f4;
-    border-radius: 14px;
-    padding: 2.2rem 2.4rem;
-}
-.name-card h2 { font-size: 1.15rem; font-weight: 600; color: #1a2540; margin: 0 0 0.4rem 0; }
-.name-card p  { font-size: 0.84rem; color: #6b7a99; margin: 0 0 1.4rem 0; }
-
-.returning-badge {
-    display: inline-block; background: #e8f4ee; color: #1a6e40;
-    border-radius: 20px; font-size: 0.78rem; font-weight: 500;
-    padding: 3px 12px; margin-bottom: 1rem;
-}
-.firstvisit-badge {
-    display: inline-block; background: #e8f0ff; color: #2952cc;
-    border-radius: 20px; font-size: 0.78rem; font-weight: 500;
-    padding: 3px 12px; margin-bottom: 1rem;
-}
-
-.section-label {
-    font-family: 'DM Mono', monospace;
-    font-size: 0.7rem; font-weight: 500; letter-spacing: 0.12em;
-    text-transform: uppercase; color: #8a94b0;
-    margin: 1.2rem 0 0.5rem 0; padding-bottom: 4px;
-    border-bottom: 1px solid #edf0f7;
-}
-
-div[data-testid="stHorizontalBlock"] div[data-testid="stButton"] > button {
-    font-family: 'DM Mono', monospace;
-    font-size: 0.9rem; font-weight: 500;
-    min-height: 42px; min-width: 42px; padding: 0;
-    border-radius: 8px; border: 1.5px solid #dde3f0;
-    background: #f8faff; color: #4a5578;
-    transition: all 0.15s ease; width: 100%;
-}
-div[data-testid="stHorizontalBlock"] div[data-testid="stButton"] > button:hover {
-    border-color: #6a8fff; background: #eef3ff; color: #2952cc;
-}
-/* Selected button — label starts with ● */
-div[data-testid="stHorizontalBlock"] div[data-testid="stButton"] > button[title^="●"],
-div[data-testid="stHorizontalBlock"] div[data-testid="stButton"]:has(p:-webkit-any(p)) > button {
-    background: #f8faff; color: #4a5578;
-}
-div[data-testid="stHorizontalBlock"] div[data-testid="stButton"] > button p {
-    margin: 0; line-height: 1;
-}
-
-.q-label { font-size: 0.92rem; font-weight: 400; color: #1e2d50; line-height: 1.3; padding: 4px 0; }
-
-.scale-header { font-family: 'DM Mono', monospace; font-size: 0.7rem; color: #aab3cc; text-align: center; }
-
-.score-badge {
-    display: inline-block; font-family: 'DM Mono', monospace;
-    font-size: 0.72rem; font-weight: 500;
-    background: #e8f0ff; color: #3560e0;
-    border-radius: 20px; padding: 1px 8px; margin-left: 8px;
-}
-.score-badge-warn  { background: #fff3e0; color: #d07000; }
-.score-badge-alert { background: #ffeaea; color: #c0392b; }
-.no-selection {
-    display: inline-block; font-family: 'DM Mono', monospace;
-    font-size: 0.72rem; background: #f0f2f8; color: #aab3cc;
-    border-radius: 20px; padding: 1px 8px; margin-left: 8px;
-}
-
-div.submit-btn > button {
-    background: #2952cc !important; color: white !important;
-    border: none !important; border-radius: 10px !important;
-    font-size: 1rem !important; font-weight: 600 !important;
-    min-height: 48px !important; width: 100% !important;
-}
-div.submit-btn > button:hover { background: #1e3fa8 !important; }
-
-.followup-card {
-    background: #fff8ec; border: 1px solid #ffd28a;
-    border-radius: 12px; padding: 18px 20px; margin: 1rem 0;
-}
-.followup-card h4 { color: #a05e00; margin: 0 0 8px 0; font-size: 0.95rem; }
-
-.success-card {
-    background: #f0fff6; border: 1px solid #7ed9a4;
-    border-radius: 12px; padding: 22px; text-align: center; margin-top: 1rem;
-}
-.success-card h3 { color: #1a6e40; margin: 0 0 6px 0; }
-.success-card p  { color: #3a8c5c; font-size: 0.88rem; margin: 0; }
-
-.thin-divider { border: none; border-top: 1px solid #edf0f7; margin: 0.3rem 0; }
-.delta-up   { color: #c0392b; font-size: 0.75rem; margin-left: 4px; }
-.delta-down { color: #1a6e40; font-size: 0.75rem; margin-left: 4px; }
-.delta-same { color: #8a94b0; font-size: 0.75rem; margin-left: 4px; }
-</style>
-""", unsafe_allow_html=True)
-
-
-# ============================================================
-# Questions
-# ============================================================
-
-SECTIONS = {
-    "Pain": [
-        "Pain in throat / mouth",
-        "Pain when swallowing",
-        "Jaw pain or tightness",
-        "Ear pain",
-        "Neck pain or stiffness",
-    ],
-    "Swallowing & Eating": [
-        "Difficulty swallowing solids",
-        "Difficulty swallowing liquids",
-        "Choking or coughing while eating",
-        "Loss of appetite",
-        "Unintended weight loss",
-    ],
-    "Mouth & Saliva": [
-        "Dry mouth (xerostomia)",
-        "Thick or sticky saliva",
-        "Mouth sores or ulcers",
-        "Difficulty opening mouth (trismus)",
-        "Change in taste",
-    ],
-    "Voice & Breathing": [
-        "Hoarseness or voice changes",
-        "Shortness of breath",
-        "Coughing",
-        "Mucus / phlegm buildup",
-    ],
-    "Skin & Appearance": [
-        "Skin irritation or redness (radiation area)",
-        "Skin peeling or blistering",
-        "Swelling in face or neck",
-    ],
-    "Energy & Mood": [
-        "Fatigue / tiredness",
-        "Difficulty sleeping",
-        "Anxiety or worry",
-        "Low mood or sadness",
-        "Difficulty concentrating",
-    ],
-    "Overall": [
-        "Overall discomfort today",
-    ],
-}
-
-ALL_QUESTIONS = [q for qs in SECTIONS.values() for q in qs]
-
-
-# ============================================================
-# Secrets helpers
-# ============================================================
-
+# ── Secrets ────────────────────────────────────────────────
 def _secret(*keys, default=None):
     for k in keys:
-        if k in st.secrets:
-            return st.secrets[k]
+        if k in st.secrets: return st.secrets[k]
     return default
 
 def _require_secret(*keys):
     v = _secret(*keys)
-    if v is None:
-        raise KeyError(f"Missing secret: {', '.join(keys)}")
+    if v is None: raise KeyError(f"Missing secret. Tried: {', '.join(keys)}")
     return v
 
+# ── OpenAI (for conversation note extraction) ───────────────
+OPENAI_API_KEY = _secret("openai_api_key", "OPENAI_API_KEY", "openai_key")
+openai_client: Optional[OpenAI] = None
+if OPENAI_API_KEY:
+    try: openai_client = OpenAI(api_key=OPENAI_API_KEY)
+    except: pass
 
-# ============================================================
-# Google Sheets
-# ============================================================
+def _openai_ready():
+    return openai_client is not None
 
-_sheet_cache: Dict = {}
+# ── Google Sheets ───────────────────────────────────────────
+sheet = None
+sheets_init_error: Optional[str] = None
 
-def _get_sheet():
-    if "ws" in _sheet_cache:
-        return _sheet_cache["ws"]
+def _init_sheets():
+    global sheet, sheets_init_error
+    if sheet is not None or sheets_init_error is not None: return
     try:
         creds = Credentials.from_service_account_info(
             _require_secret("gcp_service_account"),
-            scopes=["https://www.googleapis.com/auth/spreadsheets"],
+            scopes=["https://www.googleapis.com/auth/spreadsheets"]
         )
         book = gspread.authorize(creds).open_by_key(_require_secret("gsheet_id"))
-        try:
-            ws = book.worksheet("Form")
+        try: sheet_local = book.worksheet("Form")
         except Exception:
-            try:
-                ws = book.worksheet("Questionnaire")
-            except Exception:
-                ws = book.add_worksheet(title="Form", rows=2000, cols=20)
-                ws.append_row(["timestamp", "name", "chat"])
-        _sheet_cache["ws"] = ws
-        return ws
-    except Exception as e:
-        st.session_state["_sheets_error"] = str(e)
-        return None
+            sheet_local = book.add_worksheet(title="Form", rows=2000, cols=20)
+            sheet_local.append_row(["timestamp", "name", "json"])
+        sheet = sheet_local
+    except Exception as e: sheets_init_error = str(e)
 
-
-def load_previous_answers(name: str) -> Optional[Dict[str, int]]:
-    """Return the most recent questionnaire answers for this patient, or None."""
-    ws = _get_sheet()
-    if ws is None:
-        return None
+def load_all_visits(name: str) -> List[Dict]:
+    """Load ALL visits for a patient (not capped at 5), oldest first."""
+    _init_sheets()
+    if sheet is None: return []
     try:
-        rows = ws.get_all_values()
-        last_row = None
-        for row in rows[1:]:
+        visits = []
+        for row in sheet.get_all_values()[1:]:
             if len(row) >= 3 and row[1].strip().lower() == name.strip().lower():
-                last_row = row
-        if last_row is None:
-            return None
-        data = json.loads(last_row[2])
-        # Support both flat format {question: score} and wrapped {"answers": {...}}
-        if "answers" in data and isinstance(data["answers"], dict):
-            data = data["answers"]
-        if not any(q in data for q in ALL_QUESTIONS):
-            return None
-        return {q: int(data[q]) for q in ALL_QUESTIONS if q in data}
-    except Exception:
-        return None
+                try:
+                    d = json.loads(row[2])
+                    d["timestamp"] = row[0]
+                    visits.append(d)
+                except: continue
+        return visits  # oldest → newest
+    except: return []
 
+def extract_conversation_notes(visit: Dict) -> str:
+    """Use GPT to extract clinical notes from free-text patient messages in a visit."""
+    if not _openai_ready():
+        return ""
+    messages = visit.get("conversation", [])
+    feeling   = visit.get("feeling_level")
+    locations = visit.get("pain_locations", [])
+    symptoms  = visit.get("symptoms", [])
 
-def save_answers(name: str, answers: Dict[str, int], followup_text: str):
-    ws = _get_sheet()
-    if ws is None:
-        return
-    # Store questions dict directly (compatible with existing sheet format)
-    payload = dict(answers)
-    if followup_text:
-        payload["__followup__"] = followup_text
-    ws.append_row([
-        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        name,
-        json.dumps(payload),
-    ])
+    # Build set of auto-generated widget messages to exclude
+    widget_msgs = {
+        f"My feeling level today is {feeling}/10.",
+        f"I'm feeling {feeling} today.",
+        "Yes, I have pain today.",
+        "No, I don't have any pain today.",
+    }
+    if locations:
+        widget_msgs.add(f"Pain locations: {', '.join(sorted(locations))}.")
+    if symptoms:
+        widget_msgs.add(f"Symptoms today: {'; '.join(symptoms)}.")
 
+    patient_lines = [
+        m.get("content", "") for m in messages
+        if m.get("role") == "patient" and m.get("content", "") not in widget_msgs
+    ]
+    if not patient_lines:
+        return ""
+    try:
+        r = openai_client.chat.completions.create(
+            model=_secret("openai_model", default="gpt-4o-mini"),
+            messages=[
+                {"role": "system", "content": (
+                    "Clinical notes assistant. Extract ONLY medically relevant facts from the "
+                    "patient's free-text messages: pain details, severity, duration, triggers, "
+                    "mood, appetite, sleep, energy. One bullet per fact. No greetings or filler. "
+                    "If nothing clinically relevant, reply: None"
+                )},
+                {"role": "user", "content": "\n".join(f"- {l}" for l in patient_lines)}
+            ], max_tokens=300, temperature=0.2,
+        )
+        result = (r.choices[0].message.content or "").strip()
+        return "" if result == "None" else result
+    except:
+        return ""
 
-# ============================================================
-# Session state
-# ============================================================
+# ── CSS ─────────────────────────────────────────────────────
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
 
-DEFAULTS = {
-    "q_stage": "name",         # "name" | "form" | "followup" | "saving" | "done"
-    "patient_name": "",
-    "previous_answers": None,  # Dict[str,int] or None (None = first visit)
-    "answers": {},             # current; absent key = not yet selected
-    "followup_questions": [],  # list of (symptom, prev_score, curr_score)
-    "followup_answers": {},    # {symptom: answer_text}
-    "followup_required": False,
-    "followup_needed": [],     # kept for backward compat
-    "followup_text": "",       # kept for backward compat
-    "confirm_submit": False,
+*, [class*="css"] { font-family: 'Inter', sans-serif; }
+[data-testid="stAppViewContainer"] { background: #f4f6fb; }
+.block-container { padding: 1.5rem 2rem 3rem; max-width: 900px; }
+
+/* Header */
+.dash-header { margin-bottom: 1.5rem; }
+.dash-header h1 { font-size: 1.5rem; font-weight: 800; color: #0f1d35; margin: 0; }
+.dash-header p { font-size: 0.82rem; color: #8a94b0; margin: 2px 0 0; }
+
+/* Search */
+.panel {
+    background: white; border: 1px solid #e4e9f4;
+    border-radius: 14px; padding: 18px 20px; margin-bottom: 18px;
+    box-shadow: 0 1px 6px rgba(0,0,0,0.04);
 }
 
-for k, v in DEFAULTS.items():
-    if k not in st.session_state:
-        st.session_state[k] = v
+/* Patient status banner */
+.status-banner {
+    border-radius: 14px; padding: 20px 24px; margin-bottom: 20px;
+    border: 1.5px solid;
+}
+.status-banner.green  { background:#f0fdf4; border-color:#86efac; }
+.status-banner.orange { background:#fff7ed; border-color:#fdba74; }
+.status-banner.red    { background:#fff1f2; border-color:#fca5a5; }
+.status-title { font-size: 1rem; font-weight: 700; margin: 0 0 6px; }
+.status-title.green  { color: #166534; }
+.status-title.orange { color: #9a3412; }
+.status-title.red    { color: #991b1b; }
+
+/* Change badges */
+.badge {
+    display: inline-flex; align-items: center; gap: 5px;
+    border-radius: 20px; padding: 3px 11px; font-size: 0.78rem;
+    font-weight: 600; margin: 3px 4px 3px 0; border: 1px solid;
+}
+.badge.green  { background:#dcfce7; color:#166534; border-color:#86efac; }
+.badge.orange { background:#ffedd5; color:#9a3412; border-color:#fdba74; }
+.badge.red    { background:#fee2e2; color:#991b1b; border-color:#fca5a5; }
+.badge.blue   { background:#eff6ff; color:#1e40af; border-color:#93c5fd; }
+.badge.grey   { background:#f3f4f6; color:#6b7280; border-color:#d1d5db; }
+
+/* Visit card */
+.visit-card {
+    background: white; border: 1px solid #e4e9f4;
+    border-radius: 14px; padding: 16px 20px; margin-bottom: 12px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.04);
+}
+.visit-header {
+    display: flex; align-items: center; gap: 10px;
+    margin-bottom: 10px;
+}
+.visit-num {
+    background: #1f7aff; color: white; border-radius: 20px;
+    padding: 2px 11px; font-size: 0.72rem; font-weight: 700;
+    white-space: nowrap;
+}
+.visit-num.latest { background: #0f1d35; }
+.visit-ts {
+    font-size: 0.78rem; color: #8a94b0; font-weight: 500;
+}
+.feeling-pill {
+    margin-left: auto; border-radius: 20px; padding: 3px 12px;
+    font-size: 0.78rem; font-weight: 700;
+}
+
+/* Detail table inside expander */
+.detail-table { width:100%; border-collapse:collapse; font-size:0.84rem; }
+.detail-table tr { border-bottom:1px solid #f0f2f8; }
+.detail-table tr:last-child { border-bottom:none; }
+.detail-table td { padding: 8px 6px; vertical-align:top; line-height:1.5; }
+.detail-table td:first-child { font-weight:600; color:#64748b; width:35%; white-space:nowrap; }
+.detail-table td:last-child { color:#1a2540; }
+
+.tag {
+    display:inline-block; background:rgba(31,122,255,0.08); color:#1f5acc;
+    border-radius:16px; padding:2px 9px; font-size:0.78rem; margin:2px 3px 2px 0;
+}
+
+.no-visits { color:rgba(0,0,0,0.4); font-size:15px; text-align:center; padding:40px 0; }
+
+.stButton>button {
+    border-radius:10px !important; font-weight:600 !important;
+    background:#1f7aff !important; color:white !important;
+    border:none !important; padding:0.45rem 1.4rem !important;
+}
+.stButton>button:hover { background:#1665d8 !important; }
+
+/* Trend sparkline label */
+.trend-label { font-size:0.72rem; color:#8a94b0; margin-bottom:4px; font-weight:500; }
+</style>
+""", unsafe_allow_html=True)
+
+# ── Feeling colour helper ────────────────────────────────────────────────────
+def feeling_color(value) -> tuple:
+    try:
+        v = int(float(str(value)))
+        if v >= 8: return ("#dcfce7", "#166534")
+        if v >= 6: return ("#dbeafe", "#1e40af")
+        if v >= 4: return ("#fef9c3", "#854d0e")
+        return          ("#fee2e2", "#991b1b")
+    except Exception:
+        labels = {
+            "excellent": ("#dcfce7","#166534"), "very good": ("#dbeafe","#1e40af"),
+            "good":      ("#e0f2fe","#0369a1"), "fair":      ("#fef9c3","#854d0e"),
+            "poor":      ("#fee2e2","#991b1b"),
+        }
+        return labels.get(str(value).lower(), ("#f3f4f6","#374151"))
 
 
-# ============================================================
-# Helpers
-# ============================================================
+# ── Change detection ──────────────────────────────────────────────────────────
+def compute_visit_changes(current: Dict, previous: Optional[Dict]) -> List[Dict]:
+    """Compare two visits, return list of change dicts with level: green/orange/red."""
+    if previous is None:
+        return []
+    changes = []
 
-def score_class(score: int) -> str:
-    if score >= 4: return "score-badge-alert"
-    if score >= 2: return "score-badge-warn"
-    return "score-badge"
+    # Feeling level
+    try:
+        cur_f = int(float(str(current.get("feeling_level", 0))))
+        pre_f = int(float(str(previous.get("feeling_level", 0))))
+        d = cur_f - pre_f
+        if abs(d) >= 1:
+            level = "green" if d > 0 else ("red" if d <= -3 else "orange")
+            changes.append({"symptom": "Overall feeling", "current": cur_f,
+                            "previous": pre_f, "delta": d, "level": level})
+    except Exception:
+        pass
 
-def delta_html(current: int, previous: Optional[int]) -> str:
-    if previous is None: return ""
-    diff = current - previous
-    if diff > 0: return f'<span class="delta-up">▲{diff}</span>'
-    if diff < 0: return f'<span class="delta-down">▼{abs(diff)}</span>'
-    return '<span class="delta-same">—</span>'
+    # New / resolved pain locations
+    cur_locs = set(current.get("pain_locations", []))
+    pre_locs = set(previous.get("pain_locations", []))
+    for loc in cur_locs - pre_locs:
+        changes.append({"symptom": f"New pain: {loc}", "current": "new",
+                        "previous": "none", "delta": None, "level": "red"})
+    for loc in pre_locs - cur_locs:
+        changes.append({"symptom": f"Pain resolved: {loc}", "current": "none",
+                        "previous": "present", "delta": None, "level": "green"})
 
-def check_followup(current: Dict[str, int], previous: Optional[Dict[str, int]]):
-    flagged = []
-    for q, score in current.items():
-        prev = (previous or {}).get(q, 0)
-        if score >= 5 or (score - prev) >= 3:
-            flagged.append((q, score, prev))
-    return flagged
+    # Pain severity per region
+    cur_sev = current.get("pain_severity", {})
+    pre_sev = previous.get("pain_severity", {})
+    for region in set(list(cur_sev.keys()) + list(pre_sev.keys())):
+        c_v = cur_sev.get(region)
+        p_v = pre_sev.get(region)
+        if c_v is not None and p_v is not None:
+            try:
+                d = int(c_v) - int(p_v)
+                if abs(d) >= 1:
+                    level = "green" if d < 0 else ("red" if d >= 3 else "orange")
+                    changes.append({"symptom": f"{region} pain", "current": c_v,
+                                    "previous": p_v, "delta": d, "level": level})
+            except Exception:
+                pass
 
+    # New / resolved symptoms
+    cur_syms = set(current.get("symptoms", []))
+    pre_syms = set(previous.get("symptoms", []))
+    for s in cur_syms - pre_syms:
+        changes.append({"symptom": s, "current": "new", "previous": "none",
+                        "delta": None, "level": "orange"})
+    for s in pre_syms - cur_syms:
+        changes.append({"symptom": s, "current": "resolved", "previous": "present",
+                        "delta": None, "level": "green"})
 
-def detect_followups(
-    current_answers: Dict[str, int],
-    previous_answers: Optional[Dict[str, int]],
-) -> List[tuple]:
-    """
-    Returns a list of (symptom, prev_score, curr_score) tuples requiring follow-up.
-    Triggers when:
-      - current score == 5 (maximum), OR
-      - score increased by more than 2 points vs previous visit.
-    Does NOT trigger if score decreased (improvement).
-    """
-    flagged = []
-    prev = previous_answers or {}
-    for symptom, curr_score in current_answers.items():
-        # If no previous visit at all, treat every score=5 as new
-        # If previous visit exists but symptom wasn't recorded, use None (unknown)
-        if previous_answers is None:
-            prev_score = None
-        else:
-            prev_score = previous_answers.get(symptom)  # None if not in previous visit
-
-        # Determine numeric previous for comparison (use curr as fallback so no false increase)
-        prev_numeric = prev_score if prev_score is not None else 0
-
-        # Skip entirely if patient already had this score last visit — nothing changed
-        if prev_score is not None and curr_score == prev_score:
-            continue
-
-        # Skip if patient already had 5 last visit (established maximum, already known)
-        if prev_score is not None and prev_score >= 5:
-            continue
-
-        # Trigger 1: newly reaching maximum (5) this visit
-        is_new_maximum = curr_score == 5
-
-        # Trigger 2: score jumped by more than 2 points vs last visit
-        increased_significantly = (curr_score - prev_numeric) > 2
-
-        if is_new_maximum or increased_significantly:
-            flagged.append((symptom, prev_score if prev_score is not None else 0, curr_score))
-
-    return flagged
+    return changes
 
 
-# ============================================================
-# Page header
-# ============================================================
+def overall_status(changes: List[Dict]) -> str:
+    if not changes: return "green"
+    levels = [c["level"] for c in changes]
+    if "red" in levels:    return "red"
+    if "orange" in levels: return "orange"
+    return "green"
 
-is_returning = st.session_state.previous_answers is not None
-sub = (
-    "Pre-filled from your last visit · Change any value or keep as is · Under 30 seconds"
-    if is_returning else
-    "Rate each symptom from 0 (none) to 5 (severe) · Under 30 seconds"
-)
-st.markdown(f"""
-<div class="page-header">
-    <div style="font-size:2rem; line-height:1;">🏥</div>
-    <div>
-        <h1>Head &amp; Neck Cancer — Symptom Check</h1>
-        <p>{sub}</p>
+
+# ── Badge helpers ─────────────────────────────────────────────────────────────
+def badge_html(text: str, level: str) -> str:
+    icons = {"green": "🟢", "orange": "🟠", "red": "🔴"}
+    icon  = icons.get(level, "")
+    return f'<span class="badge {level}">{icon} {text}</span>'
+
+
+def change_badge_html(c: Dict) -> str:
+    sym = c["symptom"]
+    d   = c["delta"]
+    lvl = c["level"]
+    cur = c["current"]
+    if d is not None:
+        arrow = "↑" if d > 0 else "↓"
+        label = f"{sym} {arrow}{abs(d)}"
+    elif cur == "new":
+        label = f"{sym} (new)"
+    elif cur in ("resolved", "none"):
+        label = f"{sym} resolved"
+    else:
+        label = sym
+    return badge_html(label, lvl)
+
+
+# ── Patient status summary banner ─────────────────────────────────────────────
+def render_summary_status(name: str, latest: Dict, previous: Optional[Dict]):
+    changes = compute_visit_changes(latest, previous)
+    status  = overall_status(changes)
+
+    titles = {
+        "green":  ("✅ Stable",            "No concerning changes since last visit."),
+        "orange": ("🟠 Monitor",           "Some symptoms have changed — review below."),
+        "red":    ("🔴 Attention needed",  "Significant changes detected. Review urgently."),
+    }
+    title, subtitle = titles[status]
+
+    badges = "".join(change_badge_html(c) for c in changes) if changes \
+             else '<span style="font-size:0.83rem;color:#6b7280;">No changes from previous visit</span>'
+
+    ts      = latest.get("timestamp", "")
+    feeling = latest.get("feeling_level", "—")
+    f_bg, f_fg = feeling_color(feeling) if feeling != "—" else ("#f3f4f6","#6b7280")
+
+    st.markdown(f"""
+<div class="status-banner {status}">
+  <div style="display:flex;align-items:flex-start;justify-content:space-between;
+              flex-wrap:wrap;gap:12px;">
+    <div style="flex:1;min-width:260px;">
+      <div class="status-title {status}">{title}</div>
+      <div style="font-size:0.82rem;color:#6b7280;margin-bottom:10px;">{subtitle}</div>
+      <div>{badges}</div>
     </div>
+    <div style="text-align:right;white-space:nowrap;">
+      <div style="font-size:0.72rem;color:#9ca3af;margin-bottom:4px;">Latest visit</div>
+      <div style="font-size:0.8rem;font-weight:600;color:#374151;">{ts}</div>
+      <div style="margin-top:6px;">
+        <span style="background:{f_bg};color:{f_fg};border-radius:16px;
+                     padding:3px 12px;font-size:0.78rem;font-weight:700;">
+          Feeling {feeling}/10
+        </span>
+      </div>
+    </div>
+  </div>
 </div>
 """, unsafe_allow_html=True)
 
 
-# ============================================================
-# STAGE: Name entry
-# ============================================================
+# ── Visit card ────────────────────────────────────────────────────────────────
+def render_visit_card(visit: Dict, visit_num: int, total: int, notes: str,
+                      previous: Optional[Dict] = None):
+    timestamp = visit.get("timestamp", "Unknown date")
+    feeling   = visit.get("feeling_level")
+    pain      = visit.get("pain")
+    locations = visit.get("pain_locations", [])
+    symptoms  = visit.get("symptoms", [])
+    is_latest = (visit_num == total)
 
-if st.session_state.q_stage == "name":
+    changes = compute_visit_changes(visit, previous)
+    status  = overall_status(changes)
 
-    _, mid, _ = st.columns([1, 2, 1])
-    with mid:
-        st.markdown("""
-        <div class="name-card">
-            <h2>Welcome</h2>
-            <p>Please enter your name. We'll load your previous answers if available,
-               so you only need to update anything that has changed.</p>
-        </div>
-        """, unsafe_allow_html=True)
+    num_cls    = "visit-num latest" if is_latest else "visit-num"
+    latest_lbl = " · Latest" if is_latest else ""
+    f_bg, f_fg = feeling_color(feeling) if feeling is not None else ("#f3f4f6","#6b7280")
 
-        name = st.text_input("Your full name", placeholder="e.g. Jane Smith", key="name_input")
-        st.markdown("<br>", unsafe_allow_html=True)
+    badges = "".join(change_badge_html(c) for c in changes) if changes \
+             else '<span style="font-size:0.78rem;color:#9ca3af;">No changes vs prior visit</span>'
 
-        if st.button("Continue →", key="name_btn"):
-            if not name.strip():
-                st.warning("Please enter your name.")
-            else:
-                with st.spinner("Looking up your records…"):
-                    prev = load_previous_answers(name.strip())
-                st.session_state.patient_name    = name.strip()
-                st.session_state.previous_answers = prev
-                # Pre-populate if returning; empty dict if first visit
-                st.session_state.answers = dict(prev) if prev else {}
-                st.session_state.q_stage = "form"
-                st.rerun()
-
-    st.stop()
-
-
-# ============================================================
-# STAGE: Questionnaire form
-# ============================================================
-
-elif st.session_state.q_stage == "form":
-
-    prev_answers = st.session_state.previous_answers
-
-    if prev_answers is not None:
-        st.markdown(
-            '<div class="returning-badge">✓ Returning patient · '
-            'Pre-filled from last visit · Change anything that has changed</div>',
-            unsafe_allow_html=True,
-        )
-    else:
-        st.markdown(
-            '<div class="firstvisit-badge">✦ First visit · '
-            'Please rate each symptom below</div>',
-            unsafe_allow_html=True,
-        )
-
-    # Scale header
-    hc_q, *hc_s = st.columns([6, 1, 1, 1, 1, 1, 1])
-    hc_q.markdown(
-        '<div class="scale-header" style="text-align:left; font-size:0.72rem;">SYMPTOM</div>',
-        unsafe_allow_html=True,
-    )
-    for i, col in enumerate(hc_s):
-        lbl = ["None", "Mild", "Mild+", "Mod", "Severe", "Max"][i]
-        col.markdown(
-            f'<div class="scale-header">{i}<br>'
-            f'<span style="font-size:0.6rem; color:#c0c8de;">{lbl}</span></div>',
-            unsafe_allow_html=True,
-        )
-    st.markdown('<hr class="thin-divider">', unsafe_allow_html=True)
-
-    # JS observer that highlights any score button whose label contains ●
-    components.html("""
-    <script>
-    (function() {
-        function highlight() {
-            const btns = window.parent.document.querySelectorAll(
-                'div[data-testid="stHorizontalBlock"] div[data-testid="stButton"] button'
-            );
-            btns.forEach(btn => {
-                const txt = (btn.innerText || btn.textContent || "").trim();
-                if (txt.startsWith("●")) {
-                    btn.style.cssText = "background:#2952cc !important; color:white !important; border-color:#2952cc !important; font-weight:700 !important;";
-                } else {
-                    if (btn.style.background.includes("41, 82") || btn.style.background === "#2952cc") {
-                        btn.style.cssText = "";
-                    }
-                }
-            });
-        }
-        highlight();
-        new MutationObserver(highlight).observe(
-            window.parent.document.body, { childList: true, subtree: true }
-        );
-    })();
-    </script>
-    """, height=0)
-
-    for section, questions in SECTIONS.items():
-        st.markdown(f'<div class="section-label">{section}</div>', unsafe_allow_html=True)
-
-        for q in questions:
-            current_val = st.session_state.answers.get(q)
-
-            col_q, *col_s = st.columns([6, 1, 1, 1, 1, 1, 1])
-
-            with col_q:
-                st.markdown(f'<div class="q-label">{q}</div>', unsafe_allow_html=True)
-
-            for i, col in enumerate(col_s):
-                selected = (current_val == i)
-                label = f"● {i}" if selected else str(i)
-                if col.button(label, key=f"q_{q}_{i}"):
-                    st.session_state.answers[q] = i
-                    st.rerun()
-
-    st.markdown("<br>", unsafe_allow_html=True)
-
-    unanswered = [q for q in ALL_QUESTIONS if q not in st.session_state.answers]
-
-    if unanswered and not st.session_state.confirm_submit:
-        st.markdown(
-            f'<div style="font-size:0.88rem; color:#c0392b; margin-bottom:0.7rem;">'
-            f'⚠️ {len(unanswered)} symptom(s) not yet rated</div>',
-            unsafe_allow_html=True,
-        )
-
-    if unanswered and st.session_state.confirm_submit:
-        # Confirmation prompt
-        st.markdown(
-            f'<div style="background:#fff8ec; border:1px solid #ffd28a; border-radius:10px; '
-            f'padding:14px 18px; margin-bottom:1rem;">'
-            f'<strong style="color:#a05e00;">Are you sure you want to submit?</strong><br>'
-            f'<span style="font-size:0.85rem; color:#7a5000;">'
-            f'{len(unanswered)} symptom(s) are still unanswered. '
-            f'Unanswered questions will be skipped.</span></div>',
-            unsafe_allow_html=True,
-        )
-        c1, c2 = st.columns(2)
-        with c1:
-            st.markdown('<div class="submit-btn">', unsafe_allow_html=True)
-            if st.button("Yes, submit anyway →", key="confirm_yes"):
-                flagged = detect_followups(st.session_state.answers, prev_answers)
-                st.session_state.followup_questions = flagged
-                st.session_state.followup_answers   = {}
-                st.session_state.followup_required  = len(flagged) > 0
-                st.session_state.followup_needed    = flagged  # compat
-                st.session_state.confirm_submit     = False
-                st.session_state.q_stage = "followup" if flagged else "saving"
-                st.rerun()
-            st.markdown('</div>', unsafe_allow_html=True)
-        with c2:
-            if st.button("← Go back and complete", key="confirm_no"):
-                st.session_state.confirm_submit = False
-                st.rerun()
-    else:
-        st.markdown('<div class="submit-btn">', unsafe_allow_html=True)
-        if st.button("Submit questionnaire →", key="submit_btn"):
-            if unanswered:
-                st.session_state.confirm_submit = True
-                st.rerun()
-            else:
-                flagged = detect_followups(st.session_state.answers, prev_answers)
-                st.session_state.followup_questions = flagged
-                st.session_state.followup_answers   = {}
-                st.session_state.followup_required  = len(flagged) > 0
-                st.session_state.followup_needed    = flagged  # compat
-                st.session_state.q_stage = "followup" if flagged else "saving"
-                st.rerun()
-        st.markdown('</div>', unsafe_allow_html=True)
-
-
-# ============================================================
-# STAGE: Follow-up (per-symptom questions)
-# ============================================================
-
-elif st.session_state.q_stage == "followup":
-
-    st.markdown("""
-    <div class="page-header">
-        <div style="font-size:2rem; line-height:1;">📋</div>
-        <div>
-            <h1>A few follow-up questions</h1>
-            <p>We noticed some symptoms that may need more detail. Please answer briefly for each one below.</p>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    flagged = st.session_state.followup_questions  # list of (symptom, prev, curr)
-
-    if not flagged:
-        st.info("No follow-up questions needed.")
-        if st.button("Continue →", key="fup_none"):
-            st.session_state.q_stage = "saving"
-            st.rerun()
-    else:
-        for idx, (symptom, prev_score, curr_score) in enumerate(flagged):
-            diff = curr_score - prev_score
-            if curr_score == 5:
-                trigger_label = "scored the maximum (5 / 5)"
-            else:
-                trigger_label = f"increased by {diff} points ({prev_score} → {curr_score})"
-
-            st.markdown(
-                f'''<div style="background:#f8faff; border:1px solid #e2e8f4; border-radius:12px;
-                         padding:18px 20px; margin-bottom:14px;">
-                    <div style="font-size:0.7rem; font-weight:600; letter-spacing:0.1em;
-                                text-transform:uppercase; color:#8a94b0; margin-bottom:6px;">
-                        Symptom {idx + 1} of {len(flagged)}
-                    </div>
-                    <div style="font-size:1rem; font-weight:600; color:#1a2540; margin-bottom:4px;">
-                        {symptom}
-                    </div>
-                    <div style="font-size:0.82rem; color:#c0392b;">
-                        This symptom {trigger_label}
-                    </div>
-                </div>''',
-                unsafe_allow_html=True,
-            )
-
-            existing = st.session_state.followup_answers.get(symptom, "")
-            answer = st.text_area(
-                "Can you briefly describe what changed?",
-                value=existing,
-                height=80,
-                placeholder="e.g. Started after eating, worse at night, began two days ago…",
-                key=f"fup_{idx}",
-            )
-            st.session_state.followup_answers[symptom] = answer
-
-        st.markdown("<br>", unsafe_allow_html=True)
-        st.markdown('<div class="submit-btn">', unsafe_allow_html=True)
-        if st.button("Submit follow-up answers →", key="fup_submit"):
-            # Store combined text for backward compat summary display
-            combined = "; ".join(
-                f"{sym}: {ans}"
-                for sym, ans in st.session_state.followup_answers.items()
-                if ans.strip()
-            )
-            st.session_state.followup_text = combined
-            st.session_state.q_stage = "saving"
-            st.rerun()
-        st.markdown('</div>', unsafe_allow_html=True)
-
-
-# ============================================================
-# STAGE: Saving
-# ============================================================
-
-elif st.session_state.q_stage == "saving":
-
-    with st.spinner("Saving your responses…"):
-        save_answers(
-            st.session_state.patient_name,
-            st.session_state.answers,
-            st.session_state.followup_text,
-        )
-    st.session_state.q_stage = "done"
-    st.rerun()
-
-
-# ============================================================
-# STAGE: Done / Summary
-# ============================================================
-
-elif st.session_state.q_stage == "done":
+    border_c = {"green":"#86efac","orange":"#fdba74","red":"#fca5a5"}.get(status,"#e4e9f4")
 
     st.markdown(f"""
-    <div class="success-card">
-        <h3>✅ Questionnaire submitted</h3>
-        <p>Thank you, <strong>{st.session_state.patient_name}</strong>.
-           Your care team will review your responses.</p>
-    </div>
-    """, unsafe_allow_html=True)
+<div class="visit-card" style="border-left:4px solid {border_c};">
+  <div class="visit-header">
+    <span class="{num_cls}">Visit {visit_num}{latest_lbl}</span>
+    <span class="visit-ts">{timestamp}</span>
+    <span class="feeling-pill" style="background:{f_bg};color:{f_fg};">
+      Feeling {feeling if feeling is not None else '—'}/10
+    </span>
+  </div>
+  <div style="margin-bottom:2px;">{badges}</div>
+</div>
+""", unsafe_allow_html=True)
 
-    st.markdown("<br>", unsafe_allow_html=True)
-    st.markdown('<div class="section-label">Your responses — summary</div>', unsafe_allow_html=True)
+    with st.expander("Show details", expanded=False):
+        pain_str = "Yes" if pain is True else ("No" if pain is False else "—")
+        loc_html = "".join(f'<span class="tag">{l}</span>' for l in locations) \
+                   if locations else "<span style='opacity:.4'>None / N/A</span>"
+        sym_html = "".join(f'<span class="tag">{s}</span>' for s in symptoms) \
+                   if symptoms else "<span style='opacity:.4'>None reported</span>"
 
-    hq, hp, hc, hd = st.columns([5, 1, 1, 1])
-    hq.markdown('<div class="scale-header" style="text-align:left;">Symptom</div>', unsafe_allow_html=True)
-    hp.markdown('<div class="scale-header">Prev</div>', unsafe_allow_html=True)
-    hc.markdown('<div class="scale-header">Now</div>', unsafe_allow_html=True)
-    hd.markdown('<div class="scale-header">Δ</div>', unsafe_allow_html=True)
-    st.markdown('<hr class="thin-divider">', unsafe_allow_html=True)
-
-    prev_answers = st.session_state.previous_answers or {}
-
-    for q in ALL_QUESTIONS:
-        curr = st.session_state.answers.get(q, 0)
-        prev = prev_answers.get(q)
-        diff = (curr - prev) if prev is not None else None
-
-        if diff is None:
-            chg = '<span style="color:#aab3cc; font-size:0.82rem;">—</span>'
-        elif diff > 0:
-            chg = f'<span style="color:#c0392b; font-size:0.82rem;">▲{diff}</span>'
-        elif diff < 0:
-            chg = f'<span style="color:#1a6e40; font-size:0.82rem;">▼{abs(diff)}</span>'
+        if notes and notes.strip() and notes != "None":
+            lines = [l.lstrip("•-– ").strip() for l in notes.split("\n")
+                     if l.strip() and l.strip() != "None"]
+            notes_html = ("<ul style='margin:0;padding-left:16px;line-height:1.8;'>" +
+                          "".join(f"<li>{l}</li>" for l in lines) + "</ul>")
         else:
-            chg = '<span style="color:#aab3cc; font-size:0.82rem;">—</span>'
+            notes_html = "<span style='opacity:.4'>No additional notes</span>"
 
-        c1, c2, c3, c4 = st.columns([5, 1, 1, 1])
-        c1.markdown(f'<div style="font-size:0.85rem; color:#1e2d50; padding:2px 0;">{q}</div>', unsafe_allow_html=True)
-        c2.markdown(f'<div class="scale-header" style="color:#8a94b0;">{"—" if prev is None else prev}</div>', unsafe_allow_html=True)
-        c3.markdown(f'<div class="scale-header"><span class="{score_class(curr)} score-badge">{curr}</span></div>', unsafe_allow_html=True)
-        c4.markdown(f'<div class="scale-header">{chg}</div>', unsafe_allow_html=True)
+        followup_qa = visit.get("followup_qa", [])
+        if followup_qa:
+            fup_items = [
+                f"<li><strong>{item.get('question','')}</strong><br>{item.get('answer','')}</li>"
+                for item in followup_qa if item.get("answer","").strip()
+            ]
+            fup_html = ("<ul style='margin:0;padding-left:16px;line-height:1.8;'>" +
+                        "".join(fup_items) + "</ul>") if fup_items \
+                       else "<span style='opacity:.4'>None</span>"
+        else:
+            fup_html = "<span style='opacity:.4'>None</span>"
 
-    # Show per-symptom follow-up answers if any
-    followup_answers = st.session_state.get("followup_answers", {})
-    answered = {k: v for k, v in followup_answers.items() if v.strip()}
-    if answered:
-        st.markdown("<br>", unsafe_allow_html=True)
-        st.markdown('<div class="section-label">Follow-up answers</div>', unsafe_allow_html=True)
-        for symptom, answer in answered.items():
-            st.markdown(
-                f'<div style="background:#f8faff; border:1px solid #e2e8f4; border-radius:10px; '
-                f'padding:12px 16px; margin-bottom:8px;">' 
-                f'<div style="font-size:0.75rem; font-weight:600; color:#8a94b0; '
-                f'text-transform:uppercase; letter-spacing:0.08em; margin-bottom:4px;">{symptom}</div>'
-                f'<div style="font-size:0.88rem; color:#1e2d50;">{answer}</div></div>',
-                unsafe_allow_html=True,
+        # Questionnaire scores (flat int values that aren't standard checkin keys)
+        SKIP_KEYS = {"timestamp","feeling_level","pain","pain_locations","pain_severity",
+                     "pain_reason","symptoms","conversation","followup_qa","__followup__","name"}
+        q_answers = {k: v for k, v in visit.items()
+                     if k not in SKIP_KEYS and isinstance(v, (int, float))
+                     and not k.startswith("_")}
+
+        rows_data = [
+            ("Pain reported",    pain_str),
+            ("Pain locations",   loc_html),
+            ("Symptoms",         sym_html),
+            ("Clinical notes",   notes_html),
+            ("Follow-up Q&A",    fup_html),
+        ]
+        if q_answers:
+            q_rows = "".join(
+                f"<tr><td style='padding:3px 8px;color:#64748b;'>{k}</td>"
+                f"<td style='padding:3px 8px;font-weight:600;'>{v}/5</td></tr>"
+                for k, v in sorted(q_answers.items())
             )
-    elif st.session_state.followup_text:
-        st.markdown("<br>", unsafe_allow_html=True)
-        st.markdown('<div class="section-label">Your notes</div>', unsafe_allow_html=True)
-        st.markdown(
-            f'<div style="background:#f8faff; border:1px solid #e2e8f4; border-radius:8px; '
-            f'padding:12px 16px; font-size:0.88rem; color:#1e2d50;">'
-            f'{st.session_state.followup_text}</div>',
-            unsafe_allow_html=True,
-        )
+            rows_data.append(("Questionnaire scores",
+                              f"<table style='border-collapse:collapse;width:100%;font-size:0.8rem;'>"
+                              f"{q_rows}</table>"))
 
-    st.markdown("<br>", unsafe_allow_html=True)
-    if st.button("← New check-in", key="restart"):
-        for k, v in DEFAULTS.items():
-            st.session_state[k] = v
-        st.rerun()
+        table_rows = "".join(f"<tr><td>{r}</td><td>{v}</td></tr>" for r, v in rows_data)
+        st.markdown(f"<table class='detail-table'>{table_rows}</table>",
+                    unsafe_allow_html=True)
+
+
+# ── App ───────────────────────────────────────────────────────────────────────
+_init_sheets()
+
+st.markdown("""
+<div class="dash-header">
+  <h1>🏥 Provider Dashboard</h1>
+  <p>Head &amp; Neck Cancer Symptom Check-In &nbsp;·&nbsp; Patient Visit History</p>
+</div>
+""", unsafe_allow_html=True)
+
+if sheets_init_error:
+    st.error(f"Google Sheets connection failed: {sheets_init_error}")
+    st.stop()
+
+# ── Search ────────────────────────────────────────────────────────────────────
+st.markdown('<div class="panel">', unsafe_allow_html=True)
+st.markdown("**Search patient by name**")
+col_input, col_btn = st.columns([4, 1], gap="small")
+with col_input:
+    patient_name = st.text_input("", placeholder="Enter patient name…",
+                                 label_visibility="collapsed", key="patient_search")
+with col_btn:
+    search = st.button("Search", use_container_width=True)
+st.markdown("</div>", unsafe_allow_html=True)
+
+# ── Results ───────────────────────────────────────────────────────────────────
+if search or st.session_state.get("last_searched"):
+    name = patient_name.strip() if search else st.session_state.get("last_searched", "")
+    if search and name:
+        st.session_state["last_searched"] = name
+        st.session_state["visits_cache"]  = None
+
+    if not name:
+        st.warning("Please enter a patient name.")
+        st.stop()
+
+    if st.session_state.get("visits_cache") is None or \
+       st.session_state.get("visits_cache_name") != name:
+        with st.spinner(f"Loading visits for **{name}**…"):
+            visits = load_all_visits(name)
+
+        if not visits:
+            st.markdown(f'<div class="no-visits">No records found for <b>{name}</b>.</div>',
+                        unsafe_allow_html=True)
+            st.stop()
+
+        notes_list = []
+        with st.spinner("Extracting clinical notes…"):
+            for v in visits:
+                notes_list.append(extract_conversation_notes(v))
+
+        st.session_state["visits_cache"]      = visits
+        st.session_state["notes_cache"]       = notes_list
+        st.session_state["visits_cache_name"] = name
+    else:
+        visits     = st.session_state["visits_cache"]
+        notes_list = st.session_state["notes_cache"]
+
+    total    = len(visits)
+    latest   = visits[-1]
+    previous = visits[-2] if total >= 2 else None
+
+    st.markdown(f"### {name} &nbsp;·&nbsp; {total} visit{'s' if total != 1 else ''}",
+                unsafe_allow_html=True)
+
+    # ── Status banner ─────────────────────────────────────────────────────────
+    render_summary_status(name, latest, previous)
+
+    st.markdown("---")
+    st.markdown("#### Visit history")
+
+    # Newest first
+    for i, (visit, notes) in enumerate(zip(reversed(visits), reversed(notes_list))):
+        visit_num  = total - i
+        prev_visit = visits[total - i - 2] if (total - i - 2) >= 0 else None
+        render_visit_card(visit, visit_num, total, notes, previous=prev_visit)
