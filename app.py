@@ -798,36 +798,32 @@ elif st.session_state.stage == 3:
                             st.session_state.pop(f"_transcript_reason_{r}", None)
                             st.rerun()
                     else:
-                        # Draft key holds the typed/spoken value between reruns
-                        draft_key = f"_draft_reason_{r}"
-                        if draft_key not in st.session_state:
-                            st.session_state[draft_key] = ""
+                        # widget_key is OWNED by st.text_input — never write to it directly
+                        widget_key = f"_draft_reason_{r}"
+                        if widget_key not in st.session_state:
+                            st.session_state[widget_key] = _tr_reason or ""
 
-                        # Voice path: seed draft as soon as transcript lands
-                        if _tr_reason and not st.session_state[draft_key]:
-                            st.session_state[draft_key] = _tr_reason
+                        # Voice landed: pre-fill widget before it renders
+                        if _tr_reason and not st.session_state[widget_key]:
+                            st.session_state[widget_key] = _tr_reason
 
-                        st.text_input(
-                            question,
-                            key=draft_key,
-                        )
-                        voice_input_widget(
-                            f"reason_{r}",
-                            label="🎤 Speak your answer",
-                        )
+                        st.text_input(question, key=widget_key)
+                        voice_input_widget(f"reason_{r}", label="🎤 Speak your answer")
 
-                        draft_val = st.session_state.get(draft_key, "").strip()
+                        # Read value AFTER widget renders (never set it after this point)
+                        current_val = st.session_state.get(widget_key, "").strip()
 
-                        # Auto-collapse as soon as voice transcript arrives
-                        if _tr_reason and draft_val:
-                            st.session_state.pain_reason[r] = draft_val
-                            st.session_state[draft_key] = ""
+                        # Save button — moves value out of widget into pain_reason
+                        if current_val and st.button("✅ Save answer", key=f"save_{r}"):
+                            st.session_state.pain_reason[r] = current_val
+                            # Delete the widget key so it resets cleanly on next render
+                            del st.session_state[widget_key]
                             st.rerun()
 
-                        # Save button for typed answers
-                        if draft_val and st.button("✅ Save answer", key=f"save_{r}"):
-                            st.session_state.pain_reason[r] = draft_val
-                            st.session_state[draft_key] = ""
+                        # Voice auto-save: if transcript has landed and matches widget, commit
+                        elif _tr_reason and current_val == _tr_reason:
+                            st.session_state.pain_reason[r] = current_val
+                            del st.session_state[widget_key]
                             st.rerun()
 
         # Other / custom pain location
