@@ -3,6 +3,7 @@ from datetime import datetime
 from typing import Dict, List, Optional
 
 import streamlit as st
+import streamlit.components.v1 as components
 import gspread
 from google.oauth2.service_account import Credentials
 
@@ -73,10 +74,18 @@ div[data-testid="stHorizontalBlock"] div[data-testid="stButton"] > button {
     min-height: 42px; min-width: 42px; padding: 0;
     border-radius: 8px; border: 1.5px solid #dde3f0;
     background: #f8faff; color: #4a5578;
-    transition: all 0.12s ease; width: 100%;
+    transition: all 0.15s ease; width: 100%;
 }
 div[data-testid="stHorizontalBlock"] div[data-testid="stButton"] > button:hover {
     border-color: #6a8fff; background: #eef3ff; color: #2952cc;
+}
+/* Selected button — label starts with ● */
+div[data-testid="stHorizontalBlock"] div[data-testid="stButton"] > button[title^="●"],
+div[data-testid="stHorizontalBlock"] div[data-testid="stButton"]:has(p:-webkit-any(p)) > button {
+    background: #f8faff; color: #4a5578;
+}
+div[data-testid="stHorizontalBlock"] div[data-testid="stButton"] > button p {
+    margin: 0; line-height: 1;
 }
 
 .q-label { font-size: 0.92rem; font-weight: 400; color: #1e2d50; line-height: 1.3; padding: 4px 0; }
@@ -399,27 +408,47 @@ elif st.session_state.q_stage == "form":
         )
     st.markdown('<hr class="thin-divider">', unsafe_allow_html=True)
 
+    # JS observer that highlights any score button whose label contains ●
+    components.html("""
+    <script>
+    (function() {
+        function highlight() {
+            const btns = window.parent.document.querySelectorAll(
+                'div[data-testid="stHorizontalBlock"] div[data-testid="stButton"] button'
+            );
+            btns.forEach(btn => {
+                const txt = (btn.innerText || btn.textContent || "").trim();
+                if (txt.startsWith("●")) {
+                    btn.style.cssText = "background:#2952cc !important; color:white !important; border-color:#2952cc !important; font-weight:700 !important;";
+                } else {
+                    if (btn.style.background.includes("41, 82") || btn.style.background === "#2952cc") {
+                        btn.style.cssText = "";
+                    }
+                }
+            });
+        }
+        highlight();
+        new MutationObserver(highlight).observe(
+            window.parent.document.body, { childList: true, subtree: true }
+        );
+    })();
+    </script>
+    """, height=0)
+
     for section, questions in SECTIONS.items():
         st.markdown(f'<div class="section-label">{section}</div>', unsafe_allow_html=True)
 
         for q in questions:
-            current_val = st.session_state.answers.get(q)      # None = not selected yet
-            prev_val    = (prev_answers or {}).get(q)
+            current_val = st.session_state.answers.get(q)
 
             col_q, *col_s = st.columns([6, 1, 1, 1, 1, 1, 1])
 
             with col_q:
-                if current_val is not None:
-                    badge = (
-                        f'<span class="{score_class(current_val)} score-badge">{current_val}</span>'
-                        f'{delta_html(current_val, prev_val)}'
-                    )
-                else:
-                    badge = '<span class="no-selection">—</span>'
-                st.markdown(f'<div class="q-label">{q}{badge}</div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="q-label">{q}</div>', unsafe_allow_html=True)
 
             for i, col in enumerate(col_s):
-                label = f"**{i}**" if (current_val == i) else str(i)
+                selected = (current_val == i)
+                label = f"● {i}" if selected else str(i)
                 if col.button(label, key=f"q_{q}_{i}"):
                     st.session_state.answers[q] = i
                     st.rerun()
