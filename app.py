@@ -1,277 +1,950 @@
 import json
-from typing import Dict, List, Optional
+from datetime import datetime
+from typing import Dict, List, Optional, Set
 
 import streamlit as st
+import streamlit.components.v1 as components
 import gspread
 from google.oauth2.service_account import Credentials
 from openai import OpenAI
 
-st.set_page_config(page_title="Provider Dashboard", page_icon="🏥", layout="centered")
+st.set_page_config(page_title="Cancer Symptom Check-In", page_icon="🩺", layout="centered")
 
-# ── Secrets ────────────────────────────────────────────────
+# ============================================================
+# MODERN UI STYLE
+# ============================================================
+
+st.markdown("""
+<style>
+
+.block-container{
+    padding-top:2rem;
+    max-width:900px;
+}
+
+h1{
+    font-weight:600;
+    margin-bottom:0.5rem;
+}
+
+h2,h3{
+    font-weight:500;
+}
+
+.stButton>button{
+    width:100%;
+    border-radius:10px;
+    padding:0.6rem 0.8rem;
+    font-size:15px;
+    border:1px solid #e1e5ee;
+    background:#f8f9fc;
+}
+
+.stButton>button:hover{
+    border:1px solid #7aa6ff;
+    background:#eef3ff;
+}
+
+.symptom-btn button{
+    border-radius:20px;
+}
+
+.card{
+    padding:20px;
+    border-radius:12px;
+    border:1px solid #e6e9f2;
+    background:white;
+    margin-bottom:15px;
+}
+
+.doctor-box{
+    padding:18px;
+    border-radius:12px;
+    background:#f1f6ff;
+    border:1px solid #cfe0ff;
+    font-size:15px;
+}
+
+.section-title{
+    font-size:18px;
+    font-weight:600;
+    margin-bottom:10px;
+}
+
+.success-box{
+    padding:18px;
+    border-radius:12px;
+    background:#ecfff1;
+    border:1px solid #a8e6b9;
+    font-size:16px;
+    text-align:center;
+}
+
+.followup-box{
+    padding:18px;
+    border-radius:12px;
+    background:#fff8f0;
+    border:1px solid #ffd6a0;
+    font-size:15px;
+    margin-bottom:12px;
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+# ============================================================
+# Secrets helpers
+# ============================================================
+
 def _secret(*keys, default=None):
     for k in keys:
-        if k in st.secrets: return st.secrets[k]
+        if k in st.secrets:
+            return st.secrets[k]
     return default
 
 def _require_secret(*keys):
     v = _secret(*keys)
-    if v is None: raise KeyError(f"Missing secret. Tried: {', '.join(keys)}")
+    if v is None:
+        raise KeyError(f"Missing secret. Tried: {', '.join(keys)}")
     return v
 
-# ── OpenAI (for conversation note extraction) ───────────────
+
+# ============================================================
+# OpenAI
+# ============================================================
+
 OPENAI_API_KEY = _secret("openai_api_key", "OPENAI_API_KEY", "openai_key")
 openai_client: Optional[OpenAI] = None
+openai_init_error: Optional[str] = None
+
 if OPENAI_API_KEY:
-    try: openai_client = OpenAI(api_key=OPENAI_API_KEY)
-    except: pass
+    try:
+        openai_client = OpenAI(api_key=OPENAI_API_KEY)
+    except Exception as e:
+        openai_init_error = str(e)
+else:
+    openai_init_error = "OpenAI API key not found."
 
-def _openai_ready():
-    return openai_client is not None
 
-# ── Google Sheets ───────────────────────────────────────────
+# ============================================================
+# Google Sheets
+# ============================================================
+
 sheet = None
 sheets_init_error: Optional[str] = None
 
 def _init_sheets():
     global sheet, sheets_init_error
-    if sheet is not None or sheets_init_error is not None: return
+    if sheet is not None or sheets_init_error is not None:
+        return
     try:
         creds = Credentials.from_service_account_info(
             _require_secret("gcp_service_account"),
-            scopes=["https://www.googleapis.com/auth/spreadsheets"]
+            scopes=["https://www.googleapis.com/auth/spreadsheets"],
         )
         book = gspread.authorize(creds).open_by_key(_require_secret("gsheet_id"))
-        try: sheet_local = book.worksheet("Form")
+        try:
+            ws = book.worksheet("Form")
         except Exception:
-            sheet_local = book.add_worksheet(title="Form", rows=2000, cols=20)
-            sheet_local.append_row(["timestamp", "name", "json"])
-        sheet = sheet_local
-    except Exception as e: sheets_init_error = str(e)
+            ws = book.add_worksheet(title="Form", rows=2000, cols=20)
+            ws.append_row(["timestamp", "name", "json"])
+        sheet = ws
+    except Exception as e:
+        sheets_init_error = str(e)
 
-def load_all_visits(name: str) -> List[Dict]:
-    """Load ALL visits for a patient (not capped at 5), oldest first."""
+def load_past_checkins(name: str) -> List[Dict]:
     _init_sheets()
-    if sheet is None: return []
+    if sheet is None:
+        return []
     try:
-        visits = []
-        for row in sheet.get_all_values()[1:]:
+        past: List[Dict] = []
+        rows = sheet.get_all_values()
+        for row in rows[1:]:
             if len(row) >= 3 and row[1].strip().lower() == name.strip().lower():
                 try:
                     d = json.loads(row[2])
                     d["timestamp"] = row[0]
-                    visits.append(d)
-                except: continue
-        return visits  # oldest → newest
-    except: return []
+                    past.append(d)
+                except Exception:
+                    continue
+        return past[-5:]
+    except Exception:
+        return []
 
-def extract_conversation_notes(visit: Dict) -> str:
-    """Use GPT to extract clinical notes from free-text patient messages in a visit."""
-    if not _openai_ready():
-        return ""
-    messages = visit.get("conversation", [])
-    feeling   = visit.get("feeling_level")
-    locations = visit.get("pain_locations", [])
-    symptoms  = visit.get("symptoms", [])
+def save_to_sheet(payload: Dict):
+    _init_sheets()
+    if sheet is None:
+        raise RuntimeError(f"Sheets unavailable: {sheets_init_error}")
+    sheet.append_row([
+        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        payload.get("name", "Unknown"),
+        json.dumps(payload),
+    ])
 
-    # Build set of auto-generated widget messages to exclude
-    widget_msgs = {
-        f"My feeling level today is {feeling}/10.",
-        f"I'm feeling {feeling} today.",
-        "Yes, I have pain today.",
-        "No, I don't have any pain today.",
-    }
-    if locations:
-        widget_msgs.add(f"Pain locations: {', '.join(sorted(locations))}.")
-    if symptoms:
-        widget_msgs.add(f"Symptoms today: {'; '.join(symptoms)}.")
 
-    patient_lines = [
-        m.get("content", "") for m in messages
-        if m.get("role") == "patient" and m.get("content", "") not in widget_msgs
-    ]
-    if not patient_lines:
-        return ""
+# ============================================================
+# Body map SVG
+# ============================================================
+
+def body_svg(colors: Dict[str, str]) -> str:
+
+    def c(p): return colors.get(p, "#cfd8e6")
+    stroke = "#6b7a90"
+
+    return f"""
+<svg width="260" height="410" viewBox="0 0 320 520" xmlns="http://www.w3.org/2000/svg">
+
+  <circle cx="160" cy="70" r="38" fill="{c('Head')}" stroke="{stroke}" stroke-width="2"/>
+  <rect x="110" y="120" width="100" height="70" rx="24" fill="{c('Chest')}" stroke="{stroke}" stroke-width="2"/>
+  <rect x="115" y="195" width="90" height="70" rx="22" fill="{c('Abdomen')}" stroke="{stroke}" stroke-width="2"/>
+
+  <rect x="60" y="140" width="40" height="120" rx="20" fill="{c('Left Arm')}" stroke="{stroke}" stroke-width="2"/>
+  <rect x="220" y="140" width="40" height="120" rx="20" fill="{c('Right Arm')}" stroke="{stroke}" stroke-width="2"/>
+
+  <rect x="130" y="270" width="35" height="150" rx="20" fill="{c('Left Leg')}" stroke="{stroke}" stroke-width="2"/>
+  <rect x="165" y="270" width="35" height="150" rx="20" fill="{c('Right Leg')}" stroke="{stroke}" stroke-width="2"/>
+
+</svg>
+"""
+
+
+# ============================================================
+# Session state
+# ============================================================
+
+DEFAULTS = {
+    "stage": -1,
+    "name": "",
+    "past_checkins": [],
+    "last_summary": None,
+    "last_pain_severity": {},
+    "feeling_level": None,
+    "pain_yesno": None,
+    "selected_parts": set(),
+    "pain_severity": {},
+    "pain_reason": {},
+    "symptoms": set(),
+    "submitted": False,
+    # Follow-up stage state
+    "followup_questions": [],       # list of question strings from GPT
+    "followup_answers": {},         # {question_index: answer_text}
+    "followup_generated": False,
+}
+
+for k, v in DEFAULTS.items():
+    if k not in st.session_state:
+        st.session_state[k] = v
+
+
+# ============================================================
+# Body map logic
+# ============================================================
+
+REGIONS = ["Head", "Chest", "Abdomen", "Left Arm", "Right Arm", "Left Leg", "Right Leg"]
+
+GREEN = "#6fd08c"
+ORANGE = "#f5a623"
+RED = "#e74c3c"
+
+
+def region_color_state(region: str) -> str:
+
+    last = st.session_state.last_pain_severity
+    selected = region in st.session_state.selected_parts
+
+    if not selected:
+        if region in last:
+            return ORANGE
+        return GREEN
+
+    # Once selected, always RED — persistent or new pain is clinically significant
+    return RED
+
+
+def current_svg_colors():
+    return {r: region_color_state(r) for r in REGIONS}
+
+
+# ============================================================
+# Worsening detection
+# ============================================================
+
+def detect_worsening(payload: Dict, last_summary: Optional[Dict]) -> Dict:
+    """
+    Returns a dict describing what got worse, or empty dict if nothing significant.
+    """
+    if not last_summary:
+        return {}
+
+    worse = {}
+
+    # Pain severity worsened
+    last_sev = last_summary.get("pain_severity", {})
+    worsened_pain = {}
+    for region, sev in payload.get("pain_severity", {}).items():
+        prev = last_sev.get(region, 0)
+        if sev >= prev + 2:
+            worsened_pain[region] = {"from": prev, "to": sev}
+    if worsened_pain:
+        worse["worsened_pain"] = worsened_pain
+
+    # New pain locations
+    last_locs = set(last_summary.get("pain_locations", []))
+    cur_locs = set(payload.get("pain_locations", []))
+    new_locs = cur_locs - last_locs
+    if new_locs:
+        worse["new_pain_locations"] = list(new_locs)
+
+    # Feeling level dropped
+    last_feeling = last_summary.get("feeling_level")
+    cur_feeling = payload.get("feeling_level")
+    if last_feeling is not None and cur_feeling is not None:
+        if cur_feeling <= last_feeling - 2:
+            worse["feeling_dropped"] = {"from": last_feeling, "to": cur_feeling}
+
+    # New symptoms
+    last_symptoms = set(last_summary.get("symptoms", []))
+    cur_symptoms = set(payload.get("symptoms", []))
+    new_symptoms = cur_symptoms - last_symptoms
+    if len(new_symptoms) >= 1:
+        worse["new_symptoms"] = list(new_symptoms)
+
+    return worse
+
+
+# ============================================================
+# GPT follow-up question generation
+# ============================================================
+
+def generate_followup_questions(payload: Dict, worse: Dict, last_summary: Dict) -> List[str]:
+    """
+    Generates at most 1 specific follow-up question, only when clinically necessary
+    and not already answered by the patient in the body map stage.
+    """
+    if openai_client is None:
+        return []
+
+    pain_reason = payload.get("pain_reason", {})
+    pain_severity = payload.get("pain_severity", {})
+
+    # Find the single most critical unanswered issue — strict priority order
+    critical_issue = None
+
+    # 1. Severity >= 8 with no reason given
+    for region, sev in pain_severity.items():
+        if sev >= 8 and region not in pain_reason:
+            critical_issue = f"Pain in {region} is severe ({sev}/10) and no reason was provided."
+            break
+
+    # 2. Pain jumped by 3+ with no reason given
+    if not critical_issue and "worsened_pain" in worse:
+        for region, change in worse["worsened_pain"].items():
+            jump = change["to"] - change["from"]
+            if jump >= 3 and region not in pain_reason:
+                critical_issue = (
+                    f"Pain in {region} jumped from {change['from']}/10 to {change['to']}/10 "
+                    f"with no explanation provided."
+                )
+                break
+
+    # 3. New pain location with severity >= 6 and no reason
+    if not critical_issue and "new_pain_locations" in worse:
+        for region in worse["new_pain_locations"]:
+            sev = pain_severity.get(region, 0)
+            if sev >= 6 and region not in pain_reason:
+                critical_issue = f"New pain in {region} at {sev}/10 with no explanation."
+                break
+
+    # Nothing critical or everything already explained — no follow-up needed
+    if not critical_issue:
+        return []
+
+    prompt = (
+        f"You are a concise oncology nurse. A cancer patient has this unresolved clinical issue: "
+        f"{critical_issue} "
+        f"Ask exactly ONE specific, short question to clarify only this issue. "
+        f"Do not ask anything already covered. Do not be vague or generic. "
+        f'Return ONLY a JSON array with one question string. Example: ["Your question here?"]'
+    )
+
     try:
-        r = openai_client.chat.completions.create(
-            model=_secret("openai_model", default="gpt-4o-mini"),
-            messages=[
-                {"role": "system", "content": (
-                    "Clinical notes assistant. Extract ONLY medically relevant facts from the "
-                    "patient's free-text messages: pain details, severity, duration, triggers, "
-                    "mood, appetite, sleep, energy. One bullet per fact. No greetings or filler. "
-                    "If nothing clinically relevant, reply: None"
-                )},
-                {"role": "user", "content": "\n".join(f"- {l}" for l in patient_lines)}
-            ], max_tokens=300, temperature=0.2,
+        response = openai_client.chat.completions.create(
+            model="gpt-4.1-mini",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=80,
+            temperature=0.3,
         )
-        result = (r.choices[0].message.content or "").strip()
-        return "" if result == "None" else result
-    except:
-        return ""
+        raw = response.choices[0].message.content.strip()
+        raw = raw.replace("```json", "").replace("```", "").strip()
+        questions = json.loads(raw)
+        if isinstance(questions, list) and questions:
+            return [str(questions[0])]
+    except Exception:
+        pass
 
-# ── CSS ─────────────────────────────────────────────────────
-st.markdown("""
-<style>
-[data-testid="stAppViewContainer"]{ background:linear-gradient(135deg,#f0f4ff,#f8faff); }
-.header{ font-size:26px; font-weight:800; color:#1a2540; margin-bottom:4px; }
-.subheader{ font-size:14px; color:rgba(0,0,0,0.45); margin-bottom:24px; }
-.visit-card{
-    background:white; border:1.5px solid rgba(200,215,240,0.7);
-    border-radius:18px; padding:22px 24px 18px; margin-bottom:20px;
-    box-shadow:0 2px 14px rgba(31,122,255,0.07);
-}
-.visit-date{
-    font-size:13px; font-weight:700; letter-spacing:0.06em; text-transform:uppercase;
-    color:#1f7aff; margin-bottom:14px;
-}
-.visit-number{
-    display:inline-block; background:#1f7aff; color:white;
-    border-radius:20px; padding:2px 12px; font-size:12px;
-    font-weight:700; margin-right:10px;
-}
-.summary-table{ width:100%; border-collapse:collapse; font-size:14px; }
-.summary-table tr{ border-bottom:1px solid rgba(200,215,240,0.5); }
-.summary-table tr:last-child{ border-bottom:none; }
-.summary-table td{ padding:9px 8px; vertical-align:top; line-height:1.5; }
-.summary-table td:first-child{ font-weight:600; color:#4a6080; width:38%; white-space:nowrap; }
-.summary-table td:last-child{ color:#1a2540; }
-.tag{
-    display:inline-block; background:rgba(31,122,255,0.09); color:#1f5acc;
-    border-radius:20px; padding:2px 10px; font-size:13px; margin:2px 3px 2px 0;
-}
-.tag-feeling{
-    display:inline-block; border-radius:20px; padding:3px 14px;
-    font-size:13px; font-weight:700; margin-right:4px;
-}
-.panel{
-    background:rgba(255,255,255,0.75); border:1px solid rgba(200,215,240,0.6);
-    border-radius:16px; padding:20px; margin-bottom:16px;
-    backdrop-filter:blur(8px);
-}
-.no-visits{ color:rgba(0,0,0,0.4); font-size:15px; text-align:center; padding:40px 0; }
-.stButton>button{
-    border-radius:12px !important; font-weight:600 !important;
-    background:#1f7aff !important; color:white !important;
-    border:none !important; padding:0.5rem 1.5rem !important;
-}
-.stButton>button:hover{ background:#1665d8 !important; }
-</style>
-""", unsafe_allow_html=True)
+    return []
 
-# ── Feeling colour helper ───────────────────────────────────
-def feeling_tag(value) -> str:
-    if value is None: return "<span style='opacity:.4'>—</span>"
-    colours = {
-        "excellent": ("#d1fae5","#065f46"),
-        "very good": ("#dbeafe","#1e40af"),
-        "good":      ("#e0f2fe","#0369a1"),
-        "fair":      ("#fef9c3","#854d0e"),
-        "poor":      ("#fee2e2","#991b1b"),
-    }
-    v = str(value).lower()
-    bg, fg = colours.get(v, ("#f3f4f6","#374151"))
-    return f"<span class='tag-feeling' style='background:{bg};color:{fg};'>{value}</span>"
 
-def render_visit_card(visit: Dict, visit_num: int, total: int, notes: str):
-    timestamp = visit.get("timestamp", "Unknown date")
-    feeling   = visit.get("feeling_level")
-    pain      = visit.get("pain")
-    locations = visit.get("pain_locations", [])
-    symptoms  = visit.get("symptoms", [])
 
-    pain_str = "Yes" if pain is True else ("No" if pain is False else "—")
-    loc_html = "".join(f'<span class="tag">{l}</span>' for l in locations) \
-               if locations else "<span style='opacity:.4'>None / N/A</span>"
-    sym_html = "".join(f'<span class="tag">{s}</span>' for s in symptoms) \
-               if symptoms else "<span style='opacity:.4'>None reported</span>"
 
-    if notes and notes != "None":
-        lines = [l.lstrip("•-– ").strip() for l in notes.split("\n")
-                 if l.strip() and l.strip() != "None"]
-        notes_html = "<ul style='margin:0;padding-left:16px;'>" + "".join(
-            f"<li style='margin-bottom:3px;'>{l}</li>" for l in lines
-        ) + "</ul>"
-    else:
-        notes_html = "<span style='opacity:.4'>No additional details</span>"
+# ============================================================
+# Voice input helper
+# ============================================================
 
-    st.markdown(f"""
-<div class="visit-card">
-  <div class="visit-date">
-    <span class="visit-number">Visit {visit_num} of {total}</span>
-    {timestamp}
-  </div>
-  <table class="summary-table">
-    <tr><td>Overall feeling</td><td>{feeling_tag(feeling)}</td></tr>
-    <tr><td>Pain today</td><td>{pain_str}</td></tr>
-    <tr><td>Pain locations</td><td>{loc_html}</td></tr>
-    <tr><td>Symptoms</td><td>{sym_html}</td></tr>
-    <tr><td>Conversation notes</td><td>{notes_html}</td></tr>
-  </table>
-</div>
-""", unsafe_allow_html=True)
+def voice_input_widget(input_key: str, label: str = ""):
+    """
+    Renders a mic button. On click, uses the Web Speech API to transcribe speech
+    and injects the result into the Streamlit text input with the given key.
+    """
+    components.html(f"""
+    <div style="margin-top:4px; margin-bottom:8px;">
+        <button id="mic_{input_key}" onclick="startVoice_{input_key}()"
+            style="background:#f1f6ff; border:1px solid #cfe0ff; border-radius:8px;
+                   padding:6px 14px; font-size:14px; cursor:pointer;">
+            🎤 Speak your answer
+        </button>
+        <span id="status_{input_key}" style="font-size:13px; color:#888; margin-left:10px;"></span>
+    </div>
+    <script>
+    function startVoice_{input_key}() {{
+        const btn = document.getElementById("mic_{input_key}");
+        const status = document.getElementById("status_{input_key}");
+        if (!("webkitSpeechRecognition" in window) && !("SpeechRecognition" in window)) {{
+            status.innerText = "Voice not supported in this browser.";
+            return;
+        }}
+        const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+        const rec = new SR();
+        rec.lang = "en-US";
+        rec.interimResults = false;
+        rec.maxAlternatives = 1;
+        btn.innerText = "🔴 Listening...";
+        status.innerText = "";
+        rec.start();
+        rec.onresult = function(event) {{
+            const transcript = event.results[0][0].transcript;
+            btn.innerText = "🎤 Speak your answer";
+            status.innerText = "✓ Got it!";
+            // Find the Streamlit textarea/input with the matching key and set its value
+            const inputs = window.parent.document.querySelectorAll("textarea, input[type=text]");
+            for (let el of inputs) {{
+                // Streamlit keys appear in the element id or aria-label
+                if (el.id && el.id.includes("{input_key}")) {{
+                    el.value = transcript;
+                    el.dispatchEvent(new Event("input", {{ bubbles: true }}));
+                    break;
+                }}
+            }}
+        }};
+        rec.onerror = function(e) {{
+            btn.innerText = "🎤 Speak your answer";
+            status.innerText = "Error: " + e.error;
+        }};
+        rec.onend = function() {{
+            if (btn.innerText === "🔴 Listening...") btn.innerText = "🎤 Speak your answer";
+        }};
+    }}
+    </script>
+    """, height=60)
 
-# ── App ──────────────────────────────────────────────────────
+# ============================================================
+# UI
+# ============================================================
+
+st.title("🩺 Cancer Symptom Check-In")
+
 _init_sheets()
 
-st.markdown('<div class="header">🏥 Provider Dashboard</div>', unsafe_allow_html=True)
-st.markdown('<div class="subheader">Cancer Symptom Check-In · Patient Visit History</div>',
-            unsafe_allow_html=True)
+# ------------------------------------------------------------
+# Stage -1 : Name
+# ------------------------------------------------------------
 
-if sheets_init_error:
-    st.error(f"Google Sheets connection failed: {sheets_init_error}")
+if st.session_state.stage == -1:
+
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+
+    name = st.text_input("Enter your name")
+
+    if st.button("Start Check-In"):
+
+        if name.strip():
+
+            st.session_state.name = name.strip()
+
+            past = load_past_checkins(name)
+            st.session_state.past_checkins = past
+
+            if past:
+                last = past[-1]
+                st.session_state.last_summary = last
+                st.session_state.last_pain_severity = last.get("pain_severity", {})
+            else:
+                st.session_state.last_summary = None
+                st.session_state.last_pain_severity = {}
+
+            st.session_state.stage = 0
+            st.rerun()
+
+    st.markdown('</div>', unsafe_allow_html=True)
     st.stop()
 
-# ── Search panel ─────────────────────────────────────────────
-st.markdown('<div class="panel">', unsafe_allow_html=True)
-st.markdown("**Search patient by name**")
-col_input, col_btn = st.columns([4, 1], gap="small")
-with col_input:
-    patient_name = st.text_input("", placeholder="Enter patient name…",
-                                 label_visibility="collapsed", key="patient_search")
-with col_btn:
-    search = st.button("Search", use_container_width=True)
-st.markdown("</div>", unsafe_allow_html=True)
 
-# ── Results ───────────────────────────────────────────────────
-if search or st.session_state.get("last_searched"):
-    name = patient_name.strip() if search else st.session_state.get("last_searched", "")
-    if search and name:
-        st.session_state["last_searched"] = name
-        st.session_state["visits_cache"] = None  # clear cache on new search
+# ------------------------------------------------------------
+# Stage 0 : Doctor recap
+# ------------------------------------------------------------
 
-    if not name:
-        st.warning("Please enter a patient name.")
-        st.stop()
+if st.session_state.stage == 0:
 
-    # Load visits (cache in session so GPT extraction doesn't re-run on reruns)
-    if st.session_state.get("visits_cache") is None or \
-       st.session_state.get("visits_cache_name") != name:
-        with st.spinner(f"Loading visits for **{name}**…"):
-            visits = load_all_visits(name)
+    last = st.session_state.last_summary
 
-        if not visits:
-            st.markdown(f'<div class="no-visits">No check-in records found for <b>{name}</b>.</div>',
-                        unsafe_allow_html=True)
-            st.stop()
+    if last:
 
-        # Extract conversation notes for each visit via GPT
-        notes_list = []
-        with st.spinner("Extracting clinical notes…"):
-            for v in visits:
-                notes_list.append(extract_conversation_notes(v))
+        ts = last.get("timestamp", "")
+        pain_locs = last.get("pain_locations", [])
+        symptoms = last.get("symptoms", [])
+        feeling = last.get("feeling_level")
 
-        st.session_state["visits_cache"] = visits
-        st.session_state["notes_cache"]  = notes_list
-        st.session_state["visits_cache_name"] = name
+        message = f"Hi {st.session_state.name}, I reviewed your last check-in"
+
+        if ts:
+            message += f" from {ts.split()[0]}"
+
+        message += ". "
+
+        if pain_locs:
+            message += f"You mentioned pain in your {', '.join(pain_locs)}. "
+
+        if symptoms:
+            message += f"You also reported {', '.join(symptoms)}. "
+
+        if feeling is not None:
+            message += f"Your overall feeling level was {feeling}/10. "
+
+        message += "Before we continue, has anything changed since then?"
+
+        st.markdown(f'<div class="doctor-box">👩‍⚕️ {message}</div>', unsafe_allow_html=True)
+
     else:
-        visits     = st.session_state["visits_cache"]
-        notes_list = st.session_state["notes_cache"]
 
-    total = len(visits)
-    st.markdown(f"### {total} visit{'s' if total != 1 else ''} found for **{name}**")
+        welcome = (
+            f"Welcome, {st.session_state.name}! 👋 It looks like this is your first check-in with us. "
+            f"We'll ask you a few short questions about how you're feeling today — "
+            f"it should only take a minute or two."
+        )
+        st.markdown(f'<div class="doctor-box">👩‍⚕️ {welcome}</div>', unsafe_allow_html=True)
+
     st.markdown("---")
 
-    # Show newest visit first
-    for i, (visit, notes) in enumerate(zip(reversed(visits), reversed(notes_list))):
-        render_visit_card(visit, total - i, total, notes)
+    c1, c2 = st.columns(2)
+
+    if last:
+
+        with c1:
+            if st.button("Same as yesterday"):
+
+                payload = {
+                    "name": st.session_state.name,
+                    "note": "Same as yesterday"
+                }
+
+                save_to_sheet(payload)
+
+                st.session_state.stage = 5
+                st.rerun()
+
+        with c2:
+            if st.button("Something changed"):
+                st.session_state.stage = 1
+                st.rerun()
+
+    else:
+
+        with c1:
+            if st.button("Start Check-In"):
+                st.session_state.stage = 1
+                st.rerun()
+
+
+# ------------------------------------------------------------
+# Stage 1
+# ------------------------------------------------------------
+
+elif st.session_state.stage == 1:
+
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+
+    st.markdown('<div class="section-title">How are you feeling today?</div>', unsafe_allow_html=True)
+
+    last_feeling = st.session_state.last_summary.get("feeling_level", None) if st.session_state.last_summary else None
+    default_feeling = int(last_feeling) if last_feeling is not None else 7
+    feeling = st.number_input("Feeling (0-10)", 0, 10, value=default_feeling)
+
+    feeling_improved = (last_feeling is not None and feeling > int(last_feeling))
+    feeling_worse = (last_feeling is not None and feeling < int(last_feeling))
+
+    if feeling_improved:
+        st.markdown(
+            f'<div class="doctor-box">\U0001f60a That\'s great to hear! Last time you were at {int(last_feeling)}/10 '
+            f'and now you\'re at {feeling}/10. Would you like to finish here, or continue to log any symptoms?</div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown("")
+        col_a, col_b = st.columns(2)
+        with col_a:
+            if st.button("I'm feeling better — submit"):
+                st.session_state.feeling_level = feeling
+                payload = {
+                    "name": st.session_state.name,
+                    "feeling_level": feeling,
+                    "note": "Patient reported feeling better than last visit. No further symptoms logged.",
+                }
+                save_to_sheet(payload)
+                st.session_state.stage = 5
+                st.rerun()
+        with col_b:
+            if st.button("Continue to log symptoms"):
+                st.session_state.feeling_level = feeling
+                st.session_state.stage = 2
+                st.rerun()
+
+    elif feeling_worse:
+        st.markdown(
+            f'<div class="doctor-box">\U0001f614 I\'m sorry to hear that. Last time you were at {int(last_feeling)}/10 '
+            f'and today you\'re at {feeling}/10. Let\'s make sure we capture what\'s going on. '
+            f'Do you have any pain today?</div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown("")
+        col_a, col_b = st.columns(2)
+        with col_a:
+            if st.button("No pain"):
+                st.session_state.feeling_level = feeling
+                st.session_state.pain_yesno = False
+                st.session_state.stage = 4
+                st.rerun()
+        with col_b:
+            if st.button("Yes, I have pain"):
+                st.session_state.feeling_level = feeling
+                st.session_state.pain_yesno = True
+                st.session_state.stage = 3
+                st.rerun()
+
+    else:
+        if st.button("Next"):
+            st.session_state.feeling_level = feeling
+            st.session_state.stage = 2
+            st.rerun()
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
+# ------------------------------------------------------------
+# Stage 2
+# ------------------------------------------------------------
+
+elif st.session_state.stage == 2:
+
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+
+    st.markdown('<div class="section-title">Do you have pain today?</div>', unsafe_allow_html=True)
+
+    pain = st.radio("", ["No", "Yes"])
+
+    if st.button("Next"):
+
+        st.session_state.pain_yesno = (pain == "Yes")
+
+        if pain == "Yes":
+            st.session_state.stage = 3
+        else:
+            st.session_state.stage = 4
+
+        st.rerun()
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
+# ------------------------------------------------------------
+# Stage 3
+# ------------------------------------------------------------
+
+elif st.session_state.stage == 3:
+
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+
+    st.markdown('<div class="section-title">Where do you feel pain?</div>', unsafe_allow_html=True)
+
+    # Color legend
+    st.markdown("""
+    <div style="display:flex; gap:18px; margin-bottom:14px; font-size:14px; flex-wrap:wrap;">
+        <span>🟢 <b>No pain</b> (not reported before)</span>
+        <span>🟠 <b>Known pain</b> (reported in last visit)</span>
+        <span>🔴 <b>New or worsened pain</b> (significantly worse or new)</span>
+    </div>
+    """, unsafe_allow_html=True)
+
+    col1, col2 = st.columns([1,1])
+
+    with col1:
+        st.markdown(body_svg(current_svg_colors()), unsafe_allow_html=True)
+
+    with col2:
+
+        last = st.session_state.last_pain_severity
+
+        for r in REGIONS:
+
+            icon = "🟢"
+
+            col = region_color_state(r)
+
+            if col == ORANGE:
+                icon = "🟠"
+            if col == RED:
+                icon = "🔴"
+
+            if st.button(f"{icon} {r}", key=f"btn_{r}"):
+
+                if r in st.session_state.selected_parts:
+                    st.session_state.selected_parts.remove(r)
+                else:
+                    st.session_state.selected_parts.add(r)
+
+                st.rerun()
+
+            if r in st.session_state.selected_parts:
+
+                last_val = last.get(r, 0)
+
+                sev = st.number_input(
+                    f"{r} severity",
+                    0,
+                    10,
+                    value=last_val,
+                    key=f"sev_{r}"
+                )
+
+                st.session_state.pain_severity[r] = sev
+
+                # Ask GPT-generated follow-up only when severity is high or significantly worsened
+                needs_followup = sev > 6 or sev >= last_val + 2
+                if needs_followup:
+                    q_key = f"gpt_question_{r}"
+                    if q_key not in st.session_state:
+                        st.session_state[q_key] = None
+
+                    # Generate question once per region if not yet done
+                    if st.session_state[q_key] is None and openai_client is not None:
+                        try:
+                            context = (
+                                f"A cancer patient has reported pain in their {r} "
+                                f"with severity {sev}/10."
+                            )
+                            if last_val > 0:
+                                context += f" Last visit it was {last_val}/10."
+                            prompt = (
+                                f"You are a compassionate oncology nurse. {context} "
+                                f"Ask ONE short, empathetic, open-ended question to understand "
+                                f"this pain better. Return ONLY the question string, no extra text."
+                            )
+                            resp = openai_client.chat.completions.create(
+                                model="gpt-4.1-mini",
+                                messages=[{"role": "user", "content": prompt}],
+                                max_tokens=80,
+                                temperature=0.5,
+                            )
+                            st.session_state[q_key] = resp.choices[0].message.content.strip().strip('"')
+                        except Exception:
+                            st.session_state[q_key] = "Can you describe what makes this pain better or worse?"
+
+                    question = st.session_state.get(q_key) or "Can you describe what makes this pain better or worse?"
+                    answer = st.text_input(question, key=f"reason_{r}")
+                    voice_input_widget(f"reason_{r}")
+                    if answer:
+                        st.session_state.pain_reason[r] = answer
+
+        # Other / custom pain location
+        st.markdown("---")
+        other_selected = "Other" in st.session_state.selected_parts
+        other_icon = "🔴" if other_selected else "🟢"
+
+        if st.button(f"{other_icon} Other", key="btn_Other"):
+            if other_selected:
+                st.session_state.selected_parts.remove("Other")
+                st.session_state.pain_severity.pop("Other", None)
+                st.session_state.pain_reason.pop("Other", None)
+            else:
+                st.session_state.selected_parts.add("Other")
+            st.rerun()
+
+        if other_selected:
+            other_desc = st.text_input(
+                "Describe the location",
+                placeholder="e.g. lower back, behind the ear...",
+                key="other_location_desc"
+            )
+            if other_desc:
+                st.session_state.pain_reason["Other"] = other_desc
+
+            other_sev = st.number_input(
+                "Other severity",
+                0, 10,
+                value=0,
+                key="sev_Other"
+            )
+            st.session_state.pain_severity["Other"] = other_sev
+
+    if st.button("Next"):
+        st.session_state.stage = 4
+        st.rerun()
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
+# ------------------------------------------------------------
+# Stage 4
+# ------------------------------------------------------------
+
+elif st.session_state.stage == 4:
+
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+
+    st.markdown('<div class="section-title">Symptoms today</div>', unsafe_allow_html=True)
+
+    symptom_options = [
+        "Fatigue",
+        "Nausea",
+        "Dry mouth",
+        "Difficulty swallowing",
+        "Hoarseness",
+        "Mouth sores",
+        "Skin irritation",
+        "Loss of taste",
+    ]
+
+    cols = st.columns(2)
+
+    for i, sym in enumerate(symptom_options):
+
+        selected = sym in st.session_state.symptoms
+        label = f"🔴 {sym}" if selected else f"🟢 {sym}"
+
+        with cols[i % 2]:
+
+            if st.button(label):
+
+                if selected:
+                    st.session_state.symptoms.remove(sym)
+                else:
+                    st.session_state.symptoms.add(sym)
+
+                st.rerun()
+
+    st.markdown("---")
+
+    if st.button("Submit Check-In"):
+
+        payload = {
+            "name": st.session_state.name,
+            "feeling_level": st.session_state.feeling_level,
+            "pain": st.session_state.pain_yesno,
+            "pain_locations": list(st.session_state.selected_parts),
+            "pain_severity": st.session_state.pain_severity,
+            "pain_reason": st.session_state.pain_reason,
+            "symptoms": list(st.session_state.symptoms),
+        }
+
+        # Check if things got worse — if so, go to follow-up stage
+        worse = detect_worsening(payload, st.session_state.last_summary)
+
+        if worse and openai_client is not None:
+            # Store payload temporarily so follow-up stage can access it
+            st.session_state["_pending_payload"] = payload
+            st.session_state["_worse_context"] = worse
+
+            # Generate follow-up questions via GPT
+            questions = generate_followup_questions(
+                payload, worse, st.session_state.last_summary
+            )
+            st.session_state.followup_questions = questions
+            st.session_state.followup_answers = {}
+            st.session_state.followup_generated = True
+
+            if questions:
+                st.session_state.stage = 4.5
+            else:
+                # GPT returned nothing — save and move on
+                save_to_sheet(payload)
+                st.session_state.stage = 5
+        else:
+            # No worsening detected — save directly
+            save_to_sheet(payload)
+            st.session_state.stage = 5
+
+        st.rerun()
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
+# ------------------------------------------------------------
+# Stage 4.5 : GPT Follow-up questions
+# ------------------------------------------------------------
+
+elif st.session_state.stage == 4.5:
+
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+
+    st.markdown('<div class="section-title">One follow-up question</div>', unsafe_allow_html=True)
+
+    questions = st.session_state.followup_questions
+
+    for i, question in enumerate(questions):
+        answer = st.text_area(
+            question,
+            key=f"followup_answer_{i}",
+            height=80,
+        )
+        voice_input_widget(f"followup_answer_{i}")
+        st.session_state.followup_answers[i] = answer
+
+    st.markdown("---")
+
+    if st.button("Submit Answers"):
+
+        payload = st.session_state.get("_pending_payload", {})
+
+        # Attach follow-up Q&A to the payload before saving
+        payload["followup_qa"] = [
+            {
+                "question": questions[i],
+                "answer": st.session_state.followup_answers.get(i, ""),
+            }
+            for i in range(len(questions))
+        ]
+
+        save_to_sheet(payload)
+
+        # Clean up temp keys
+        st.session_state.pop("_pending_payload", None)
+        st.session_state.pop("_worse_context", None)
+
+        st.session_state.stage = 5
+        st.rerun()
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
+# ------------------------------------------------------------
+# Stage 5
+# ------------------------------------------------------------
+
+elif st.session_state.stage == 5:
+
+    st.markdown('<div class="success-box">✅ Check-in complete.</div>', unsafe_allow_html=True)
+
+    if st.button("Start another check-in"):
+
+        for k, v in DEFAULTS.items():
+            st.session_state[k] = v
+
+        st.rerun()
