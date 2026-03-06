@@ -1,9 +1,10 @@
+import hashlib
+import io
 import json
 from datetime import datetime
 from typing import Dict, List, Optional, Set
 
 import streamlit as st
-import streamlit.components.v1 as components
 import gspread
 from google.oauth2.service_account import Credentials
 from openai import OpenAI
@@ -411,171 +412,62 @@ def generate_followup_questions(payload: Dict, worse: Dict, last_summary: Option
 
 
 # ============================================================
-# Voice input helper
+# Voice input — st.audio_input + OpenAI Whisper
 # ============================================================
 
-def voice_input_widget(input_key: str, label: str = ""):
+def _transcribe_audio(audio_bytes: bytes) -> str:
+    """Send raw audio bytes to Whisper and return the transcript."""
+    if openai_client is None:
+        return ""
+    try:
+        buf = io.BytesIO(audio_bytes)
+        buf.name = "audio.wav"
+        result = openai_client.audio.transcriptions.create(
+            model="whisper-1", file=buf
+        )
+        return result.text.strip()
+    except Exception:
+        return ""
+
+
+def voice_input_widget(answer_key: str, label: str = "🎤 Or speak your answer"):
     """
-    Renders a mic button using the Web Speech API.
-    On transcription, injects text into the nearest Streamlit textarea/input
-    using multiple targeting strategies for reliability across browsers.
-    The transcribed text is also displayed below the button immediately so
-    patients can see what was captured without needing to look at the input.
+    Renders Streamlit's native audio recorder.
+    On new audio: transcribes via Whisper → stores in _transcript_{answer_key}.
+    The caller reads st.session_state.get(f"_transcript_{answer_key}", "")
+    and passes it as value= to the associated text_input / text_area.
+    Uses SHA-1 dedup so the same clip is never transcribed twice.
     """
-    safe_key = input_key.replace("-", "_").replace(" ", "_")
-    components.html(f"""
-    <div id="voice_container_{safe_key}" style="margin-top:4px; margin-bottom:8px;">
-        <button id="mic_{safe_key}"
-            onclick="startVoice_{safe_key}()"
-            style="background:#f1f6ff; border:1px solid #cfe0ff; border-radius:8px;
-                   padding:7px 16px; font-size:14px; cursor:pointer; transition:all 0.2s;">
-            🎤 Speak your answer
-        </button>
-        <span id="status_{safe_key}"
-              style="font-size:13px; color:#666; margin-left:10px;"></span>
-        <div id="transcript_display_{safe_key}"
-             style="display:none; margin-top:6px; padding:8px 12px;
-                    background:#f0fff4; border:1px solid #a8e6b9; border-radius:8px;
-                    font-size:14px; color:#1a5c2a; line-height:1.4;"></div>
-    </div>
+    transcript_key = f"_transcript_{answer_key}"
+    hash_key       = f"_audiohash_{answer_key}"
 
-    <script>
-    (function() {{
-        const SAFE_KEY = "{safe_key}";
-        const ORIG_KEY = "{input_key}";
+    if hash_key not in st.session_state:
+        st.session_state[hash_key] = None
 
-        function injectText(transcript) {{
-            // Strategy 1: match by element key attribute (Streamlit React key)
-            const parent = window.parent.document;
-            let injected = false;
+    audio = st.audio_input(label, key=f"_rec_{answer_key}")
+    if audio is None:
+        return
 
-            // Strategy 1: id contains the key
-            const byId = parent.querySelectorAll("textarea, input[type='text']");
-            for (let el of byId) {{
-                if ((el.id || "").includes(ORIG_KEY) || (el.id || "").includes(SAFE_KEY)) {{
-                    setNativeValue(el, transcript);
-                    injected = true;
-                    break;
-                }}
-            }}
+    try:
+        ab = audio.getvalue()
+    except Exception:
+        return
+    if not ab:
+        return
 
-            // Strategy 2: aria-label contains the key
-            if (!injected) {{
-                for (let el of byId) {{
-                    const label = (el.getAttribute("aria-label") || "").toLowerCase();
-                    if (label.includes(ORIG_KEY.toLowerCase()) || label.includes(SAFE_KEY.toLowerCase())) {{
-                        setNativeValue(el, transcript);
-                        injected = true;
-                        break;
-                    }}
-                }}
-            }}
+    ah = hashlib.sha1(ab).hexdigest()
+    if ah == st.session_state[hash_key]:
+        return  # already processed this clip
 
-            // Strategy 3: data-testid on the parent stTextInput/stTextArea
-            if (!injected) {{
-                const containers = parent.querySelectorAll(
-                    '[data-testid="stTextInput"], [data-testid="stTextArea"]'
-                );
-                for (let container of containers) {{
-                    const el = container.querySelector("textarea, input[type='text']");
-                    if (el && !el.value) {{
-                        setNativeValue(el, transcript);
-                        injected = true;
-                        break;
-                    }}
-                }}
-            }}
+    st.session_state[hash_key] = ah
+    with st.spinner("Transcribing…"):
+        text = _transcribe_audio(ab)
 
-            return injected;
-        }}
-
-        // React needs a native value setter to register the change
-        function setNativeValue(el, value) {{
-            const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
-                el.tagName === "TEXTAREA"
-                    ? window.parent.HTMLTextAreaElement.prototype
-                    : window.parent.HTMLInputElement.prototype,
-                "value"
-            ).set;
-            nativeInputValueSetter.call(el, value);
-            el.dispatchEvent(new Event("input", {{ bubbles: true }}));
-            el.dispatchEvent(new Event("change", {{ bubbles: true }}));
-            el.focus();
-        }}
-
-        window["startVoice_" + SAFE_KEY] = function() {{
-            const btn    = document.getElementById("mic_" + SAFE_KEY);
-            const status = document.getElementById("status_" + SAFE_KEY);
-            const disp   = document.getElementById("transcript_display_" + SAFE_KEY);
-
-            if (!("webkitSpeechRecognition" in window) && !("SpeechRecognition" in window)) {{
-                status.innerHTML = "⚠️ Voice not supported. Please use Chrome or Edge.";
-                return;
-            }}
-
-            const SR  = window.SpeechRecognition || window.webkitSpeechRecognition;
-            const rec = new SR();
-            rec.lang           = "en-US";
-            rec.interimResults = true;     // show interim so patient sees live feedback
-            rec.maxAlternatives = 1;
-            rec.continuous     = false;
-
-            btn.innerText    = "🔴 Listening... (speak now)";
-            btn.style.background = "#fff0f0";
-            btn.style.borderColor = "#e74c3c";
-            status.innerText = "";
-            disp.style.display = "none";
-
-            rec.start();
-
-            rec.onresult = function(event) {{
-                let interim = "";
-                let final_t = "";
-                for (let i = event.resultIndex; i < event.results.length; i++) {{
-                    const t = event.results[i][0].transcript;
-                    if (event.results[i].isFinal) {{ final_t += t; }}
-                    else {{ interim += t; }}
-                }}
-                // Show interim live
-                if (interim) {{
-                    status.innerText = "🎙 " + interim;
-                }}
-                // On final result — inject and display
-                if (final_t) {{
-                    const ok = injectText(final_t);
-                    status.innerText = ok ? "✓ Captured!" : "✓ Heard (scroll up to see)";
-                    disp.innerText   = "🗣 Heard: \"" + final_t + "\"";
-                    disp.style.display = "block";
-                    btn.innerText    = "🎤 Speak again";
-                    btn.style.background = "#f1f6ff";
-                    btn.style.borderColor = "#cfe0ff";
-                }}
-            }};
-
-            rec.onerror = function(e) {{
-                btn.innerText = "🎤 Speak your answer";
-                btn.style.background = "#f1f6ff";
-                btn.style.borderColor = "#cfe0ff";
-                const msgs = {{
-                    "no-speech":       "No speech detected — please try again.",
-                    "audio-capture":   "Microphone not found.",
-                    "not-allowed":     "Microphone permission denied.",
-                    "network":         "Network error — check your connection.",
-                }};
-                status.innerText = "⚠️ " + (msgs[e.error] || "Error: " + e.error);
-            }};
-
-            rec.onend = function() {{
-                if (btn.innerText === "🔴 Listening... (speak now)") {{
-                    btn.innerText = "🎤 Speak your answer";
-                    btn.style.background = "#f1f6ff";
-                    btn.style.borderColor = "#cfe0ff";
-                }}
-            }};
-        }};
-    }})();
-    </script>
-    """, height=90)
+    if text:
+        st.session_state[transcript_key] = text
+        st.rerun()
+    else:
+        st.warning("Could not transcribe — please try again or type your answer.")
 
 # ============================================================
 # UI
@@ -856,8 +748,8 @@ elif st.session_state.stage == 3:
 
                 st.session_state.pain_severity[r] = sev
 
-                # Ask GPT-generated follow-up only when severity is high or significantly worsened
-                needs_followup = sev > 6 or sev >= last_val + 2
+                # Ask GPT-generated follow-up only when severity > 5 or jumped 2+ from last visit
+                needs_followup = sev > 5 or (last_val > 0 and sev >= last_val + 2)
                 if needs_followup:
                     q_key = f"gpt_question_{r}"
                     if q_key not in st.session_state:
@@ -887,18 +779,40 @@ elif st.session_state.stage == 3:
                         except Exception:
                             st.session_state[q_key] = "Can you describe what makes this pain better or worse?"
 
-                    question = st.session_state.get(q_key) or "Can you describe what makes this pain better or worse?"
-                    _tr_reason  = st.session_state.get(f"_transcript_reason_{r}", "")
-                    _default_r  = _tr_reason or st.session_state.pain_reason.get(r, "")
-                    answer = st.text_input(
-                        question,
-                        value=_default_r,
-                        key=f"reason_{r}",
-                    )
-                    voice_input_widget(f"reason_{r}", label=question)
-                    saved_r = answer or _tr_reason
-                    if saved_r:
-                        st.session_state.pain_reason[r] = saved_r
+                    question   = st.session_state.get(q_key) or "Can you describe what makes this pain better or worse?"
+                    _tr_reason = st.session_state.get(f"_transcript_reason_{r}", "")
+                    _saved     = st.session_state.pain_reason.get(r, "")
+
+                    if _saved:
+                        # Already answered — show a compact summary, no input needed
+                        st.markdown(
+                            f'<div style="background:#f0fff4; border:1px solid #a8e6b9; '
+                            f'border-radius:8px; padding:8px 12px; font-size:14px; '
+                            f'color:#1a5c2a; margin-top:4px;">'
+                            f'✅ <em>{question}</em><br><strong>{_saved}</strong></div>',
+                            unsafe_allow_html=True,
+                        )
+                        # Small "edit" link so patient can re-open if needed
+                        if st.button("✏️ Edit answer", key=f"edit_{r}"):
+                            st.session_state.pain_reason.pop(r, None)
+                            st.session_state.pop(f"_transcript_reason_{r}", None)
+                            st.rerun()
+                    else:
+                        # Show the question input + voice widget
+                        _default_r = _tr_reason or ""
+                        answer = st.text_input(
+                            question,
+                            value=_default_r,
+                            key=f"reason_{r}",
+                        )
+                        voice_input_widget(
+                            f"reason_{r}",
+                            label="🎤 Speak your answer",
+                        )
+                        saved_r = answer or _tr_reason
+                        if saved_r:
+                            st.session_state.pain_reason[r] = saved_r
+                            st.rerun()  # collapse immediately once answered
 
         # Other / custom pain location
         st.markdown("---")
