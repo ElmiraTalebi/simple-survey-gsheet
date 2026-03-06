@@ -284,6 +284,7 @@ DEFAULTS = {
     "answers": {},             # current; absent key = not yet selected
     "followup_needed": [],
     "followup_text": "",
+    "confirm_submit": False,
 }
 
 for k, v in DEFAULTS.items():
@@ -456,23 +457,51 @@ elif st.session_state.q_stage == "form":
     st.markdown("<br>", unsafe_allow_html=True)
 
     unanswered = [q for q in ALL_QUESTIONS if q not in st.session_state.answers]
-    if unanswered:
+
+    if unanswered and not st.session_state.confirm_submit:
         st.markdown(
-            f'<div style="font-size:0.82rem; color:#8a94b0; margin-bottom:0.5rem;">'
-            f'{len(unanswered)} symptom(s) not yet rated</div>',
+            f'<div style="font-size:0.88rem; color:#c0392b; margin-bottom:0.7rem;">'
+            f'⚠️ {len(unanswered)} symptom(s) not yet rated</div>',
             unsafe_allow_html=True,
         )
 
-    st.markdown('<div class="submit-btn">', unsafe_allow_html=True)
-    if st.button("Submit questionnaire →", key="submit_btn"):
-        if unanswered:
-            st.warning(f"Please rate all {len(unanswered)} remaining symptom(s) before submitting.")
-        else:
-            flagged = check_followup(st.session_state.answers, prev_answers)
-            st.session_state.followup_needed = flagged
-            st.session_state.q_stage = "followup" if flagged else "saving"
-            st.rerun()
-    st.markdown('</div>', unsafe_allow_html=True)
+    if unanswered and st.session_state.confirm_submit:
+        # Confirmation prompt
+        st.markdown(
+            f'<div style="background:#fff8ec; border:1px solid #ffd28a; border-radius:10px; '
+            f'padding:14px 18px; margin-bottom:1rem;">'
+            f'<strong style="color:#a05e00;">Are you sure you want to submit?</strong><br>'
+            f'<span style="font-size:0.85rem; color:#7a5000;">'
+            f'{len(unanswered)} symptom(s) are still unanswered. '
+            f'Unanswered questions will be skipped.</span></div>',
+            unsafe_allow_html=True,
+        )
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown('<div class="submit-btn">', unsafe_allow_html=True)
+            if st.button("Yes, submit anyway →", key="confirm_yes"):
+                flagged = check_followup(st.session_state.answers, prev_answers)
+                st.session_state.followup_needed = flagged
+                st.session_state.confirm_submit  = False
+                st.session_state.q_stage = "followup" if flagged else "saving"
+                st.rerun()
+            st.markdown('</div>', unsafe_allow_html=True)
+        with c2:
+            if st.button("← Go back and complete", key="confirm_no"):
+                st.session_state.confirm_submit = False
+                st.rerun()
+    else:
+        st.markdown('<div class="submit-btn">', unsafe_allow_html=True)
+        if st.button("Submit questionnaire →", key="submit_btn"):
+            if unanswered:
+                st.session_state.confirm_submit = True
+                st.rerun()
+            else:
+                flagged = check_followup(st.session_state.answers, prev_answers)
+                st.session_state.followup_needed = flagged
+                st.session_state.q_stage = "followup" if flagged else "saving"
+                st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
 
 
 # ============================================================
