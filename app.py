@@ -247,6 +247,9 @@ GREEN = "#6fd08c"
 ORANGE = "#f5a623"
 RED = "#e74c3c"
 
+# Symptoms that always trigger a follow-up question when newly reported
+HIGH_CONCERN_SYMPTOMS = {"Difficulty swallowing", "Mouth sores", "Hoarseness", "Nausea"}
+
 
 def region_color_state(region: str) -> str:
 
@@ -270,69 +273,58 @@ def current_svg_colors():
 # Worsening detection
 # ============================================================
 
-HIGH_CONCERN_SYMPTOMS = {"Difficulty swallowing", "Mouth sores", "Hoarseness", "Nausea"}
-
-
 def detect_worsening(payload: Dict, last_summary: Optional[Dict]) -> Dict:
     """
     Returns a dict describing what got worse, or empty dict if nothing significant.
-
-    Extended: also detects high-concern symptoms that appear for the first time,
-    even when there is no previous visit on record.
+    Also flags newly-reported high-concern symptoms regardless of prior history.
     """
     worse = {}
 
+    # Always check for high-concern symptoms — even on first visit
     cur_symptoms = set(payload.get("symptoms", []))
-
-    if last_summary:
-        # Pain severity worsened
-        last_sev = last_summary.get("pain_severity", {})
-        worsened_pain = {}
-        for region, sev in payload.get("pain_severity", {}).items():
-            prev = last_sev.get(region, 0)
-            if sev >= prev + 2:
-                worsened_pain[region] = {"from": prev, "to": sev}
-        if worsened_pain:
-            worse["worsened_pain"] = worsened_pain
-
-        # New pain locations
-        last_locs = set(last_summary.get("pain_locations", []))
-        cur_locs = set(payload.get("pain_locations", []))
-        new_locs = cur_locs - last_locs
-        if new_locs:
-            worse["new_pain_locations"] = list(new_locs)
-
-        # Feeling level dropped
-        last_feeling = last_summary.get("feeling_level")
-        cur_feeling = payload.get("feeling_level")
-        if last_feeling is not None and cur_feeling is not None:
-            if cur_feeling <= last_feeling - 2:
-                worse["feeling_dropped"] = {"from": last_feeling, "to": cur_feeling}
-
-        # New symptoms compared to previous visit
-        last_symptoms = set(last_summary.get("symptoms", []))
-        new_symptoms = cur_symptoms - last_symptoms
-        if new_symptoms:
-            worse["new_symptoms"] = list(new_symptoms)
-
-    # High-concern symptoms: flag any that appear this visit regardless of history.
-    # On a first visit (no last_summary) all selected symptoms count as "new".
-    # On a return visit, only those not seen before are included — already covered
-    # above via new_symptoms, but we still need to mark the high-concern subset
-    # explicitly so generate_followup_questions can prioritise correctly.
-    last_symptoms_set = set(last_summary.get("symptoms", [])) if last_summary else set()
-    new_high_concern = [
-        s for s in cur_symptoms
-        if s in HIGH_CONCERN_SYMPTOMS and s not in last_symptoms_set
-    ]
+    last_symptoms = set(last_summary.get("symptoms", [])) if last_summary else set()
+    new_high_concern = [s for s in cur_symptoms if s in HIGH_CONCERN_SYMPTOMS and s not in last_symptoms]
     if new_high_concern:
-        # Merge with any existing new_symptoms list so there is no duplication
-        existing = set(worse.get("new_symptoms", []))
-        merged = list(existing | set(new_high_concern))
-        worse["new_symptoms"] = merged
-        # Keep a dedicated key so generate_followup_questions can identify
-        # high-concern triggers without re-filtering
         worse["new_high_concern_symptoms"] = new_high_concern
+
+    if not last_summary:
+        return worse
+
+    # (worse already populated with new_high_concern_symptoms if any)
+
+    # Pain severity worsened
+    last_sev = last_summary.get("pain_severity", {})
+    worsened_pain = {}
+    for region, sev in payload.get("pain_severity", {}).items():
+        prev = last_sev.get(region, 0)
+        if sev >= prev + 2:
+            worsened_pain[region] = {"from": prev, "to": sev}
+    if worsened_pain:
+        worse["worsened_pain"] = worsened_pain
+
+    # New pain locations
+    last_locs = set(last_summary.get("pain_locations", []))
+    cur_locs = set(payload.get("pain_locations", []))
+    new_locs = cur_locs - last_locs
+    if new_locs:
+        worse["new_pain_locations"] = list(new_locs)
+
+    # Feeling level dropped
+    last_feeling = last_summary.get("feeling_level")
+    cur_feeling = payload.get("feeling_level")
+    if last_feeling is not None and cur_feeling is not None:
+        if cur_feeling <= last_feeling - 2:
+            worse["feeling_dropped"] = {"from": last_feeling, "to": cur_feeling}
+
+    # New symptoms — split into high-concern and general
+    last_symptoms = set(last_summary.get("symptoms", []))
+    cur_symptoms = set(payload.get("symptoms", []))
+    new_symptoms = cur_symptoms - last_symptoms
+    new_high_concern = [s for s in new_symptoms if s in HIGH_CONCERN_SYMPTOMS]
+    if new_high_concern:
+        worse["new_high_concern_symptoms"] = new_high_concern
+    elif len(new_symptoms) >= 1:
+        worse["new_symptoms"] = list(new_symptoms)
 
     return worse
 
@@ -346,12 +338,11 @@ def generate_followup_questions(payload: Dict, worse: Dict, last_summary: Option
     Generates at most 1 follow-up question, only when clinically necessary
     and only when the patient has NOT already explained the issue.
 
-    Priority order (first match wins — only ONE question is ever returned):
+    Priority order (first match wins):
       1. Severe pain (>=8) with no explanation
       2. Pain jumped 3+ points with no explanation
       3. New pain location (severity >=6) with no explanation
-      4. New high-concern symptom (Difficulty swallowing, Mouth sores, Hoarseness, Nausea)
-         that was not present at the previous visit (or is new on the first visit)
+      4. New concerning symptom (Difficulty swallowing, Mouth sores) with no prior record
     """
     if openai_client is None:
         return []
@@ -392,19 +383,13 @@ def generate_followup_questions(payload: Dict, worse: Dict, last_summary: Option
                 )
                 break
 
-    # 4. New high-concern symptom — uses the pre-filtered list produced by
-    #    detect_worsening() which already excludes low-risk symptoms (fatigue,
-    #    dry mouth, etc.) and symptoms the patient had in a prior visit.
-    #    This block only fires when no pain issue has already been flagged,
-    #    ensuring pain always takes priority over symptom follow-ups.
+    # 4. New high-concern symptom
     if not critical_issue and "new_high_concern_symptoms" in worse:
         for sym in worse["new_high_concern_symptoms"]:
-            if sym in HIGH_CONCERN_SYMPTOMS:
-                critical_issue = (
-                    f"The patient has reported {sym} for the first time today. "
-                    f"This symptom was not present in any previous visit."
-                )
-                break
+            critical_issue = (
+                f"The patient has reported a new symptom: {sym}, which was not present before."
+            )
+            break
 
     # Nothing triggered or everything already explained
     if not critical_issue:
@@ -413,7 +398,7 @@ def generate_followup_questions(payload: Dict, worse: Dict, last_summary: Option
     prompt = (
         "You are a compassionate oncology nurse conducting a brief patient check-in. "
         f"The following needs clarification: {critical_issue} "
-        "Ask the patient ONE short, kind, empathetic, open-ended question about this — "
+        "Ask the patient ONE short, kind, open-ended question about this — "
         "it must be easy to answer out loud in one or two sentences. "
         "Do NOT use medical jargon. Do NOT ask multiple questions. "
         "Return ONLY a JSON array with exactly one question string. "
@@ -914,16 +899,29 @@ elif st.session_state.stage == 4:
         "Loss of taste",
     ]
 
+    # Symptoms reported in the last session (for orange highlight)
+    last_symptoms_set = set(
+        st.session_state.last_summary.get("symptoms", [])
+        if st.session_state.last_summary else []
+    )
+
     cols = st.columns(2)
 
     for i, sym in enumerate(symptom_options):
 
         selected = sym in st.session_state.symptoms
-        label = f"🔴 {sym}" if selected else f"🟢 {sym}"
+        was_previous = sym in last_symptoms_set
+
+        if selected:
+            label = f"🔴 {sym}"
+        elif was_previous:
+            label = f"🟠 {sym}"
+        else:
+            label = f"🟢 {sym}"
 
         with cols[i % 2]:
 
-            if st.button(label):
+            if st.button(label, key=f"sym_btn_{sym}"):
 
                 if selected:
                     st.session_state.symptoms.remove(sym)
@@ -931,6 +929,10 @@ elif st.session_state.stage == 4:
                     st.session_state.symptoms.add(sym)
 
                 st.rerun()
+
+            # Show tooltip for previously reported symptoms
+            if was_previous and not selected:
+                st.caption("⬆️ Reported last visit — tap to confirm again")
 
     st.markdown("---")
 
