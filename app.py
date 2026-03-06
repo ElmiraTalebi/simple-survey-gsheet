@@ -225,6 +225,7 @@ DEFAULTS = {
     "pain_severity": {},
     "pain_reason": {},
     "symptoms": set(),
+    "symptom_answers": {},          # {symptom_name: answer_text} for inline follow-ups
     "submitted": False,
     # Follow-up stage state
     "followup_questions": [],       # list of question strings from GPT
@@ -276,21 +277,12 @@ def current_svg_colors():
 def detect_worsening(payload: Dict, last_summary: Optional[Dict]) -> Dict:
     """
     Returns a dict describing what got worse, or empty dict if nothing significant.
-    Also flags newly-reported high-concern symptoms regardless of prior history.
+    High-concern symptom follow-ups are handled inline in Stage 4.
     """
     worse = {}
 
-    # Always check for high-concern symptoms — even on first visit
-    cur_symptoms = set(payload.get("symptoms", []))
-    last_symptoms = set(last_summary.get("symptoms", [])) if last_summary else set()
-    new_high_concern = [s for s in cur_symptoms if s in HIGH_CONCERN_SYMPTOMS and s not in last_symptoms]
-    if new_high_concern:
-        worse["new_high_concern_symptoms"] = new_high_concern
-
     if not last_summary:
         return worse
-
-    # (worse already populated with new_high_concern_symptoms if any)
 
     # Pain severity worsened
     last_sev = last_summary.get("pain_severity", {})
@@ -316,15 +308,14 @@ def detect_worsening(payload: Dict, last_summary: Optional[Dict]) -> Dict:
         if cur_feeling <= last_feeling - 2:
             worse["feeling_dropped"] = {"from": last_feeling, "to": cur_feeling}
 
-    # New symptoms — split into high-concern and general
+    # New symptoms — general (non-high-concern) new symptoms only
+    # High-concern symptoms are handled inline in Stage 4, not via stage 4.5
     last_symptoms = set(last_summary.get("symptoms", []))
     cur_symptoms = set(payload.get("symptoms", []))
     new_symptoms = cur_symptoms - last_symptoms
-    new_high_concern = [s for s in new_symptoms if s in HIGH_CONCERN_SYMPTOMS]
-    if new_high_concern:
-        worse["new_high_concern_symptoms"] = new_high_concern
-    elif len(new_symptoms) >= 1:
-        worse["new_symptoms"] = list(new_symptoms)
+    new_general = [s for s in new_symptoms if s not in HIGH_CONCERN_SYMPTOMS]
+    if new_general:
+        worse["new_symptoms"] = new_general
 
     return worse
 
@@ -383,13 +374,7 @@ def generate_followup_questions(payload: Dict, worse: Dict, last_summary: Option
                 )
                 break
 
-    # 4. New high-concern symptom
-    if not critical_issue and "new_high_concern_symptoms" in worse:
-        for sym in worse["new_high_concern_symptoms"]:
-            critical_issue = (
-                f"The patient has reported a new symptom: {sym}, which was not present before."
-            )
-            break
+    # 4. (High-concern symptoms are handled inline in Stage 4 — not triggered here)
 
     # Nothing triggered or everything already explained
     if not critical_issue:
@@ -911,6 +896,7 @@ elif st.session_state.stage == 4:
 
         selected = sym in st.session_state.symptoms
         was_previous = sym in last_symptoms_set
+        is_high_concern = sym in HIGH_CONCERN_SYMPTOMS
 
         if selected:
             label = f"🔴 {sym}"
@@ -922,17 +908,86 @@ elif st.session_state.stage == 4:
         with cols[i % 2]:
 
             if st.button(label, key=f"sym_btn_{sym}"):
-
                 if selected:
                     st.session_state.symptoms.remove(sym)
+                    # Clear follow-up state when deselecting
+                    st.session_state.symptom_answers.pop(sym, None)
+                    st.session_state.pop(f"gpt_sym_question_{sym}", None)
+                    st.session_state.pop(f"_transcript_sym_{sym}", None)
                 else:
                     st.session_state.symptoms.add(sym)
-
                 st.rerun()
 
-            # Show tooltip for previously reported symptoms
+            # Show caption for previously reported but not yet re-selected
             if was_previous and not selected:
                 st.caption("⬆️ Reported last visit — tap to confirm again")
+
+            # --- Inline follow-up for newly selected high-concern symptoms ---
+            if selected and is_high_concern and not was_previous:
+
+                q_key = f"gpt_sym_question_{sym}"
+                if q_key not in st.session_state:
+                    st.session_state[q_key] = None
+
+                # Generate GPT question once, only when first needed
+                if st.session_state[q_key] is None and openai_client is not None:
+                    try:
+                        prompt = (
+                            f"You are a compassionate oncology nurse doing a brief patient check-in. "
+                            f"The patient has just reported a new symptom: {sym}. "
+                            f"Ask ONE short, empathetic, open-ended question to understand it better. "
+                            f"Keep it conversational and easy to answer in one or two sentences. "
+                            f"Do NOT use medical jargon. Return ONLY the question string, no extra text."
+                        )
+                        resp = openai_client.chat.completions.create(
+                            model="gpt-4.1-mini",
+                            messages=[{"role": "user", "content": prompt}],
+                            max_tokens=80,
+                            temperature=0.5,
+                        )
+                        st.session_state[q_key] = resp.choices[0].message.content.strip().strip('"')
+                    except Exception:
+                        st.session_state[q_key] = f"Can you tell me a little more about the {sym.lower()}?"
+
+                question = st.session_state.get(q_key) or f"Can you tell me a little more about the {sym.lower()}?"
+                _tr_sym  = st.session_state.get(f"_transcript_sym_{sym}", "")
+                _saved   = st.session_state.symptom_answers.get(sym, "")
+
+                if _saved:
+                    # Already answered — show compact green summary with edit option
+                    st.markdown(
+                        f'<div style="background:#f0fff4; border:1px solid #a8e6b9; '
+                        f'border-radius:8px; padding:8px 12px; font-size:14px; '
+                        f'color:#1a5c2a; margin-top:4px;">'
+                        f'✅ <em>{question}</em><br><strong>{_saved}</strong></div>',
+                        unsafe_allow_html=True,
+                    )
+                    if st.button("✏️ Edit answer", key=f"edit_sym_{sym}"):
+                        st.session_state.symptom_answers.pop(sym, None)
+                        st.session_state.pop(f"_transcript_sym_{sym}", None)
+                        st.rerun()
+                else:
+                    widget_key = f"_draft_sym_{sym}"
+                    if widget_key not in st.session_state:
+                        st.session_state[widget_key] = _tr_sym or ""
+
+                    if _tr_sym and not st.session_state[widget_key]:
+                        st.session_state[widget_key] = _tr_sym
+
+                    st.text_input(question, key=widget_key)
+                    voice_input_widget(f"sym_{sym}", label="🎤 Speak your answer")
+
+                    current_val = st.session_state.get(widget_key, "").strip()
+
+                    if current_val and st.button("✅ Save answer", key=f"save_sym_{sym}"):
+                        st.session_state.symptom_answers[sym] = current_val
+                        del st.session_state[widget_key]
+                        st.rerun()
+
+                    elif _tr_sym and current_val == _tr_sym:
+                        st.session_state.symptom_answers[sym] = current_val
+                        del st.session_state[widget_key]
+                        st.rerun()
 
     st.markdown("---")
 
@@ -946,6 +1001,10 @@ elif st.session_state.stage == 4:
             "pain_severity": st.session_state.pain_severity,
             "pain_reason": st.session_state.pain_reason,
             "symptoms": list(st.session_state.symptoms),
+            "symptom_followup": [
+                {"symptom": sym, "question": st.session_state.get(f"gpt_sym_question_{sym}", ""), "answer": ans}
+                for sym, ans in st.session_state.symptom_answers.items()
+            ],
         }
 
         # Check if things got worse — if so, go to follow-up stage
