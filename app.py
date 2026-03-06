@@ -597,7 +597,7 @@ elif st.session_state.stage == 1:
     st.markdown('<div class="section-title">How are you feeling today?</div>', unsafe_allow_html=True)
 
     last_feeling = st.session_state.last_summary.get("feeling_level", None) if st.session_state.last_summary else None
-    default_feeling = int(last_feeling) if last_feeling is not None else 7
+    default_feeling = int(last_feeling) if last_feeling is not None else None
     feeling = st.number_input("Feeling (0-10)", 0, 10, value=default_feeling)
 
     feeling_improved = (last_feeling is not None and feeling > int(last_feeling))
