@@ -1,201 +1,249 @@
 import streamlit as st
 
-# ------------------------------------------------------------
-# Page configuration
-# ------------------------------------------------------------
 st.set_page_config(
-    page_title="Patient Symptom Questionnaire",
+    page_title="HNC Symptom Questionnaire",
+    page_icon="🩺",
     layout="wide"
 )
 
 # ------------------------------------------------------------
-# CSS styling
+# CSS STYLING
 # ------------------------------------------------------------
-st.markdown("""
-<style>
 
-.question-row {
-    padding:4px 0px;
-}
+st.markdown(
+    """
+    <style>
+    .question-row {
+        padding-top:6px;
+        padding-bottom:6px;
+        border-bottom:1px solid #f0f0f0;
+    }
 
-.question-text {
-    font-size:15px;
-    font-weight:500;
-}
+    .question-text {
+        font-size:15px;
+        font-weight:500;
+    }
 
-.score-btn button {
-    width:55px;
-    height:40px;
-    font-size:16px;
-    border-radius:8px;
-}
+    .score-button button {
+        width:100%;
+        height:38px;
+        font-size:15px;
+        border-radius:8px;
+    }
 
-.selected-btn button {
-    background-color:#2b7cff;
-    color:white;
-    border:2px solid #1f5bd8;
-}
+    .selected button {
+        background-color:#4CAF50 !important;
+        color:white !important;
+        font-weight:600;
+        border:1px solid #4CAF50 !important;
+    }
 
-.submit-btn button {
-    width:250px;
-    height:45px;
-    font-size:18px;
-}
+    .unselected button {
+        background-color:#f5f5f5;
+        color:#333;
+        border:1px solid #ddd;
+    }
 
-</style>
-""", unsafe_allow_html=True)
+    .submit-area{
+        padding-top:25px;
+    }
 
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 # ------------------------------------------------------------
-# Questionnaire questions (28)
+# QUESTION LIST (28 QUESTIONS)
 # ------------------------------------------------------------
-QUESTIONS = [
-    "Pain in throat",
-    "Difficulty swallowing",
-    "Dry mouth",
-    "Taste changes",
-    "Mouth sores",
-    "Hoarseness",
-    "Difficulty speaking",
-    "Neck swelling",
-    "Jaw pain",
-    "Ear pain",
-    "Fatigue",
-    "Nausea",
-    "Loss of appetite",
-    "Weight loss",
-    "Shortness of breath",
-    "Cough",
-    "Chest discomfort",
-    "Sleep disturbance",
-    "Anxiety",
-    "Depression",
-    "Skin irritation",
-    "Difficulty concentrating",
-    "Memory problems",
-    "Headache",
-    "Dizziness",
-    "Muscle weakness",
-    "Numbness",
-    "General discomfort"
+
+questions = [
+"Pain in throat",
+"Dry mouth",
+"Difficulty swallowing",
+"Difficulty chewing",
+"Pain when swallowing",
+"Change in voice",
+"Hoarseness",
+"Lump in neck",
+"Ear pain",
+"Weight loss",
+"Loss of appetite",
+"Difficulty breathing",
+"Coughing",
+"Fatigue",
+"Mouth sores",
+"Taste changes",
+"Bleeding in mouth",
+"Jaw stiffness",
+"Difficulty opening mouth",
+"Speech difficulty",
+"Burning sensation in mouth",
+"Thick saliva",
+"Trouble sleeping",
+"Anxiety",
+"Depression",
+"Difficulty concentrating",
+"Skin irritation in treatment area",
+"Swelling in face or neck"
 ]
 
+# ------------------------------------------------------------
+# SIMULATED PREVIOUS ANSWERS
+# ------------------------------------------------------------
+
+default_previous = {
+q: 0 for q in questions
+}
+
+default_previous.update({
+"Pain in throat":2,
+"Dry mouth":3,
+"Difficulty swallowing":1
+})
 
 # ------------------------------------------------------------
-# Session State Initialization
+# SESSION STATE INITIALIZATION
 # ------------------------------------------------------------
-if "current_answers" not in st.session_state:
-    st.session_state.current_answers = {q: 0 for q in QUESTIONS}
 
 if "previous_answers" not in st.session_state:
-    st.session_state.previous_answers = {q: 0 for q in QUESTIONS}
+    st.session_state.previous_answers = default_previous.copy()
 
-if "followups_needed" not in st.session_state:
-    st.session_state.followups_needed = []
+if "current_answers" not in st.session_state:
+    st.session_state.current_answers = st.session_state.previous_answers.copy()
 
-if "followup_responses" not in st.session_state:
-    st.session_state.followup_responses = {}
+if "show_followup" not in st.session_state:
+    st.session_state.show_followup = False
+
+if "followup_response" not in st.session_state:
+    st.session_state.followup_response = ""
+
+# ------------------------------------------------------------
+# HELPER FUNCTION
+# ------------------------------------------------------------
+
+def set_answer(question, value):
+    st.session_state.current_answers[question] = value
 
 
 # ------------------------------------------------------------
-# Function to render one question row
+# HEADER
 # ------------------------------------------------------------
-def render_question_row(question):
 
-    cols = st.columns([4,1,1,1,1,1,1])
+st.title("Head & Neck Cancer Symptom Questionnaire")
 
-    with cols[0]:
-        st.markdown(f'<div class="question-text">{question}</div>', unsafe_allow_html=True)
+st.markdown(
+"""
+Please rate the severity of each symptom.
 
-    current_value = st.session_state.current_answers[question]
+0 = None  
+5 = Severe
+"""
+)
+
+# ------------------------------------------------------------
+# QUESTION RENDER FUNCTION
+# ------------------------------------------------------------
+
+def render_question(question):
+
+    cols = st.columns([6,1,1,1,1,1,1])
+
+    cols[0].markdown(f"<div class='question-text'>{question}</div>", unsafe_allow_html=True)
+
+    current_value = st.session_state.current_answers.get(question,0)
 
     for i in range(6):
 
-        button_class = "score-btn"
-
-        if current_value == i:
-            button_class = "selected-btn"
-
         with cols[i+1]:
+
+            selected = current_value == i
+
+            class_name = "selected" if selected else "unselected"
+
+            st.markdown(f"<div class='score-button {class_name}'>", unsafe_allow_html=True)
 
             if st.button(
                 str(i),
                 key=f"{question}_{i}"
             ):
-                st.session_state.current_answers[question] = i
+                set_answer(question, i)
+                st.rerun()
+
+            st.markdown("</div>", unsafe_allow_html=True)
 
 
 # ------------------------------------------------------------
-# Header
+# RENDER QUESTIONNAIRE
 # ------------------------------------------------------------
-st.title("Patient Symptom Questionnaire")
 
-st.write("Please rate each symptom from **0 (none)** to **5 (severe)**.")
-
-st.markdown("---")
-
-
-# ------------------------------------------------------------
-# Render questionnaire grid
-# ------------------------------------------------------------
-for q in QUESTIONS:
-
-    st.markdown('<div class="question-row">', unsafe_allow_html=True)
-
-    render_question_row(q)
-
-    st.markdown('</div>', unsafe_allow_html=True)
-
+for q in questions:
+    st.markdown("<div class='question-row'>", unsafe_allow_html=True)
+    render_question(q)
+    st.markdown("</div>", unsafe_allow_html=True)
 
 # ------------------------------------------------------------
-# Submit Button
+# SUBMIT BUTTON
 # ------------------------------------------------------------
-st.markdown("---")
 
-submit = st.button("Submit Questionnaire")
+st.markdown("<div class='submit-area'>", unsafe_allow_html=True)
 
+submit = st.button("Submit Questionnaire", use_container_width=True)
 
 # ------------------------------------------------------------
-# Follow-up logic
+# FOLLOW-UP LOGIC
 # ------------------------------------------------------------
+
 if submit:
 
-    followups = []
+    previous = st.session_state.previous_answers
+    current = st.session_state.current_answers
 
-    for q in QUESTIONS:
+    followup_trigger = False
 
-        current = st.session_state.current_answers[q]
-        previous = st.session_state.previous_answers[q]
+    for q in questions:
 
-        if current >= 5 or (current - previous) > 2:
-            followups.append(q)
+        prev = previous.get(q,0)
+        curr = current.get(q,0)
 
-    st.session_state.followups_needed = followups
+        if curr >= 5:
+            followup_trigger = True
 
-    if len(followups) == 0:
+        if curr - prev > 2:
+            followup_trigger = True
 
-        st.success("Thank you. No follow-up questions required.")
+    st.session_state.show_followup = followup_trigger
 
-    else:
+    st.success("Questionnaire submitted.")
 
-        st.warning("We noticed your symptom score increased significantly.")
+# ------------------------------------------------------------
+# FOLLOW-UP QUESTIONS
+# ------------------------------------------------------------
 
-        for q in followups:
+if st.session_state.show_followup:
 
-            response = st.text_input(
-                f"{q}: Can you briefly describe what changed?",
-                key=f"followup_{q}"
-            )
+    st.warning("We noticed a significant increase in symptom severity.")
 
-            st.session_state.followup_responses[q] = response
+    st.session_state.followup_response = st.text_area(
+        "Can you briefly describe what changed?",
+        value=st.session_state.followup_response
+    )
 
-    # Print answers for demo
-    st.markdown("### Collected Answers")
+# ------------------------------------------------------------
+# DEMO OUTPUT
+# ------------------------------------------------------------
 
-    st.json({
-        "current_answers": st.session_state.current_answers,
-        "followup_responses": st.session_state.followup_responses
-    })
+if submit:
 
-    # Save current as previous for next visit
+    st.subheader("Collected Answers")
+
+    st.json(st.session_state.current_answers)
+
+    if st.session_state.show_followup:
+
+        st.subheader("Follow-up Response")
+
+        st.write(st.session_state.followup_response)
+
+    # Save current as previous for next visit simulation
     st.session_state.previous_answers = st.session_state.current_answers.copy()
