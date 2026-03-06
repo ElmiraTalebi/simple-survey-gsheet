@@ -316,55 +316,78 @@ def detect_worsening(payload: Dict, last_summary: Optional[Dict]) -> Dict:
 # GPT follow-up question generation
 # ============================================================
 
-def generate_followup_questions(payload: Dict, worse: Dict, last_summary: Dict) -> List[str]:
+def generate_followup_questions(payload: Dict, worse: Dict, last_summary: Optional[Dict]) -> List[str]:
     """
-    Generates at most 1 specific follow-up question, only when clinically necessary
-    and not already answered by the patient in the body map stage.
+    Generates at most 1 follow-up question, only when clinically necessary
+    and only when the patient has NOT already explained the issue.
+
+    Priority order (first match wins):
+      1. Severe pain (>=8) with no explanation
+      2. Pain jumped 3+ points with no explanation
+      3. New pain location (severity >=6) with no explanation
+      4. New concerning symptom (Difficulty swallowing, Mouth sores) with no prior record
     """
     if openai_client is None:
         return []
 
-    pain_reason = payload.get("pain_reason", {})
+    pain_reason   = payload.get("pain_reason", {})
     pain_severity = payload.get("pain_severity", {})
 
-    # Find the single most critical unanswered issue — strict priority order
     critical_issue = None
 
-    # 1. Severity >= 8 with no reason given
+    # 1. Severe pain with no reason
     for region, sev in pain_severity.items():
-        if sev >= 8 and region not in pain_reason:
-            critical_issue = f"Pain in {region} is severe ({sev}/10) and no reason was provided."
+        if sev >= 8 and not pain_reason.get(region, "").strip():
+            critical_issue = (
+                f"The patient has severe pain in their {region} ({sev}/10) "
+                f"and has not explained why."
+            )
             break
 
-    # 2. Pain jumped by 3+ with no reason given
+    # 2. Pain worsened significantly with no reason
     if not critical_issue and "worsened_pain" in worse:
         for region, change in worse["worsened_pain"].items():
             jump = change["to"] - change["from"]
-            if jump >= 3 and region not in pain_reason:
+            if jump >= 3 and not pain_reason.get(region, "").strip():
                 critical_issue = (
-                    f"Pain in {region} jumped from {change['from']}/10 to {change['to']}/10 "
-                    f"with no explanation provided."
+                    f"The patient's pain in their {region} jumped from "
+                    f"{change['from']}/10 to {change['to']}/10 with no explanation."
                 )
                 break
 
-    # 3. New pain location with severity >= 6 and no reason
+    # 3. New pain location, moderate-to-severe, no reason
     if not critical_issue and "new_pain_locations" in worse:
         for region in worse["new_pain_locations"]:
             sev = pain_severity.get(region, 0)
-            if sev >= 6 and region not in pain_reason:
-                critical_issue = f"New pain in {region} at {sev}/10 with no explanation."
+            if sev >= 6 and not pain_reason.get(region, "").strip():
+                critical_issue = (
+                    f"The patient has new pain in their {region} at {sev}/10 "
+                    f"that wasn't present in the previous visit."
+                )
                 break
 
-    # Nothing critical or everything already explained — no follow-up needed
+    # 4. New high-concern symptom (no pain_reason equivalent, but clinically important)
+    CONCERN_SYMPTOMS = {"Difficulty swallowing", "Mouth sores", "Hoarseness", "Nausea"}
+    if not critical_issue and "new_symptoms" in worse:
+        for sym in worse["new_symptoms"]:
+            if sym in CONCERN_SYMPTOMS:
+                critical_issue = (
+                    f"The patient has a new symptom: {sym}, which was not reported before."
+                )
+                break
+
+    # Nothing triggered or everything already explained
     if not critical_issue:
         return []
 
     prompt = (
-        f"You are a concise oncology nurse. A cancer patient has this unresolved clinical issue: "
-        f"{critical_issue} "
-        f"Ask exactly ONE specific, short question to clarify only this issue. "
-        f"Do not ask anything already covered. Do not be vague or generic. "
-        f'Return ONLY a JSON array with one question string. Example: ["Your question here?"]'
+        "You are a compassionate oncology nurse conducting a brief patient check-in. "
+        f"The following needs clarification: {critical_issue} "
+        "Ask the patient ONE short, kind, open-ended question about this — "
+        "it must be easy to answer out loud in one or two sentences. "
+        "Do NOT use medical jargon. Do NOT ask multiple questions. "
+        "Return ONLY a JSON array with exactly one question string. "
+        'Example: ["Can you describe what the pain feels like?"]'
     )
 
     try:
@@ -393,59 +416,166 @@ def generate_followup_questions(payload: Dict, worse: Dict, last_summary: Dict) 
 
 def voice_input_widget(input_key: str, label: str = ""):
     """
-    Renders a mic button. On click, uses the Web Speech API to transcribe speech
-    and injects the result into the Streamlit text input with the given key.
+    Renders a mic button using the Web Speech API.
+    On transcription, injects text into the nearest Streamlit textarea/input
+    using multiple targeting strategies for reliability across browsers.
+    The transcribed text is also displayed below the button immediately so
+    patients can see what was captured without needing to look at the input.
     """
+    safe_key = input_key.replace("-", "_").replace(" ", "_")
     components.html(f"""
-    <div style="margin-top:4px; margin-bottom:8px;">
-        <button id="mic_{input_key}" onclick="startVoice_{input_key}()"
+    <div id="voice_container_{safe_key}" style="margin-top:4px; margin-bottom:8px;">
+        <button id="mic_{safe_key}"
+            onclick="startVoice_{safe_key}()"
             style="background:#f1f6ff; border:1px solid #cfe0ff; border-radius:8px;
-                   padding:6px 14px; font-size:14px; cursor:pointer;">
+                   padding:7px 16px; font-size:14px; cursor:pointer; transition:all 0.2s;">
             🎤 Speak your answer
         </button>
-        <span id="status_{input_key}" style="font-size:13px; color:#888; margin-left:10px;"></span>
+        <span id="status_{safe_key}"
+              style="font-size:13px; color:#666; margin-left:10px;"></span>
+        <div id="transcript_display_{safe_key}"
+             style="display:none; margin-top:6px; padding:8px 12px;
+                    background:#f0fff4; border:1px solid #a8e6b9; border-radius:8px;
+                    font-size:14px; color:#1a5c2a; line-height:1.4;"></div>
     </div>
+
     <script>
-    function startVoice_{input_key}() {{
-        const btn = document.getElementById("mic_{input_key}");
-        const status = document.getElementById("status_{input_key}");
-        if (!("webkitSpeechRecognition" in window) && !("SpeechRecognition" in window)) {{
-            status.innerText = "Voice not supported in this browser.";
-            return;
-        }}
-        const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-        const rec = new SR();
-        rec.lang = "en-US";
-        rec.interimResults = false;
-        rec.maxAlternatives = 1;
-        btn.innerText = "🔴 Listening...";
-        status.innerText = "";
-        rec.start();
-        rec.onresult = function(event) {{
-            const transcript = event.results[0][0].transcript;
-            btn.innerText = "🎤 Speak your answer";
-            status.innerText = "✓ Got it!";
-            // Find the Streamlit textarea/input with the matching key and set its value
-            const inputs = window.parent.document.querySelectorAll("textarea, input[type=text]");
-            for (let el of inputs) {{
-                // Streamlit keys appear in the element id or aria-label
-                if (el.id && el.id.includes("{input_key}")) {{
-                    el.value = transcript;
-                    el.dispatchEvent(new Event("input", {{ bubbles: true }}));
+    (function() {{
+        const SAFE_KEY = "{safe_key}";
+        const ORIG_KEY = "{input_key}";
+
+        function injectText(transcript) {{
+            // Strategy 1: match by element key attribute (Streamlit React key)
+            const parent = window.parent.document;
+            let injected = false;
+
+            // Strategy 1: id contains the key
+            const byId = parent.querySelectorAll("textarea, input[type='text']");
+            for (let el of byId) {{
+                if ((el.id || "").includes(ORIG_KEY) || (el.id || "").includes(SAFE_KEY)) {{
+                    setNativeValue(el, transcript);
+                    injected = true;
                     break;
                 }}
             }}
+
+            // Strategy 2: aria-label contains the key
+            if (!injected) {{
+                for (let el of byId) {{
+                    const label = (el.getAttribute("aria-label") || "").toLowerCase();
+                    if (label.includes(ORIG_KEY.toLowerCase()) || label.includes(SAFE_KEY.toLowerCase())) {{
+                        setNativeValue(el, transcript);
+                        injected = true;
+                        break;
+                    }}
+                }}
+            }}
+
+            // Strategy 3: data-testid on the parent stTextInput/stTextArea
+            if (!injected) {{
+                const containers = parent.querySelectorAll(
+                    '[data-testid="stTextInput"], [data-testid="stTextArea"]'
+                );
+                for (let container of containers) {{
+                    const el = container.querySelector("textarea, input[type='text']");
+                    if (el && !el.value) {{
+                        setNativeValue(el, transcript);
+                        injected = true;
+                        break;
+                    }}
+                }}
+            }}
+
+            return injected;
+        }}
+
+        // React needs a native value setter to register the change
+        function setNativeValue(el, value) {{
+            const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+                el.tagName === "TEXTAREA"
+                    ? window.parent.HTMLTextAreaElement.prototype
+                    : window.parent.HTMLInputElement.prototype,
+                "value"
+            ).set;
+            nativeInputValueSetter.call(el, value);
+            el.dispatchEvent(new Event("input", {{ bubbles: true }}));
+            el.dispatchEvent(new Event("change", {{ bubbles: true }}));
+            el.focus();
+        }}
+
+        window["startVoice_" + SAFE_KEY] = function() {{
+            const btn    = document.getElementById("mic_" + SAFE_KEY);
+            const status = document.getElementById("status_" + SAFE_KEY);
+            const disp   = document.getElementById("transcript_display_" + SAFE_KEY);
+
+            if (!("webkitSpeechRecognition" in window) && !("SpeechRecognition" in window)) {{
+                status.innerHTML = "⚠️ Voice not supported. Please use Chrome or Edge.";
+                return;
+            }}
+
+            const SR  = window.SpeechRecognition || window.webkitSpeechRecognition;
+            const rec = new SR();
+            rec.lang           = "en-US";
+            rec.interimResults = true;     // show interim so patient sees live feedback
+            rec.maxAlternatives = 1;
+            rec.continuous     = false;
+
+            btn.innerText    = "🔴 Listening... (speak now)";
+            btn.style.background = "#fff0f0";
+            btn.style.borderColor = "#e74c3c";
+            status.innerText = "";
+            disp.style.display = "none";
+
+            rec.start();
+
+            rec.onresult = function(event) {{
+                let interim = "";
+                let final_t = "";
+                for (let i = event.resultIndex; i < event.results.length; i++) {{
+                    const t = event.results[i][0].transcript;
+                    if (event.results[i].isFinal) {{ final_t += t; }}
+                    else {{ interim += t; }}
+                }}
+                // Show interim live
+                if (interim) {{
+                    status.innerText = "🎙 " + interim;
+                }}
+                // On final result — inject and display
+                if (final_t) {{
+                    const ok = injectText(final_t);
+                    status.innerText = ok ? "✓ Captured!" : "✓ Heard (scroll up to see)";
+                    disp.innerText   = "🗣 Heard: \"" + final_t + "\"";
+                    disp.style.display = "block";
+                    btn.innerText    = "🎤 Speak again";
+                    btn.style.background = "#f1f6ff";
+                    btn.style.borderColor = "#cfe0ff";
+                }}
+            }};
+
+            rec.onerror = function(e) {{
+                btn.innerText = "🎤 Speak your answer";
+                btn.style.background = "#f1f6ff";
+                btn.style.borderColor = "#cfe0ff";
+                const msgs = {{
+                    "no-speech":       "No speech detected — please try again.",
+                    "audio-capture":   "Microphone not found.",
+                    "not-allowed":     "Microphone permission denied.",
+                    "network":         "Network error — check your connection.",
+                }};
+                status.innerText = "⚠️ " + (msgs[e.error] || "Error: " + e.error);
+            }};
+
+            rec.onend = function() {{
+                if (btn.innerText === "🔴 Listening... (speak now)") {{
+                    btn.innerText = "🎤 Speak your answer";
+                    btn.style.background = "#f1f6ff";
+                    btn.style.borderColor = "#cfe0ff";
+                }}
+            }};
         }};
-        rec.onerror = function(e) {{
-            btn.innerText = "🎤 Speak your answer";
-            status.innerText = "Error: " + e.error;
-        }};
-        rec.onend = function() {{
-            if (btn.innerText === "🔴 Listening...") btn.innerText = "🎤 Speak your answer";
-        }};
-    }}
+    }})();
     </script>
-    """, height=60)
+    """, height=90)
 
 # ============================================================
 # UI
@@ -758,10 +888,17 @@ elif st.session_state.stage == 3:
                             st.session_state[q_key] = "Can you describe what makes this pain better or worse?"
 
                     question = st.session_state.get(q_key) or "Can you describe what makes this pain better or worse?"
-                    answer = st.text_input(question, key=f"reason_{r}")
-                    voice_input_widget(f"reason_{r}")
-                    if answer:
-                        st.session_state.pain_reason[r] = answer
+                    _tr_reason  = st.session_state.get(f"_transcript_reason_{r}", "")
+                    _default_r  = _tr_reason or st.session_state.pain_reason.get(r, "")
+                    answer = st.text_input(
+                        question,
+                        value=_default_r,
+                        key=f"reason_{r}",
+                    )
+                    voice_input_widget(f"reason_{r}", label=question)
+                    saved_r = answer or _tr_reason
+                    if saved_r:
+                        st.session_state.pain_reason[r] = saved_r
 
         # Other / custom pain location
         st.markdown("---")
@@ -899,13 +1036,23 @@ elif st.session_state.stage == 4.5:
     questions = st.session_state.followup_questions
 
     for i, question in enumerate(questions):
+        # Pre-seed from voice transcript buffer if available
+        _tr_key  = f"_transcript_followup_answer_{i}"
+        _tr_text = st.session_state.get(_tr_key, "")
+        _default = _tr_text or st.session_state.followup_answers.get(i, "")
+
         answer = st.text_area(
             question,
+            value=_default,
             key=f"followup_answer_{i}",
             height=80,
         )
         voice_input_widget(f"followup_answer_{i}")
-        st.session_state.followup_answers[i] = answer
+
+        # Save whichever is non-empty: typed answer or voice transcript
+        saved = answer or _tr_text
+        if saved:
+            st.session_state.followup_answers[i] = saved
 
     st.markdown("---")
 
