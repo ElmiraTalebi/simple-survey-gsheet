@@ -282,8 +282,11 @@ DEFAULTS = {
     "patient_name": "",
     "previous_answers": None,  # Dict[str,int] or None (None = first visit)
     "answers": {},             # current; absent key = not yet selected
-    "followup_needed": [],
-    "followup_text": "",
+    "followup_questions": [],  # list of (symptom, prev_score, curr_score)
+    "followup_answers": {},    # {symptom: answer_text}
+    "followup_required": False,
+    "followup_needed": [],     # kept for backward compat
+    "followup_text": "",       # kept for backward compat
     "confirm_submit": False,
 }
 
@@ -314,6 +317,28 @@ def check_followup(current: Dict[str, int], previous: Optional[Dict[str, int]]):
         prev = (previous or {}).get(q, 0)
         if score >= 5 or (score - prev) >= 3:
             flagged.append((q, score, prev))
+    return flagged
+
+
+def detect_followups(
+    current_answers: Dict[str, int],
+    previous_answers: Optional[Dict[str, int]],
+) -> List[tuple]:
+    """
+    Returns a list of (symptom, prev_score, curr_score) tuples requiring follow-up.
+    Triggers when:
+      - current score == 5 (maximum), OR
+      - score increased by more than 2 points vs previous visit.
+    Does NOT trigger if score decreased (improvement).
+    """
+    flagged = []
+    prev = previous_answers or {}
+    for symptom, curr_score in current_answers.items():
+        prev_score = prev.get(symptom, 0)
+        increased_significantly = (curr_score - prev_score) > 2
+        is_maximum = curr_score == 5
+        if is_maximum or increased_significantly:
+            flagged.append((symptom, prev_score, curr_score))
     return flagged
 
 
@@ -480,9 +505,12 @@ elif st.session_state.q_stage == "form":
         with c1:
             st.markdown('<div class="submit-btn">', unsafe_allow_html=True)
             if st.button("Yes, submit anyway →", key="confirm_yes"):
-                flagged = check_followup(st.session_state.answers, prev_answers)
-                st.session_state.followup_needed = flagged
-                st.session_state.confirm_submit  = False
+                flagged = detect_followups(st.session_state.answers, prev_answers)
+                st.session_state.followup_questions = flagged
+                st.session_state.followup_answers   = {}
+                st.session_state.followup_required  = len(flagged) > 0
+                st.session_state.followup_needed    = flagged  # compat
+                st.session_state.confirm_submit     = False
                 st.session_state.q_stage = "followup" if flagged else "saving"
                 st.rerun()
             st.markdown('</div>', unsafe_allow_html=True)
@@ -497,57 +525,87 @@ elif st.session_state.q_stage == "form":
                 st.session_state.confirm_submit = True
                 st.rerun()
             else:
-                flagged = check_followup(st.session_state.answers, prev_answers)
-                st.session_state.followup_needed = flagged
+                flagged = detect_followups(st.session_state.answers, prev_answers)
+                st.session_state.followup_questions = flagged
+                st.session_state.followup_answers   = {}
+                st.session_state.followup_required  = len(flagged) > 0
+                st.session_state.followup_needed    = flagged  # compat
                 st.session_state.q_stage = "followup" if flagged else "saving"
                 st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
 
 
 # ============================================================
-# STAGE: Follow-up
+# STAGE: Follow-up (per-symptom questions)
 # ============================================================
 
 elif st.session_state.q_stage == "followup":
 
     st.markdown("""
-    <div class="followup-card">
-        <h4>⚠️ One quick follow-up</h4>
-        <p style="font-size:0.85rem; color:#7a5000; margin:0;">
-            One or more symptoms are significantly higher than your last visit.
-            A brief note helps your care team prepare.
-        </p>
+    <div class="page-header">
+        <div style="font-size:2rem; line-height:1;">📋</div>
+        <div>
+            <h1>A few follow-up questions</h1>
+            <p>We noticed some symptoms that may need more detail. Please answer briefly for each one below.</p>
+        </div>
     </div>
     """, unsafe_allow_html=True)
 
-    for q, score, prev in st.session_state.followup_needed:
-        diff   = score - prev
-        reason = "scored maximum (5/5)" if score >= 5 else f"increased by {diff} ({prev} → {score})"
-        st.markdown(
-            f'<div style="font-size:0.85rem; color:#1e2d50; padding:3px 0;">'
-            f'<strong>{q}</strong> — {reason}</div>',
-            unsafe_allow_html=True,
-        )
+    flagged = st.session_state.followup_questions  # list of (symptom, prev, curr)
 
-    st.markdown("<br>", unsafe_allow_html=True)
-    followup_text = st.text_area(
-        "Can you briefly describe what changed?",
-        value=st.session_state.followup_text,
-        height=90,
-        placeholder="e.g. Throat pain started after eating, worse in the morning…",
-        key="followup_input",
-    )
-    st.session_state.followup_text = followup_text
-
-    c1, c2 = st.columns(2)
-    with c1:
-        if st.button("Submit with my notes →", key="fup_submit"):
+    if not flagged:
+        st.info("No follow-up questions needed.")
+        if st.button("Continue →", key="fup_none"):
             st.session_state.q_stage = "saving"
             st.rerun()
-    with c2:
-        if st.button("Skip and submit →", key="fup_skip"):
+    else:
+        for idx, (symptom, prev_score, curr_score) in enumerate(flagged):
+            diff = curr_score - prev_score
+            if curr_score == 5:
+                trigger_label = "scored the maximum (5 / 5)"
+            else:
+                trigger_label = f"increased by {diff} points ({prev_score} → {curr_score})"
+
+            st.markdown(
+                f'''<div style="background:#f8faff; border:1px solid #e2e8f4; border-radius:12px;
+                         padding:18px 20px; margin-bottom:14px;">
+                    <div style="font-size:0.7rem; font-weight:600; letter-spacing:0.1em;
+                                text-transform:uppercase; color:#8a94b0; margin-bottom:6px;">
+                        Symptom {idx + 1} of {len(flagged)}
+                    </div>
+                    <div style="font-size:1rem; font-weight:600; color:#1a2540; margin-bottom:4px;">
+                        {symptom}
+                    </div>
+                    <div style="font-size:0.82rem; color:#c0392b;">
+                        This symptom {trigger_label}
+                    </div>
+                </div>''',
+                unsafe_allow_html=True,
+            )
+
+            existing = st.session_state.followup_answers.get(symptom, "")
+            answer = st.text_area(
+                "Can you briefly describe what changed?",
+                value=existing,
+                height=80,
+                placeholder="e.g. Started after eating, worse at night, began two days ago…",
+                key=f"fup_{idx}",
+            )
+            st.session_state.followup_answers[symptom] = answer
+
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown('<div class="submit-btn">', unsafe_allow_html=True)
+        if st.button("Submit follow-up answers →", key="fup_submit"):
+            # Store combined text for backward compat summary display
+            combined = "; ".join(
+                f"{sym}: {ans}"
+                for sym, ans in st.session_state.followup_answers.items()
+                if ans.strip()
+            )
+            st.session_state.followup_text = combined
             st.session_state.q_stage = "saving"
             st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
 
 
 # ============================================================
@@ -612,7 +670,22 @@ elif st.session_state.q_stage == "done":
         c3.markdown(f'<div class="scale-header"><span class="{score_class(curr)} score-badge">{curr}</span></div>', unsafe_allow_html=True)
         c4.markdown(f'<div class="scale-header">{chg}</div>', unsafe_allow_html=True)
 
-    if st.session_state.followup_text:
+    # Show per-symptom follow-up answers if any
+    followup_answers = st.session_state.get("followup_answers", {})
+    answered = {k: v for k, v in followup_answers.items() if v.strip()}
+    if answered:
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown('<div class="section-label">Follow-up answers</div>', unsafe_allow_html=True)
+        for symptom, answer in answered.items():
+            st.markdown(
+                f'<div style="background:#f8faff; border:1px solid #e2e8f4; border-radius:10px; '
+                f'padding:12px 16px; margin-bottom:8px;">' 
+                f'<div style="font-size:0.75rem; font-weight:600; color:#8a94b0; '
+                f'text-transform:uppercase; letter-spacing:0.08em; margin-bottom:4px;">{symptom}</div>'
+                f'<div style="font-size:0.88rem; color:#1e2d50;">{answer}</div></div>',
+                unsafe_allow_html=True,
+            )
+    elif st.session_state.followup_text:
         st.markdown("<br>", unsafe_allow_html=True)
         st.markdown('<div class="section-label">Your notes</div>', unsafe_allow_html=True)
         st.markdown(
