@@ -413,7 +413,7 @@ if st.session_state.q_stage == "name":
                 st.session_state.patient_name    = name.strip()
                 st.session_state.previous_answers = prev
                 # Pre-populate if returning; empty dict if first visit
-                st.session_state.answers = dict(prev) if prev else {}
+                st.session_state.answers = dict(prev) if prev else {q: 0 for q in ALL_QUESTIONS}
                 st.session_state.q_stage = "form"
                 st.rerun()
 
