@@ -302,15 +302,15 @@ def _safe_int(val, default=0):
 
 # ── PAIN & MEDICATIONS (Main 2, 3, 12, 38) ────────────────────────
 FLOW_PAIN = [
-    _q("has_pain", "Do you have any pain today?",
-       opts=["Yes", "No"]),
+    # Main 2
+    _q("has_pain", "Do you have any pain today?", opts=["Yes", "No"]),
 
-    # Location (Main 3)
+    # Main 3 — location
     _q("pain_location", "Where exactly is the pain?",
        opts=["Throat", "Tongue", "Somewhere else"],
        when=lambda d: d.get("has_pain") == "Yes"),
 
-    # Throat branch
+    # ── Throat branch ──
     _q("throat_timing",
        "Is the throat pain there all the time, or only when you swallow or eat?",
        opts=["All the time", "Only when swallowing", "Only when eating",
@@ -324,18 +324,17 @@ FLOW_PAIN = [
 
     _q("throat_med_helps",
        "Are you taking pain medication for this? Is it helping?",
-       opts=["Yes, it helps", "Yes, but it's not enough",
-             "No, I'm not taking anything"],
+       opts=["Yes, it helps", "Yes, but it's not enough", "No, I'm not taking anything"],
        when=lambda d: (d.get("pain_location") == "Throat"
                        and _safe_int(d.get("throat_severity", 0)) > 4)),
 
-    # Tongue branch
+    # ── Tongue branch ──
     _q("tongue_type",
        "Is it a sore or ulcer on the tongue, or a general painful feeling?",
        opts=["There's a sore/ulcer", "Just pain, no visible sore"],
        when=lambda d: d.get("pain_location") == "Tongue"),
 
-    _q("tongue_spread",
+    _q("tongue_spot",
        "Is the pain in one specific spot, or does it spread?",
        opts=["One spot", "Spreads across tongue", "Whole mouth"],
        when=lambda d: d.get("pain_location") == "Tongue"),
@@ -345,7 +344,7 @@ FLOW_PAIN = [
        type="number", min_v=0, max_v=10, default_v=5,
        when=lambda d: d.get("pain_location") == "Tongue"),
 
-    # Somewhere else branch
+    # ── Somewhere else branch ──
     _q("other_pain_desc",
        "Can you describe where the pain is?",
        type="free_text", placeholder="e.g., near my jaw and ear…",
@@ -364,17 +363,21 @@ FLOW_PAIN = [
        opts=["Yes", "No"],
        when=lambda d: d.get("pain_location") == "Somewhere else"),
 
+    _q("pain_start",                        # ← added (Main 3, Somewhere else branch)
+       "When did this pain start?",
+       type="free_text",
+       placeholder="e.g., about a week ago, since I started radiation…",
+       when=lambda d: d.get("pain_location") == "Somewhere else"),
+
     # Main 12 — Medications
     _q("pain_medications",
        "Which medications are you currently taking for pain?",
        type="multi_select",
-       opts=["Gabapentin", "Oxycodone", "Butrans patch", "Other",
-             "No pain medication"]),
+       opts=["Gabapentin", "Oxycodone", "Butrans patch", "Other", "No pain medication"]),
 
     _q("med_dose_freq",
        "How often are you taking your pain medication, and at what dose?",
-       type="free_text",
-       placeholder="e.g., Oxycodone 5mg every 6 hours…",
+       type="free_text", placeholder="e.g., Oxycodone 5mg every 6 hours…",
        when=lambda d: (bool(d.get("pain_medications"))
                        and "No pain medication" not in (d.get("pain_medications") or []))),
 
@@ -396,7 +399,7 @@ FLOW_PAIN = [
 
 # ── NUTRITION & FLUIDS (Main 5, 6, 8, 25, 26, 27, 34) ─────────────
 FLOW_NUTRITION = [
-    # Main 5
+    # Main 5 — Eating ability
     _q("eating_ability",
        "How has your eating been since your last visit?",
        opts=["Eating normally — no problems",
@@ -404,11 +407,10 @@ FLOW_NUTRITION = [
              "Struggling — only liquids or very little",
              "Not eating — using a feeding tube only"]),
 
-    # Eating less branch
+    # Branch: Eating less
     _q("fluid_intake_managing",
        "Are you drinking enough fluids throughout the day — water, shakes, or other drinks?",
-       opts=["Yes, drinking well", "A little less than usual",
-             "Struggling to drink enough"],
+       opts=["Yes, drinking well", "A little less than usual", "Struggling to drink enough"],
        when=lambda d: d.get("eating_ability") == "Eating less than usual, but managing"),
 
     _q("food_type",
@@ -417,7 +419,7 @@ FLOW_NUTRITION = [
              "Mix of soft and liquid", "Mainly liquids"],
        when=lambda d: d.get("eating_ability") == "Eating less than usual, but managing"),
 
-    # Struggling branch
+    # Branch: Struggling
     _q("nutritional_shakes",
        "How many nutritional shakes or Boost/Ensure drinks are you having per day?",
        opts=["None", "1–2", "3–4", "More than 4"],
@@ -446,7 +448,7 @@ FLOW_NUTRITION = [
              "No, I didn't know to do this", "No, I don't take pain medication"],
        when=lambda d: d.get("eating_ability") == "Struggling — only liquids or very little"),
 
-    # Tube feeding branch
+    # Branch: Tube only
     _q("tube_issues",
        "Is the tube feeding going well — no blockages, leaks, or discomfort around the site?",
        opts=["Working fine", "Some issues — leaking or blockage",
@@ -455,8 +457,7 @@ FLOW_NUTRITION = [
 
     _q("tube_oral_sips",
        "Are you still able to take any sips of water or liquids by mouth at all?",
-       opts=["Yes, small amounts", "Very occasionally for comfort",
-             "No, nothing by mouth"],
+       opts=["Yes, small amounts", "Very occasionally for comfort", "No, nothing by mouth"],
        when=lambda d: d.get("eating_ability") == "Not eating — using a feeding tube only"),
 
     # Main 6 — Weight
@@ -465,7 +466,7 @@ FLOW_NUTRITION = [
        type="number", min_v=50, max_v=500, default_v=150),
 
     _q("weight_impact",
-       "Has any recent weight change been affecting how you feel or your energy levels?",
+       "Has any weight change been affecting how you feel or your energy levels?",
        opts=["Yes, I've noticed a difference", "Not really"]),
 
     # Main 8 — Swallowing
@@ -478,7 +479,7 @@ FLOW_NUTRITION = [
        opts=["Painful to swallow", "Mechanically difficult"],
        when=lambda d: d.get("swallowing_difficulty") == "Yes"),
 
-    _q("choking_eating",
+    _q("choking_with_eating",
        "Do you cough or choke when you eat?",
        opts=["Yes", "No"],
        when=lambda d: d.get("swallowing_difficulty") == "Yes"),
@@ -488,18 +489,27 @@ FLOW_NUTRITION = [
        opts=["I swallow by mouth", "Everything through the feeding tube"],
        when=lambda d: d.get("swallowing_difficulty") == "Yes"),
 
-    # Main 25 — Choking detail
+    # Main 25 — Choking/Coughing (standalone — separate from Main 8)
+    _q("choking_coughing",
+       "Are you having any difficulty with choking or coughing when eating or drinking?",
+       opts=["Yes", "No"]),
+
     _q("choking_type",
-       "Does choking or coughing happen with liquids, solids, or both?",
+       "Does it happen with liquids, solids, or both?",
        opts=["Liquids", "Solids", "Both"],
-       when=lambda d: d.get("choking_eating") == "Yes"),
+       when=lambda d: d.get("choking_coughing") == "Yes"),
 
     _q("choking_frequency",
-       "Does it happen every time you eat, or occasionally?",
+       "Does it happen every time you eat, or only occasionally?",
        opts=["Every time", "Occasionally"],
-       when=lambda d: d.get("choking_eating") == "Yes"),
+       when=lambda d: d.get("choking_coughing") == "Yes"),
 
-    # Main 26 — IV fluids
+    _q("choking_pills",                     # ← added (Main 25)
+       "Does it also happen when you take pills?",
+       opts=["Yes", "No"],
+       when=lambda d: d.get("choking_coughing") == "Yes"),
+
+    # Main 26 — IV Fluids
     _q("iv_fluids",
        "Are you currently receiving IV fluids or hydration treatments?",
        opts=["Yes", "No"]),
@@ -514,12 +524,17 @@ FLOW_NUTRITION = [
        opts=["Yes", "No"],
        when=lambda d: d.get("iv_fluids") == "Yes"),
 
+    _q("iv_adjust",                         # ← added (Main 26)
+       "Would you like to adjust the frequency of your hydration visits?",
+       opts=["Yes", "No"],
+       when=lambda d: d.get("iv_fluids") == "Yes"),
+
     _q("need_hydration",
        "Do you feel like you might need hydration support?",
        opts=["Yes", "No"],
        when=lambda d: d.get("iv_fluids") == "No"),
 
-    # Main 27 — Feeding tube (for those not already on tube)
+    # Main 27 — Feeding tube (for patients not already exclusively tube-fed)
     _q("feeding_tube",
        "Are you currently using a feeding tube?",
        opts=["Yes", "No"],
@@ -619,7 +634,7 @@ FLOW_ORAL = [
        opts=["Yes", "No"],
        when=lambda d: d.get("dry_mouth") == "Yes"),
 
-    # Main 10 — Mucus
+    # Main 10 — Mucus / thick secretions
     _q("mucus_issues",
        "Are you having problems with mucus or thick secretions in your throat?",
        opts=["Yes", "No"]),
@@ -639,7 +654,7 @@ FLOW_ORAL = [
        opts=["Yes", "No"],
        when=lambda d: d.get("mucus_issues") == "Yes"),
 
-    # Main 24 — Teeth/Gums
+    # Main 24 — Teeth / Gums
     _q("teeth_gum_issues",
        "Are you having any problems with your teeth or gums?",
        opts=["Yes", "No"]),
@@ -651,6 +666,11 @@ FLOW_ORAL = [
 
     _q("brushing_difficult",
        "Is it making brushing difficult?",
+       opts=["Yes", "No"],
+       when=lambda d: d.get("teeth_gum_issues") == "Yes"),
+
+    _q("avoiding_brushing",                 # ← added (Main 24)
+       "Are you avoiding brushing because of the discomfort?",
        opts=["Yes", "No"],
        when=lambda d: d.get("teeth_gum_issues") == "Yes"),
 
@@ -678,7 +698,7 @@ FLOW_ORAL = [
 
 # ── GI SYMPTOMS (Main 11, 18) ─────────────────────────────────────
 FLOW_GI = [
-    # Main 11 — Nausea/Vomiting
+    # Main 11 — Nausea / Vomiting / Blood
     _q("nausea_vomiting",
        "Have you had any nausea, vomiting, or noticed any blood when you cough?",
        type="multi_select",
@@ -726,7 +746,7 @@ FLOW_GI = [
 
 # ── FATIGUE & SLEEP (Main 13, 14) ─────────────────────────────────
 FLOW_FATIGUE = [
-    # Main 13
+    # Main 13 — Fatigue / Weakness
     _q("fatigue",
        "Are you feeling more tired or weak than usual?",
        opts=["Yes", "No"]),
@@ -747,7 +767,7 @@ FLOW_FATIGUE = [
        opts=["Yes", "No"],
        when=lambda d: d.get("fatigue") == "Yes"),
 
-    # Main 14 — Sleep & drowsiness
+    # Main 14 — Drowsiness + Sleep
     _q("medication_drowsy",
        "Are your pain medications making you feel drowsy?",
        opts=["Yes", "No", "Sometimes"]),
@@ -762,10 +782,10 @@ FLOW_FATIGUE = [
        placeholder="e.g., pain wakes me up around 3am…",
        when=lambda d: d.get("sleep_quality") == "No"),
 
-    _q("drowsy_schedule",
+    _q("drowsy_schedule",                   # ← fixed: now conditional on sleep_quality, not drowsiness
        "Is drowsiness from medication affecting your normal wake/sleep schedule?",
        opts=["Yes", "No"],
-       when=lambda d: d.get("medication_drowsy") in ["Yes", "Sometimes"]),
+       when=lambda d: d.get("sleep_quality") == "No"),
 ]
 
 # ── ACTIVITY LEVEL (Main 30) ───────────────────────────────────────
@@ -796,7 +816,7 @@ FLOW_ACTIVITY = [
 
 # ── MOOD (Main 15, 35, 39) ─────────────────────────────────────────
 FLOW_MOOD = [
-    # Main 15
+    # Main 15 — Emotional state / Anxiety
     _q("emotional_state",
        "How are you feeling emotionally? Are you feeling anxious or worried about anything?",
        type="free_text",
@@ -891,12 +911,17 @@ FLOW_OTHER = [
        opts=["Constant", "Only when standing or changing position"],
        when=lambda d: d.get("dizziness") == "Yes"),
 
+    _q("dizziness_worsening",               # ← added (Main 17)
+       "Has the dizziness gotten worse recently?",
+       opts=["Yes", "No"],
+       when=lambda d: d.get("dizziness") == "Yes"),
+
     _q("falls",
        "Have you had any falls or felt like you might fall?",
        opts=["Yes", "No"],
        when=lambda d: d.get("dizziness") == "Yes"),
 
-    # Main 19 — Numbness/Tingling
+    # Main 19 — Numbness / Tingling
     _q("numbness",
        "Have you noticed any numbness or tingling in your hands or feet?",
        opts=["Yes", "No"]),
@@ -916,18 +941,16 @@ FLOW_OTHER = [
        opts=["Yes", "No"],
        when=lambda d: d.get("numbness") == "Yes"),
 
-    # Main 20 — Fever/Chills
+    # Main 20 — Fever / Chills
     _q("fever_chills",
        "Have you had any fever or chills recently?",
        opts=["Yes", "No"]),
 
-    _q("fever_start",
-       "When did the fever or chills start?",
+    _q("fever_start", "When did the fever or chills start?",
        type="free_text", placeholder="e.g., two days ago…",
        when=lambda d: d.get("fever_chills") == "Yes"),
 
-    _q("fever_temp",
-       "How high was the fever?",
+    _q("fever_temp", "How high was the fever?",
        type="free_text", placeholder="e.g., 101.5°F…",
        when=lambda d: d.get("fever_chills") == "Yes"),
 
@@ -941,8 +964,7 @@ FLOW_OTHER = [
        "Are you checking your blood pressure at home?",
        opts=["Yes", "No"]),
 
-    _q("bp_reading",
-       "What has your blood pressure been recently?",
+    _q("bp_reading", "What has your blood pressure been recently?",
        type="free_text", placeholder="e.g., 130/85…",
        when=lambda d: d.get("bp_monitoring") == "Yes"),
 
@@ -961,9 +983,14 @@ FLOW_OTHER = [
        "Have you had any skin problems — like irritation, wounds, or redness?",
        opts=["Yes", "No"]),
 
-    _q("skin_location",
-       "Where is the skin issue located?",
+    _q("skin_location", "Where is the skin issue located?",
        type="free_text", placeholder="e.g., neck, shoulder, near jaw…",
+       when=lambda d: d.get("skin_issues") == "Yes"),
+
+    _q("skin_start",                        # ← added (Main 22)
+       "When did it start?",
+       type="free_text",
+       placeholder="e.g., about a week ago, at the start of radiation…",
        when=lambda d: d.get("skin_issues") == "Yes"),
 
     _q("skin_progression",
@@ -976,7 +1003,7 @@ FLOW_OTHER = [
        opts=["Yes", "No"],
        when=lambda d: d.get("skin_issues") == "Yes"),
 
-    # Main 23 — Voice
+    # Main 23 — Voice / Hoarseness
     _q("voice_hoarseness",
        "How is your voice? Have you noticed any hoarseness or trouble speaking?",
        opts=["Yes, problems with my voice", "No, voice is fine"]),
@@ -996,7 +1023,7 @@ FLOW_OTHER = [
        opts=["Yes", "No"],
        when=lambda d: d.get("voice_hoarseness") == "Yes, problems with my voice"),
 
-    # Main 36 — Cognition
+    # Main 36 — Concentration / Memory
     _q("concentration",
        "Have you had trouble concentrating or remembering things?",
        opts=["Yes", "No"]),
@@ -1020,6 +1047,11 @@ FLOW_OTHER = [
        "Would you like to discuss this further with your provider?",
        opts=["Yes", "No"],
        when=lambda d: d.get("sexual_health") == "Yes"),
+
+    _q("sexual_cause",                      # ← added (Main 37)
+       "Is it related to treatment, energy levels, or something else?",
+       opts=["Treatment side effects", "Energy levels", "Other"],
+       when=lambda d: d.get("sexual_health") == "Yes"),
 ]
 
 # Master flow registry
@@ -1033,6 +1065,7 @@ FLOWS = {
     "mood":      FLOW_MOOD,
     "other":     FLOW_OTHER,
 }
+
 
 
 # ══════════════════════════════════════════════════════════════════
