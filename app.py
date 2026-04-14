@@ -92,6 +92,53 @@ OUTPUT:
 
 
 
+
+
+def interpret_user_input_with_options(step, user_input):
+    if not openai_client:
+        return user_input
+
+    options = step.get("opts", [])
+    if not options:
+        return user_input
+
+    prompt = f"""
+You are a clinical assistant.
+
+QUESTION:
+"{step['text']}"
+
+OPTIONS:
+{options}
+
+PATIENT RESPONSE:
+"{user_input}"
+
+TASK:
+- If the response clearly matches ONE option → return that option EXACTLY
+- Otherwise return the original response
+
+ONLY return one line.
+"""
+
+    try:
+        r = openai_client.chat.completions.create(
+            model="gpt-4.1-mini",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=40,
+            temperature=0
+        )
+        mapped = r.choices[0].message.content.strip()
+
+        if mapped in options:
+            return mapped
+
+        return user_input
+
+    except:
+        return user_input
+
+
 # ══════════════════════════════════════════════════════════════════
 # PAGE CONFIG
 # ══════════════════════════════════════════════════════════════════
@@ -1949,16 +1996,58 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
 
     # ── Options ─────────────────────────────────────────────────
     if stype == "options":
-        num_opts = len(step["opts"])
-        ncols = 2 if num_opts <= 4 else 1
-        cols = st.columns(ncols)
-        for i, opt in enumerate(step["opts"]):
-            # Visually highlight the previously chosen option
-            is_prev = (str(prev_answer) == opt) if prev_answer is not None else False
-            label = f"✔ {opt}" if is_prev else opt
-            with cols[i % ncols]:
-                if st.button(label, key=f"opt_{topic_key}_{sid}_{i}"):
-                    handle_answer(topic_key, step, opt)
+
+    st.markdown("**Choose an option OR type your answer:**")
+
+    # ── OPTION BUTTONS ──
+    cols = st.columns(2 if len(step["opts"]) <= 4 else 1)
+
+    for i, opt in enumerate(step["opts"]):
+        with cols[i % len(cols)]:
+            if st.button(opt, key=f"opt_{topic_key}_{sid}_{i}"):
+                handle_answer(topic_key, step, opt)
+
+    # ── FREE TEXT INPUT ──
+    user_text = st.text_input(
+        "Or type your answer:",
+        key=f"opt_text_{topic_key}_{sid}"
+    )
+
+    col1, col2 = st.columns([2,1])
+
+    # ── TEXT SUBMIT ──
+    with col1:
+        if st.button("Submit ✎", key=f"opt_submit_{topic_key}_{sid}"):
+
+            if user_text.strip():
+
+                # 🔥 LLM interprets text
+                interpreted = interpret_user_input_with_options(step, user_text)
+
+                # optional clarification (your existing logic)
+                ack = None
+                if openai_client:
+                    with st.spinner("Understanding your response…"):
+                        ack = get_llm_clarification(
+                            topic_key,
+                            step,
+                            user_text,
+                            st.session_state.topic_states[topic_key]["chat"]
+                        )
+
+                handle_answer(topic_key, step, interpreted, llm_ack=ack)
+
+            else:
+                st.warning("Please type something or select an option.")
+
+    # ── VOICE INPUT ──
+    with col2:
+        voice_text = voice_widget(f"{topic_key}_{sid}_opt")
+
+        if voice_text:
+            interpreted = interpret_user_input_with_options(step, voice_text)
+            handle_answer(topic_key, step, interpreted)
+            
 
     # ── Multi-select ─────────────────────────────────────────────
     elif stype == "multi_select":
