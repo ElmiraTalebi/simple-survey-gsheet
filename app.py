@@ -350,23 +350,15 @@ FLOW_PAIN = [
        type="free_text", placeholder="e.g., near my jaw and ear…",
        when=lambda d: d.get("pain_location") == "Somewhere else"),
 
-    _q("ear_pain", "Do you have ear pain or hearing changes?",
-       opts=["Yes", "No"],
-       when=lambda d: d.get("pain_location") == "Somewhere else"),
-
-    _q("jaw_swelling", "Do you feel any swelling near your jaw?",
-       opts=["Yes", "No"],
-       when=lambda d: d.get("pain_location") == "Somewhere else"),
-
-    _q("pain_with_chewing",
-       "Does the pain worsen when chewing or opening your mouth?",
-       opts=["Yes", "No"],
-       when=lambda d: d.get("pain_location") == "Somewhere else"),
-
-    _q("pain_start",                        # ← added (Main 3, Somewhere else branch)
+    _q("pain_start",                        # ← (Main 3, Somewhere else branch)
        "When did this pain start?",
        type="free_text",
        placeholder="e.g., about a week ago, since I started radiation…",
+       when=lambda d: d.get("pain_location") == "Somewhere else"),
+
+    _q("tongue_severity",
+       "On a scale of 0–10, how bad is this pain at its worst?",
+       type="number", min_v=0, max_v=10, default_v=5,
        when=lambda d: d.get("pain_location") == "Somewhere else"),
 
     # Main 12 — Medications
