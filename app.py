@@ -1,4 +1,5 @@
 import hashlib
+import html as _html
 import io
 import json
 from datetime import datetime
@@ -65,48 +66,54 @@ section[data-testid="stSidebar"] .block-container {
     color: #2545c0;
 }
 
-/* ── Sidebar nav buttons — compact ── */
-section[data-testid="stSidebar"] div[data-testid="stButton"] > button {
-    padding: 7px 10px !important;
-    font-size: 13px !important;
-    font-weight: 500 !important;
-    line-height: 1.3 !important;
-    min-height: 0 !important;
-    border-radius: 8px 8px 0 0 !important;
-    margin-bottom: 0 !important;
-    text-align: left !important;
-    border-bottom: none !important;
-}
-section[data-testid="stSidebar"] div[data-testid="stButton"] > button:hover {
-    border-color: #5b7fff !important;
-    background: #eef2ff !important;
-    color: #2545c0 !important;
-}
-/* ── Summary row (sits flush below each nav button) ── */
-.nav-summary {
-    font-size: 11px;
-    color: #6b7280;
-    line-height: 1.45;
+/* ── Sidebar topic cards (pure HTML, not st.button) ── */
+.sidebar-nav { display: flex; flex-direction: column; gap: 4px; margin-bottom: 4px; }
+
+.topic-card {
+    display: block;
     background: #ffffff;
-    border: 1.5px solid #d6e0ff;
-    border-top: none;
-    border-radius: 0 0 8px 8px;
-    padding: 3px 10px 6px 10px;
-    margin-bottom: 6px;
-    word-break: break-word;
+    border: 1.5px solid #dde6f5;
+    border-radius: 10px;
+    padding: 8px 12px;
+    cursor: pointer;
+    transition: border-color 0.15s ease, background 0.15s ease;
+    text-decoration: none !important;
 }
-.nav-summary-empty {
-    color: #9ca3af;
+.topic-card:hover  { border-color: #7aa6ff; background: #f0f5ff; }
+.topic-card.tc-active { border-color: #3b82f6; background: #eff6ff; }
+.topic-card.tc-freeform {
+    border-style: dashed;
+    border-color: #c0cfe8;
+    margin-top: 4px;
+}
+.topic-card.tc-freeform.tc-active { border-color: #3b82f6; border-style: solid; }
+
+.tc-header {
+    font-size: 12.5px;
+    font-weight: 600;
+    color: #1e3a5f;
+    font-family: 'DM Sans', sans-serif;
+    line-height: 1.3;
+}
+.tc-summary {
+    font-size: 10.5px;
+    color: #6b7280;
+    line-height: 1.55;
+    font-family: 'DM Sans', sans-serif;
+    margin-top: 4px;
+}
+.tc-no-data {
+    font-size: 10.5px;
+    color: #b0bdd0;
     font-style: italic;
+    margin-top: 4px;
 }
-/* ── Submit button stays prominent ── */
-section[data-testid="stSidebar"] div[data-testid="stButton"] > button[kind="primary"] {
+/* ── Submit button ── */
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button {
     font-size: 13.5px !important;
-    padding: 9px 10px !important;
     font-weight: 600 !important;
-    border-radius: 8px !important;
-    border-bottom: 1.5px solid !important;
-    margin-bottom: 4px !important;
+    padding: 9px 14px !important;
+    border-radius: 10px !important;
 }
 
 /* ── Chat message overrides ── */
@@ -1368,6 +1375,15 @@ def _init_state():
 
 _init_state()
 
+# ── Handle topic selection via HTML card links (query params) ─────
+try:
+    _qp = st.query_params.get("topic", "")
+    _valid_topics = [k for _, k in TOPICS] + ["freeform"]
+    if _qp in _valid_topics and st.session_state.get("selected_topic") != _qp:
+        st.session_state.selected_topic = _qp
+except Exception:
+    pass
+
 
 # ══════════════════════════════════════════════════════════════════
 # LOAD PREVIOUS CHECK-IN
@@ -1571,6 +1587,37 @@ def _sidebar_topic_snippet(topic_key: str, data: dict) -> str:
     line1 = "  ·  ".join(parts[:2])
     line2 = "  ·  ".join(parts[2:]) if len(parts) > 2 else ""
     return (line1 + "\n" + line2) if line2 else line1
+
+
+def _sidebar_topic_snippet_html(topic_key: str, data: dict) -> str:
+    """HTML version of _sidebar_topic_snippet — uses <br> and HTML-escapes values."""
+    fields = _SIDEBAR_FIELDS.get(topic_key, [])
+
+    def _val(fid, mc):
+        v = data.get(fid)
+        if v is None:
+            return None
+        s = ", ".join(str(x) for x in v) if isinstance(v, list) else str(v)
+        s = s.strip()
+        if not s or s.lower() == "none":
+            return None
+        if mc and len(s) > mc:
+            s = s[:mc - 1] + "\u2026"
+        return _html.escape(s)
+
+    parts = []
+    for fid, lbl, mc in fields:
+        v = _val(fid, mc)
+        if v is not None:
+            parts.append(f"{_html.escape(lbl)}: {v}")
+        if len(parts) == 4:
+            break
+
+    if not parts:
+        return ""
+    line1 = " &middot; ".join(parts[:2])
+    line2 = " &middot; ".join(parts[2:]) if len(parts) > 2 else ""
+    return (line1 + "<br>" + line2) if line2 else line1
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -1921,16 +1968,23 @@ def render_topic_detail(topic_label: str, topic_key: str):
 # SIDEBAR  (MASTER PANEL)
 # ══════════════════════════════════════════════════════════════════
 
+
 def render_sidebar():
     with st.sidebar:
-        # ── Branding ─────────────────────────────────────────────
-        st.markdown("### 🩺 ChatReport")
+        # ── Header ───────────────────────────────────────────────
+        st.markdown(
+            '<div style="font-size:17px;font-weight:700;color:#1a2540;'            'margin:0 0 2px 0;letter-spacing:-0.3px;">🩺 ChatReport</div>',
+            unsafe_allow_html=True,
+        )
         if st.session_state.patient_name:
             st.markdown(
-                f'<div style="font-size:13px; color:#6b7280; margin-bottom:4px;">'                f'Patient: <strong>{st.session_state.patient_name}</strong></div>',
+                f'<div style="font-size:11.5px;color:#6b7280;margin-bottom:8px;">'                f'Patient: <strong>{_html.escape(st.session_state.patient_name)}</strong></div>',
                 unsafe_allow_html=True,
             )
-        st.markdown("---")
+        st.markdown(
+            '<hr style="margin:6px 0 10px 0;border:none;border-top:1px solid #dde6f5;">',
+            unsafe_allow_html=True,
+        )
 
         # ── Overall progress ─────────────────────────────────────
         completed   = sum(1 for _, k in TOPICS
@@ -1944,87 +1998,60 @@ def render_sidebar():
             unsafe_allow_html=True,
         )
         st.progress(completed / total if total > 0 else 0)
-        st.markdown("")
+        st.markdown('<div style="height:8px;"></div>', unsafe_allow_html=True)
 
-        # ── Topic navigation ─────────────────────────────────────
-        has_prev  = st.session_state.get("has_prev_checkin", False)
-        last_ck   = st.session_state.get("last_checkin", {})
+        # ── Topic cards (HTML anchor links → query params) ────────
+        has_prev = st.session_state.get("has_prev_checkin", False)
+        last_ck  = st.session_state.get("last_checkin", {})
+        selected = st.session_state.selected_topic
+
+        cards = '<div class="sidebar-nav">'
 
         for label, key in TOPICS:
             status = st.session_state.topic_states[key]["status"]
+            icon   = {"completed": "✅", "in_progress": "🔵"}.get(status, "⚪")
+            dname  = label.split(" ", 1)[1] if " " in label else label
+            active_cls = "tc-active" if selected == key else ""
 
-            if status == "completed":
-                icon = "✅"
-            elif status == "in_progress":
-                icon = "🔵"
-            else:
-                icon = "⚪"
-
-            is_selected     = st.session_state.selected_topic == key
-            prefix          = "▶ " if is_selected else "    "
-            display_name    = label.split(" ", 1)[1] if " " in label else label
-            prev_topic_data = last_ck.get(key, {})
-
-            # Button — topic name only (no \n, no summary in label)
-            if st.button(
-                f"{prefix}{icon} {display_name}",
-                key=f"nav_{key}",
-                use_container_width=True,
-            ):
-                st.session_state.selected_topic = key
-                st.rerun()
-
-            # Summary row — sits flush below the button via CSS (shares border)
+            prev_data = last_ck.get(key, {})
             if has_prev:
-                if prev_topic_data:
-                    snippet = _sidebar_topic_snippet(key, prev_topic_data)
-                    snippet_html = snippet.replace("\n", "<br>") if snippet else ""
-                    if snippet_html:
-                        st.markdown(
-                            f'<div class="nav-summary">{snippet_html}</div>',
-                            unsafe_allow_html=True,
-                        )
-                    else:
-                        st.markdown(
-                            '<div class="nav-summary nav-summary-empty">No data recorded</div>',
-                            unsafe_allow_html=True,
-                        )
+                if prev_data:
+                    snip = _sidebar_topic_snippet_html(key, prev_data)
+                    summary = (f'<div class="tc-summary">{snip}</div>'
+                               if snip else
+                               '<div class="tc-no-data">No data recorded</div>')
                 else:
-                    st.markdown(
-                        '<div class="nav-summary nav-summary-empty">No prior data</div>',
-                        unsafe_allow_html=True,
-                    )
+                    summary = '<div class="tc-no-data">No prior data</div>'
+            else:
+                summary = ""
 
-        # ── "Anything else?" free-chat ───────────────────────────
-        st.markdown("")
-        is_freeform  = st.session_state.selected_topic == "freeform"
-        ff_prefix    = "▶ " if is_freeform else "    "
-        # Show a badge if there are user messages in freeform
-        ff_msgs = [m for m in st.session_state.freeform_chat if m["role"] == "user"]
+            cards += (
+                f'<a href="?topic={key}" target="_self" style="text-decoration:none;">'                f'<div class="topic-card {active_cls}">'                f'<div class="tc-header">{icon} {_html.escape(dname)}</div>'                f'{summary}</div></a>'
+            )
+
+        # Freeform card
+        ff_msgs  = [m for m in st.session_state.freeform_chat if m["role"] == "user"]
         ff_badge = f" ({len(ff_msgs)})" if ff_msgs else ""
-        if st.button(
-            f"{ff_prefix}💬 Anything else?{ff_badge}",
-            key="nav_freeform",
-            use_container_width=True,
-        ):
-            st.session_state.selected_topic = "freeform"
-            st.rerun()
+        ff_cls   = "tc-freeform tc-active" if selected == "freeform" else "tc-freeform"
+        cards += (
+            f'<a href="?topic=freeform" target="_self" style="text-decoration:none;">'            f'<div class="topic-card {ff_cls}">'            f'<div class="tc-header">💬 Anything else?{_html.escape(ff_badge)}</div>'            f'</div></a>'
+        )
+        cards += '</div>'
+        st.markdown(cards, unsafe_allow_html=True)
 
-        # ── Actions ──────────────────────────────────────────────
-        st.markdown("---")
+        # ── Submit button ─────────────────────────────────────────
+        st.markdown('<div style="height:10px;"></div>', unsafe_allow_html=True)
+        st.markdown(
+            '<hr style="margin:0 0 10px 0;border:none;border-top:1px solid #dde6f5;">',
+            unsafe_allow_html=True,
+        )
 
-        # Submit button — always visible once at least one topic is touched
         any_started = completed >= 1 or in_progress >= 1
         if any_started:
-            if st.button(
-                "📤 Submit Check-In",
-                use_container_width=True,
-                type="primary",
-                key="sidebar_submit",
-            ):
-                all_data = {key: st.session_state.topic_states[key]["data"]
-                            for _, key in TOPICS}
-                # Attach freeform chat if it has patient messages
+            if st.button("📤 Submit Check-In", use_container_width=True,
+                         type="primary", key="sidebar_submit"):
+                all_data = {k: st.session_state.topic_states[k]["data"]
+                            for _, k in TOPICS}
                 if ff_msgs:
                     all_data["freeform_notes"] = [
                         m["content"] for m in st.session_state.freeform_chat
@@ -2038,8 +2065,6 @@ def render_sidebar():
                 st.session_state.report_saved = True
                 st.session_state.app_stage = "report"
                 st.rerun()
-
-
 
 
 # ══════════════════════════════════════════════════════════════════
