@@ -1984,17 +1984,6 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
     stype = step["type"]
     sid   = step["id"]
 
-    # ── Previous-answer hint (shown for all types) ───────────────
-    if prev_answer is not None:
-        hint = _fmt_prev(prev_answer)
-        if hint:
-            st.markdown(
-                f'<div style="background:#f0f7ff; border-left:3px solid #93c5fd; '
-                f'padding:6px 10px; border-radius:6px; font-size:13px; '
-                f'color:#1e40af; margin-bottom:8px;">'
-                f'📋 <strong>Last time:</strong> {hint}</div>',
-                unsafe_allow_html=True,
-            )
     # ── Options ─────────────────────────────────────────────────
     if stype == "options":
 
