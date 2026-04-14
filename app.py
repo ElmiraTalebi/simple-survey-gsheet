@@ -2002,65 +2002,54 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
     prev = state["data"].get(step["id"])
     # ── Options ─────────────────────────────────────────────────
     if stype == "options":
-
         st.markdown("**Choose an option OR type your answer:**")
-    
+
         # ── OPTION BUTTONS ──
         cols = st.columns(2 if len(step["opts"]) <= 4 else 1)
-    
+        
         for i, opt in enumerate(step["opts"]):
-        
-            is_selected = (prev == opt)
-        
-            button_label = f"✓ {opt}" if is_selected else opt
-        
-            # Apply visual highlight
-            button_type = "primary" if is_selected else "secondary"
-        
             with cols[i % len(cols)]:
-                if st.button(
-                    button_label,
-                    key=f"opt_{topic_key}_{sid}_{i}",
-                    type=button_type
-                ):
+                if st.button(opt, key=f"opt_{topic_key}_{sid}_{i}"):
                     handle_answer(topic_key, step, opt)
-    
-        # ── FREE TEXT INPUT ──
-       # ── TEXT INPUT ──
-    user_text = st.text_input(
-        "Type your answer and press Enter",
-        key=f"text_{topic_key}_{sid}"
-    )
-    
-    # 🔥 ENTER submit logic (MUST be right after defining user_text)
-    submitted_key = f"text_{topic_key}_{sid}_submitted"
-    
-    if user_text and st.session_state.get(submitted_key) != user_text:
-    
-        # mark as submitted
-        st.session_state[submitted_key] = user_text
-    
-        interpreted = interpret_user_input_with_options(step, user_text)
-    
-        llm_ack = None
-        if openai_client:
-            llm_ack = get_llm_clarification(
-                topic_key,
-                step,
-                user_text,
-                st.session_state.topic_states[topic_key]["chat"]
+        
+        # ─────────────────────────────
+        # 🔥 TEXT + VOICE SIDE-BY-SIDE
+        # ─────────────────────────────
+        col1, col2 = st.columns([3, 1])
+        
+        with col1:
+            user_text = st.text_input(
+                "Type your answer (press Enter)",
+                key=f"text_{topic_key}_{sid}"
             )
-    
-        handle_answer(topic_key, step, interpreted, llm_ack=llm_ack)
-
-    
-        # ── VOICE INPUT ──
+        
         with col2:
             voice_text = voice_widget(f"{topic_key}_{sid}_opt")
-    
-            if voice_text:
-                interpreted = interpret_user_input_with_options(step, voice_text)
-                handle_answer(topic_key, step, interpreted)
+        
+        # ── ENTER SUBMIT ──
+        submitted_key = f"text_{topic_key}_{sid}_submitted"
+        
+        if user_text and st.session_state.get(submitted_key) != user_text:
+        
+            st.session_state[submitted_key] = user_text
+        
+            interpreted = interpret_user_input_with_options(step, user_text)
+        
+            llm_ack = None
+            if openai_client:
+                llm_ack = get_llm_clarification(
+                    topic_key,
+                    step,
+                    user_text,
+                    st.session_state.topic_states[topic_key]["chat"]
+                )
+        
+            handle_answer(topic_key, step, interpreted, llm_ack=llm_ack)
+        
+        # ── VOICE SUBMIT ──
+        if voice_text:
+            interpreted = interpret_user_input_with_options(step, voice_text)
+            handle_answer(topic_key, step, interpreted)
                 
 
     # ── Multi-select ─────────────────────────────────────────────
