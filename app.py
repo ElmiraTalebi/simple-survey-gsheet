@@ -1881,33 +1881,24 @@ def render_sidebar():
             else:
                 icon = "⚪"
 
-            is_selected  = st.session_state.selected_topic == key
-            prefix       = "▶ " if is_selected else "    "
-            display_name = label.split(" ", 1)[1] if " " in label else label
-
-            if st.button(
-                f"{prefix}{icon} {display_name}",
-                key=f"nav_{key}",
-                use_container_width=True,
-            ):
-                st.session_state.selected_topic = key
-                st.rerun()
-
-            # ── Inline last-visit snippet under each topic button ─
+            is_selected     = st.session_state.selected_topic == key
+            prefix          = "▶ " if is_selected else "    "
+            display_name    = label.split(" ", 1)[1] if " " in label else label
             prev_topic_data = last_ck.get(key, {})
+
+            # Build the button label — summary goes on a second line inside the box
+            btn_label = f"{prefix}{icon} {display_name}"
             if has_prev:
                 if prev_topic_data:
                     snippet = _sidebar_topic_snippet(key, prev_topic_data)
                     if snippet:
-                        st.markdown(
-                            f'<div style="font-size:11.5px; color:#6b7280; '                            f'padding: 0 4px 6px 22px; line-height:1.5;">'                            f'{snippet}</div>',
-                            unsafe_allow_html=True,
-                        )
+                        btn_label += f"\n{snippet}"
                 else:
-                    st.markdown(
-                        '<div style="font-size:11px; color:#9ca3af; '                        'padding: 0 4px 6px 22px;">No prior data</div>',
-                        unsafe_allow_html=True,
-                    )
+                    btn_label += "\nNo prior data"
+
+            if st.button(btn_label, key=f"nav_{key}", use_container_width=True):
+                st.session_state.selected_topic = key
+                st.rerun()
 
         # ── "Anything else?" free-chat ───────────────────────────
         st.markdown("")
