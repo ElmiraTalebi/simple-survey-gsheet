@@ -2,8 +2,9 @@ import hashlib
 import html as _html
 import io
 import json
+import re
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 
 import streamlit as st
 import streamlit.components.v1 as _stc
@@ -16,77 +17,33 @@ from openai import OpenAI
 # 🔥 NEW: Adaptive LLM Question Generator
 # ══════════════════════════════════════════════════════════════════
 
-def get_llm_adaptive_question(topic_key: str, step: dict, answer: str, data: dict) -> Optional[str]:
-    """
-    This function lets LLM dynamically decide a follow-up question
-    based on patient free-text answers.
-    """
-
-    if not openai_client:
-        return None
-
-    topic_label = _TOPIC_LABELS_LLM.get(topic_key, topic_key)
-
-    prompt = f"""
-{_SYSTEM_CONTEXT}
-
-You are a highly experienced oncology nurse.
-
-A patient just answered a question in a symptom check-in.
-
-TOPIC: {topic_label}
-QUESTION ASKED: "{step['text']}"
-PATIENT RESPONSE: "{answer}"
-
-CURRENT STRUCTURED DATA:
-{json.dumps(data, indent=2)}
-
----
-YOUR TASK:
-
-1. Read the patient's response carefully.
-2. Think clinically like a nurse.
-3. Decide if a MORE IMPORTANT follow-up question should be asked
-   instead of continuing the predefined flow.
-
-You should ONLY ask a follow-up if:
-- The answer contains useful clinical detail
-- You can ask something MORE specific than the predefined flow
-- The question would improve clinical understanding
-
-Examples:
-- If patient says "jaw and ear pain" → ask about radiation, infection, nerve pain
-- If patient says "sharp pain when swallowing" → ask about solids vs liquids
-- If patient says "burning pain" → ask about timing or triggers
-
-If NO better question exists → return NONE
-
-RULES:
-- Ask ONLY ONE question
-- Be very specific
-- Use plain language
-- Sound natural and human
-- Do NOT repeat the original question
-- Do NOT explain your reasoning
-
-OUTPUT:
-- Either a single question
-- Or exactly: NONE
-"""
-
+def _extract_json_object(text: str) -> dict[str, Any]:
+    if not text:
+        return {}
+    text = text.strip()
     try:
-        r = openai_client.chat.completions.create(
-            model="gpt-4.1-mini",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=100,
-            temperature=0.5,
-        )
-        out = r.choices[0].message.content.strip()
-        if out.upper() == "NONE":
-            return None
-        return out
+        return json.loads(text)
     except Exception:
-        return None
+        pass
+
+    match = re.search(r"\{.*\}", text, re.DOTALL)
+    if not match:
+        return {}
+    try:
+        return json.loads(match.group(0))
+    except Exception:
+        return {}
+
+
+def _short_prev_answer(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, list):
+        value = ", ".join(str(v) for v in value)
+    text = str(value).strip()
+    if len(text) > 160:
+        text = text[:157] + "..."
+    return text
 
 
 
@@ -1505,59 +1462,99 @@ def _call_openai(prompt: str, max_tokens: int = 120, temp: float = 0.4) -> str:
         return ""
 
 
-def get_llm_clarification(topic_key: str, step: dict,
-                           answer: str, chat_history: list) -> Optional[str]:
+def get_llm_topic_turn(
+    topic_key: str,
+    step: dict,
+    answer: str,
+    current_data: dict,
+    last_topic_data: dict,
+    chat_history: list,
+    next_step: Optional[dict],
+) -> dict[str, Any]:
     """
-    After a patient gives a free-text answer, decide:
-      (A) Answer is complete -> return a warm 1-sentence acknowledgment.
-      (B) Answer is vague/incomplete -> return one targeted follow-up probe.
-      (C) Answer contains a RED FLAG -> return a calm, flagging sentence.
-
-    Returns a single string (acknowledgment or question), or None to skip.
+    Decide the most natural next assistant move after a patient's free-text answer.
+    Returns a dict with:
+      mode: "continue" or "follow_up"
+      assistant_message: optional supportive/flagging message
+      follow_up_question: optional targeted follow-up question
     """
-    if len(answer.strip().split()) < 3:
-        return None
+    if not openai_client or len(answer.strip().split()) < 2:
+        return {}
 
     topic_label = _TOPIC_LABELS_LLM.get(topic_key, topic_key)
-
-    # Compact recent conversation history (last 6 turns, excluding current answer)
     recent = chat_history[-6:] if len(chat_history) > 6 else chat_history
     history_str = "\n".join(
         f"{'Nurse' if m['role'] == 'assistant' else 'Patient'}: {m['content']}"
         for m in recent
-        if m["content"] != answer
-    )
+    ) or "(no prior turns in this topic yet)"
+
+    prev_same = _short_prev_answer(last_topic_data.get(step["id"]))
+    prev_topic_summary = _natural_summary(topic_key, last_topic_data) if last_topic_data else ""
+    next_q = next_step["text"] if next_step else ""
 
     prompt = (
         f"{_SYSTEM_CONTEXT}\n\n"
-        f"=== CURRENT TOPIC: {topic_label} ===\n\n"
-        f"=== RECENT CONVERSATION ===\n"
-        f"{history_str}\n\n"
-        f"Nurse asked: \"{step['text']}\"\n"
-        f"Patient said: \"{answer}\"\n\n"
-        f"=== RED FLAG CRITERIA TO WATCH FOR ===\n"
-        f"{_RED_FLAGS}\n\n"
-        f"=== YOUR TASK ===\n"
-        f"Decide which ONE of these applies:\n\n"
-        f"A) The patient's answer is COMPLETE and clinically sufficient for this question.\n"
-        f"   -> Write one warm, specific sentence acknowledging what they shared.\n"
-        f"   Do NOT ask another question. Do NOT use hollow openers like 'I see' or "
-        f"'Thank you for sharing'. Reference something specific they said.\n\n"
-        f"B) The answer is INCOMPLETE or vague -- a single targeted follow-up would capture "
-        f"important clinical detail not yet provided.\n"
-        f"   -> Ask exactly ONE short, plain-language follow-up question.\n"
-        f"   It must be directly relevant to what they said and stay within this topic.\n"
-        f"   Do not introduce a new subject.\n\n"
-        f"C) The answer contains or strongly implies a RED FLAG listed above.\n"
-        f"   -> Write a calm, caring sentence that gently acknowledges the concern and lets "
-        f"them know their care team will be notified. Example: 'That's something your team "
-        f"will want to know about before your visit -- I've made sure it's flagged in your "
-        f"report so they can follow up with you.'\n\n"
-        f"Return ONLY your chosen response -- one sentence or one question. "
-        f"No labels, no preamble, no explanation of which option you chose."
+        f"You are responding inside a symptom-check chatbot for a patient receiving treatment "
+        f"for head and neck cancer between visits. Your job is to sound like a thoughtful, "
+        f"warm oncology nurse, not a form bot.\n\n"
+        f"CURRENT TOPIC: {topic_label}\n"
+        f"QUESTION ASKED: {step['text']}\n"
+        f"PATIENT RESPONSE: {answer}\n\n"
+        f"LAST VISIT ANSWER TO THIS SAME QUESTION: {prev_same or 'None recorded'}\n"
+        f"LAST VISIT TOPIC SUMMARY: {prev_topic_summary or 'None recorded'}\n"
+        f"RECENT TOPIC CHAT:\n{history_str}\n\n"
+        f"CURRENT STRUCTURED DATA:\n{json.dumps(current_data, indent=2)}\n\n"
+        f"NEXT STRUCTURED QUESTION IF YOU DECIDE TO CONTINUE: {next_q or 'No further structured question'}\n\n"
+        f"RED FLAGS TO WATCH FOR:\n{_RED_FLAGS}\n\n"
+        f"YOUR TASK:\n"
+        f"Choose the single best next conversational move.\n"
+        f"- If the patient gave enough detail, write a brief natural response that sounds human and specific.\n"
+        f"- If comparing with the last visit is clearly helpful and accurate, you may briefly mention improvement, worsening, or similarity.\n"
+        f"- If the answer is vague or opens an important clinical thread, ask one short follow-up question.\n"
+        f"- If there is a red flag, stay calm, acknowledge it, and say the team will want to know before the visit.\n"
+        f"- Avoid generic repetition. Do not always react the same way.\n"
+        f"- Do not diagnose, prescribe, or give unsafe reassurance.\n"
+        f"- Keep wording plain and supportive.\n\n"
+        f"Return JSON only in this exact shape:\n"
+        f'{{"mode":"continue"|"follow_up","assistant_message":"...","follow_up_question":"..."}}\n\n'
+        f"Rules for the JSON:\n"
+        f"- assistant_message can be empty only if a follow-up question alone is best.\n"
+        f"- follow_up_question must be empty unless mode is follow_up.\n"
+        f"- Keep assistant_message to 1-2 short sentences.\n"
+        f"- Keep follow_up_question to one concise question.\n"
     )
 
-    return _call_openai(prompt, max_tokens=120, temp=0.3) or None
+    parsed = _extract_json_object(_call_openai(prompt, max_tokens=220, temp=0.45))
+    mode = parsed.get("mode")
+    assistant_message = str(parsed.get("assistant_message", "")).strip()
+    follow_up_question = str(parsed.get("follow_up_question", "")).strip()
+
+    if mode not in {"continue", "follow_up"}:
+        return {}
+    if mode == "follow_up" and not follow_up_question:
+        return {}
+
+    return {
+        "mode": mode,
+        "assistant_message": assistant_message,
+        "follow_up_question": follow_up_question,
+    }
+
+
+def _default_chatty_reply(
+    topic_key: str,
+    answer: str,
+    step: dict,
+    last_topic_data: dict,
+) -> str:
+    prev_same = _short_prev_answer(last_topic_data.get(step["id"])) if last_topic_data else ""
+    if prev_same and prev_same.lower() != answer.strip().lower():
+        return f"I've noted that. Compared with last time, this sounds a bit different, which is helpful for your team to know."
+    if topic_key == "mood":
+        return "That sounds like a lot to carry. I've made a note of it for your care team."
+    if topic_key == "pain":
+        return "I've noted those pain details so your team can see exactly how it's been feeling."
+    return "I've noted that detail for your care team."
 
 
 def generate_report(name: str, all_data: dict) -> str:
@@ -1908,17 +1905,28 @@ def _freeform_llm_response(messages: list) -> str:
     if not openai_client:
         return "I'm not able to respond right now — please let your care team know directly."
 
+    structured_context = {
+        key: st.session_state.topic_states[key]["data"]
+        for _, key in TOPICS
+        if st.session_state.topic_states[key]["data"]
+    }
+    prior_context = st.session_state.get("last_checkin", {})
+
     system = (
         f"{_SYSTEM_CONTEXT}\n\n"
         "You are now in an open conversation with the patient. They may raise anything not "
         "covered by the structured check-in — a new symptom, a question about their treatment, "
         "a concern about a medication, or just something they want their provider to know.\n\n"
+        f"CURRENT STRUCTURED CHECK-IN DATA:\n{json.dumps(structured_context, indent=2)}\n\n"
+        f"MOST RECENT PRIOR CHECK-IN DATA:\n{json.dumps(prior_context, indent=2)}\n\n"
         "Guidelines:\n"
         "- Listen carefully and respond with warmth and clinical awareness.\n"
+        "- If helpful, briefly notice whether this sounds better, worse, or different than last visit.\n"
         "- If they mention a symptom that sounds urgent (e.g., chest pain, breathing difficulty, "
         "  high fever, blood, suicidal thoughts), acknowledge it calmly and tell them it will be "
         "  flagged for their care team.\n"
         "- Do NOT diagnose or prescribe. You are gathering information, not treating.\n"
+        "- Be conversational and natural, not stiff or repetitive.\n"
         "- Keep responses short — 2-4 sentences maximum.\n"
         "- If the patient seems to be done, gently close: 'Is there anything else you'd like "
         "  to share with your team before your visit?'"
@@ -1941,70 +1949,116 @@ def _freeform_llm_response(messages: list) -> str:
 
 
 # ══════════════════════════════════════════════════════════════════
-# 🔥 MODIFY: handle_answer (inject adaptive questioning)
+# Conversational answer handling
 # ══════════════════════════════════════════════════════════════════
 
-def handle_answer(topic_key: str, step: dict, answer, llm_ack: Optional[str] = None):
+def _append_next_question(
+    state: dict,
+    next_step: Optional[dict],
+    assistant_message: str = "",
+):
+    message = assistant_message.strip()
+    if message:
+        state["chat"].append({"role": "assistant", "content": message})
+
+
+def _store_followup_prompt(state: dict, step: dict, question: str):
+    state["waiting_for_followup"] = True
+    state["pending_followup"] = {
+        "source_step_id": step["id"],
+        "question": question,
+        "answer_key": f"{step['id']}_llm_followup",
+    }
+
+
+def handle_pending_followup(topic_key: str, answer: str):
     state = st.session_state.topic_states[topic_key]
-
-    if isinstance(answer, list):
-        display = ", ".join(answer) if answer else "(none)"
-    else:
-        display = str(answer)
-
-    # save answer first
-    state["data"][step["id"]] = answer
-    
-    # compute next step HERE
-    next_step = get_next_step(topic_key, state["data"])
-    
-    if llm_ack and next_step:
-        combined = f"{llm_ack} {next_step['text']}"
-        state["chat"].append({"role": "assistant", "content": combined})
-    
-    elif llm_ack:
-        state["chat"].append({"role": "assistant", "content": llm_ack})
-    
-    elif next_step:
-        state["chat"].append({"role": "assistant", "content": next_step["text"]})
-
-    # ✅ NEW: LLM adaptive follow-up
-    adaptive_q = None
-    if isinstance(answer, str) and len(answer.split()) > 2:
-        with st.spinner("Thinking…"):
-            adaptive_q = get_llm_adaptive_question(
-                topic_key, step, answer, state["data"]
-            )
-
-    if adaptive_q:
-        state["chat"].append({
-            "role": "assistant",
-            "content": adaptive_q
-        })
-
-        # store temporary follow-up step
-        state["pending_llm_question"] = adaptive_q
-        state["pending_llm_key"] = f"llm_{len(state['data'])}"
-
+    pending = state.get("pending_followup") or {}
+    answer_key = pending.get("answer_key")
+    if not answer_key:
+        state["waiting_for_followup"] = False
+        state.pop("pending_followup", None)
         st.rerun()
 
-    # fallback to original behavior
-    if llm_ack:
-        state["chat"].append({"role": "assistant", "content": llm_ack})
-        # 🔥 STOP here — do NOT move to next question yet
-        state["waiting_for_followup"] = True
-        return
+    state["chat"].append({"role": "user", "content": answer})
+    state["data"][answer_key] = answer
+    state["waiting_for_followup"] = False
+    state.pop("pending_followup", None)
 
-    state["data"][step["id"]] = answer
+    last_topic_data = st.session_state.last_checkin.get(topic_key, {})
+    closing = _default_chatty_reply(
+        topic_key,
+        answer,
+        {"id": answer_key, "text": pending.get("question", "")},
+        last_topic_data,
+    )
+
+    next_step = get_next_step(topic_key, state["data"])
     state["status"] = "in_progress"
 
     if topic_is_complete(topic_key, state["data"]):
         state["status"] = "completed"
         state["chat"].append({
             "role": "assistant",
-            "content": "✅ Thank you — I have everything I need for this topic."
+            "content": f"{closing}\n\n✅ Thank you — I have everything I need for this topic."
         })
+    else:
+        _append_next_question(state, next_step, closing)
 
+    st.rerun()
+
+
+def handle_answer(topic_key: str, step: dict, answer):
+    state = st.session_state.topic_states[topic_key]
+    display = ", ".join(answer) if isinstance(answer, list) else str(answer)
+    state["chat"].append({"role": "user", "content": display})
+    state["data"][step["id"]] = answer
+    next_step = get_next_step(topic_key, state["data"])
+    state["status"] = "in_progress"
+
+    assistant_message = ""
+    if isinstance(answer, str):
+        last_topic_data = st.session_state.last_checkin.get(topic_key, {})
+        if len(answer.split()) >= 2 and openai_client:
+            with st.spinner("Thinking…"):
+                turn = get_llm_topic_turn(
+                    topic_key=topic_key,
+                    step=step,
+                    answer=answer,
+                    current_data=state["data"],
+                    last_topic_data=last_topic_data,
+                    chat_history=state["chat"],
+                    next_step=next_step,
+                )
+            if turn.get("mode") == "follow_up":
+                if turn.get("assistant_message"):
+                    state["chat"].append({
+                        "role": "assistant",
+                        "content": turn["assistant_message"],
+                    })
+                state["chat"].append({
+                    "role": "assistant",
+                    "content": turn["follow_up_question"],
+                })
+                _store_followup_prompt(state, step, turn["follow_up_question"])
+                st.rerun()
+
+            assistant_message = turn.get("assistant_message", "").strip()
+
+        if not assistant_message and len(answer.split()) >= 2:
+            assistant_message = _default_chatty_reply(
+                topic_key, answer, step, last_topic_data
+            )
+
+    if topic_is_complete(topic_key, state["data"]):
+        state["status"] = "completed"
+        final_message = "✅ Thank you — I have everything I need for this topic."
+        if assistant_message:
+            final_message = f"{assistant_message}\n\n{final_message}"
+        state["chat"].append({"role": "assistant", "content": final_message})
+        st.rerun()
+
+    _append_next_question(state, next_step, assistant_message)
     st.rerun()
 
 
@@ -2031,7 +2085,7 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
     prev = state["data"].get(step["id"])
     # ── Options ─────────────────────────────────────────────────
     if stype == "options":
-        st.markdown("**Choose an option OR type your answer:**")
+        st.markdown("**Choose an option below, or answer in your own words if that fits better:**")
 
         # ── OPTION BUTTONS ──
         cols = st.columns(2 if len(step["opts"]) <= 4 else 1)
@@ -2063,17 +2117,7 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
             st.session_state[submitted_key] = user_text
         
             interpreted = interpret_user_input_with_options(step, user_text)
-        
-            llm_ack = None
-            if openai_client:
-                llm_ack = get_llm_clarification(
-                    topic_key,
-                    step,
-                    user_text,
-                    st.session_state.topic_states[topic_key]["chat"]
-                )
-        
-            handle_answer(topic_key, step, interpreted, llm_ack=llm_ack)
+            handle_answer(topic_key, step, interpreted)
         
         # ── VOICE SUBMIT ──
         if voice_text:
@@ -2146,14 +2190,7 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
             if st.button("Submit ✓", key=f"ft_submit_{topic_key}_{sid}"):
                 text = st.session_state.get(widget_key, "").strip()
                 if text:
-                    ack = None
-                    if openai_client:
-                        with st.spinner("Processing…"):
-                            ack = get_llm_clarification(
-                                topic_key, step, text,
-                                st.session_state.topic_states[topic_key]["chat"],
-                            )
-                    handle_answer(topic_key, step, text, llm_ack=ack)
+                    handle_answer(topic_key, step, text)
                 else:
                     st.warning("Please enter a response before submitting.")
         with col_voice:
@@ -2296,6 +2333,8 @@ def render_topic_detail(topic_label: str, topic_key: str):
         with st.container(border=False):
             for msg in state["chat"]:
                 avatar = "👩‍⚕️" if msg["role"] == "assistant" else "🧑‍💼"
+                with st.chat_message(msg["role"], avatar=avatar):
+                    st.write(msg["content"])
 
     # ── Completed ────────────────────────────────────────────────
     if state["status"] == "completed":
@@ -2314,15 +2353,28 @@ def render_topic_detail(topic_label: str, topic_key: str):
         return
 
     # ── Current question ─────────────────────────────────────────
-    # 🔥 If waiting for LLM follow-up, do not ask next question
     if state.get("waiting_for_followup"):
-        user_input = st.chat_input("Your response...")
-    
-        if user_input:
-            state["chat"].append({"role": "user", "content": user_input})
-            state["waiting_for_followup"] = False
-            st.rerun()
-    
+        pending = state.get("pending_followup") or {}
+        pending_key = f"pending_followup_{topic_key}"
+        pending_voice = voice_widget(f"pending_{topic_key}")
+        if pending_key not in st.session_state:
+            st.session_state[pending_key] = pending_voice or ""
+
+        st.text_area(
+            "Your response:",
+            key=pending_key,
+            placeholder="Type or speak your answer here...",
+            height=90,
+        )
+        if pending_voice:
+            st.session_state[pending_key] = pending_voice
+
+        if st.button("Submit ✓", key=f"pending_submit_{topic_key}"):
+            reply = st.session_state.get(pending_key, "").strip()
+            if reply:
+                handle_pending_followup(topic_key, reply)
+            else:
+                st.warning("Please enter a response before submitting.")
         return
     next_step = get_next_step(topic_key, state["data"])
     if next_step:
