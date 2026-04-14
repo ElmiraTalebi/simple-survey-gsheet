@@ -2026,18 +2026,20 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
                     handle_answer(topic_key, step, opt)
     
         # ── FREE TEXT INPUT ──
-        user_text = st.text_input(
-    "Your answer (press Enter to submit)",
-    key=f"text_{topic_key}_{sid}"
-)
+       # ── TEXT INPUT ──
+    user_text = st.text_input(
+        "Type your answer and press Enter",
+        key=f"text_{topic_key}_{sid}"
+    )
     
-    # 🔥 ENTER triggers automatically
-    if user_text and st.session_state.get(f"text_{topic_key}_{sid}_submitted") != user_text:
+    # 🔥 ENTER submit logic (MUST be right after defining user_text)
+    submitted_key = f"text_{topic_key}_{sid}_submitted"
     
-        # mark as submitted so it doesn't re-trigger
-        st.session_state[f"text_{topic_key}_{sid}_submitted"] = user_text
+    if user_text and st.session_state.get(submitted_key) != user_text:
     
-        # optional LLM processing
+        # mark as submitted
+        st.session_state[submitted_key] = user_text
+    
         interpreted = interpret_user_input_with_options(step, user_text)
     
         llm_ack = None
@@ -2050,6 +2052,7 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
             )
     
         handle_answer(topic_key, step, interpreted, llm_ack=llm_ack)
+
     
         # ── VOICE INPUT ──
         with col2:
