@@ -65,30 +65,48 @@ section[data-testid="stSidebar"] .block-container {
     color: #2545c0;
 }
 
-/* ── Sidebar nav buttons — compact, multi-line aware ── */
+/* ── Sidebar nav buttons — compact ── */
 section[data-testid="stSidebar"] div[data-testid="stButton"] > button {
-    padding: 5px 10px 6px 10px !important;
-    font-size: 12.5px !important;
+    padding: 7px 10px !important;
+    font-size: 13px !important;
     font-weight: 500 !important;
-    line-height: 1.45 !important;
+    line-height: 1.3 !important;
     min-height: 0 !important;
-    border-radius: 8px !important;
-    margin-bottom: 2px !important;
-    white-space: pre-wrap !important;   /* lets \n in label render as line break */
-    word-break: break-word !important;
+    border-radius: 8px 8px 0 0 !important;
+    margin-bottom: 0 !important;
+    text-align: left !important;
+    border-bottom: none !important;
 }
 section[data-testid="stSidebar"] div[data-testid="stButton"] > button:hover {
     border-color: #5b7fff !important;
     background: #eef2ff !important;
     color: #2545c0 !important;
 }
-
-/* ── Submit button stays prominent despite sidebar override ── */
+/* ── Summary row (sits flush below each nav button) ── */
+.nav-summary {
+    font-size: 11px;
+    color: #6b7280;
+    line-height: 1.45;
+    background: #ffffff;
+    border: 1.5px solid #d6e0ff;
+    border-top: none;
+    border-radius: 0 0 8px 8px;
+    padding: 3px 10px 6px 10px;
+    margin-bottom: 6px;
+    word-break: break-word;
+}
+.nav-summary-empty {
+    color: #9ca3af;
+    font-style: italic;
+}
+/* ── Submit button stays prominent ── */
 section[data-testid="stSidebar"] div[data-testid="stButton"] > button[kind="primary"] {
     font-size: 13.5px !important;
     padding: 9px 10px !important;
     font-weight: 600 !important;
-    white-space: normal !important;
+    border-radius: 8px !important;
+    border-bottom: 1.5px solid !important;
+    margin-bottom: 4px !important;
 }
 
 /* ── Chat message overrides ── */
@@ -1947,19 +1965,35 @@ def render_sidebar():
             display_name    = label.split(" ", 1)[1] if " " in label else label
             prev_topic_data = last_ck.get(key, {})
 
-            # Build the button label — summary goes on a second line inside the box
-            btn_label = f"{prefix}{icon} {display_name}"
+            # Button — topic name only (no \n, no summary in label)
+            if st.button(
+                f"{prefix}{icon} {display_name}",
+                key=f"nav_{key}",
+                use_container_width=True,
+            ):
+                st.session_state.selected_topic = key
+                st.rerun()
+
+            # Summary row — sits flush below the button via CSS (shares border)
             if has_prev:
                 if prev_topic_data:
                     snippet = _sidebar_topic_snippet(key, prev_topic_data)
-                    if snippet:
-                        btn_label += f"\n{snippet}"
+                    snippet_html = snippet.replace("\n", "<br>") if snippet else ""
+                    if snippet_html:
+                        st.markdown(
+                            f'<div class="nav-summary">{snippet_html}</div>',
+                            unsafe_allow_html=True,
+                        )
+                    else:
+                        st.markdown(
+                            '<div class="nav-summary nav-summary-empty">No data recorded</div>',
+                            unsafe_allow_html=True,
+                        )
                 else:
-                    btn_label += "\nNo prior data"
-
-            if st.button(btn_label, key=f"nav_{key}", use_container_width=True):
-                st.session_state.selected_topic = key
-                st.rerun()
+                    st.markdown(
+                        '<div class="nav-summary nav-summary-empty">No prior data</div>',
+                        unsafe_allow_html=True,
+                    )
 
         # ── "Anything else?" free-chat ───────────────────────────
         st.markdown("")
