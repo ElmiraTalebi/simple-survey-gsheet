@@ -103,23 +103,23 @@ def interpret_user_input_with_options(step, user_input):
         return user_input
 
     prompt = f"""
-You are a clinical assistant.
-
-QUESTION:
-"{step['text']}"
-
-OPTIONS:
-{options}
-
-PATIENT RESPONSE:
-"{user_input}"
-
-TASK:
-- If the response clearly matches ONE option → return that option EXACTLY
-- Otherwise return the original response
-
-ONLY return one line.
-"""
+    You are a clinical assistant.
+    
+    QUESTION:
+    "{step['text']}"
+    
+    OPTIONS:
+    {options}
+    
+    PATIENT RESPONSE:
+    "{user_input}"
+    
+    TASK:
+    - If the response clearly matches ONE option → return that option EXACTLY
+    - Otherwise return the original response
+    
+    ONLY return one line.
+    """
 
     try:
         r = openai_client.chat.completions.create(
