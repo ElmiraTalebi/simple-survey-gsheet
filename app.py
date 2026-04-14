@@ -1542,13 +1542,6 @@ def render_sidebar():
                 st.session_state.app_stage = "report"
                 st.rerun()
 
-        # Reset
-        st.markdown("")
-        if st.button("🔄 Start Over", use_container_width=True):
-            for k in list(st.session_state.keys()):
-                del st.session_state[k]
-            st.rerun()
-
 
 # ══════════════════════════════════════════════════════════════════
 # SCREENS
