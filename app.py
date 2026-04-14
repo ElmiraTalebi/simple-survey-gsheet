@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Optional
 
 import streamlit as st
+import streamlit.components.v1 as _stc
 import gspread
 from google.oauth2.service_account import Credentials
 from openai import OpenAI
@@ -1464,133 +1465,110 @@ def format_topic_summary(topic_key: str, data: dict) -> str:
     return "  ·  ".join(parts)
 
 
-# ── Sidebar snippet: up to 4 key fields per topic, rendered as two short lines ──
-#    Format: "Label: Value · Label: Value"  (line 1)
-#            "Label: Value · Label: Value"  (line 2, only if fields exist)
+# ── Sidebar summary: natural-language sentence per topic ─────────
 
-# Each topic: list of (field_id, short_label, max_val_chars)
-# Fields are shown in order; up to 2 per line, max 2 lines → 4 fields total.
-_SIDEBAR_FIELDS: dict[str, list[tuple]] = {
-    "pain": [
-        ("has_pain",              "Pain",     None),
-        ("pain_location",         "Location", 12),
-        ("throat_severity",       "Sev",      None),
-        ("tongue_severity",       "Sev",      None),
-        ("pain_medications",      "Meds",     18),
-        ("taking_as_prescribed",  "Adherence",8),
-    ],
-    "nutrition": [
-        ("eating_ability",        "Eating",   22),
-        ("weight",                "Weight",   None),
-        ("swallowing_difficulty", "Swallow",  None),
-        ("feeding_tube",          "Tube",     None),
-    ],
-    "oral": [
-        ("mouth_sores",           "Sores",    None),
-        ("dry_mouth",             "Dry mouth",None),
-        ("mucus_issues",          "Mucus",    None),
-        ("oral_rinse_use",        "Rinse",    None),
-    ],
-    "gi": [
-        ("nausea_vomiting",       "Nausea/vom",18),
-        ("constipation",          "Constip.",  None),
-        ("bloating",              "Bloating",  None),
-    ],
-    "fatigue": [
-        ("fatigue",               "Fatigue",  None),
-        ("sleep_quality",         "Sleep",    None),
-        ("medication_drowsy",     "Drowsy",   None),
-        ("fatigue_daily_impact",  "ADL impact",None),
-    ],
-    "activity": [
-        ("activity_level",        "Activity", 20),
-        ("activity_limiting_factor","Cause",  None),
-        ("difficult_activities",  "Difficulty",18),
-    ],
-    "mood": [
-        ("feeling_down",          "Depressed",None),
-        ("support_adequate",      "Support",  None),
-        ("anxiety_impact",        "Anxiety",  None),
-        ("social_support_quality","Network",  14),
-    ],
-    "other": [
-        ("breathing_issues",      "Breathing",None),
-        ("dizziness",             "Dizziness",None),
-        ("skin_issues",           "Skin",     None),
-        ("voice_hoarseness",      "Voice",    12),
-    ],
-}
+def _natural_summary(topic_key: str, data: dict) -> str:
+    """Return a short natural-language sentence summarising a topic's previous answers."""
 
+    def v(field):
+        val = data.get(field)
+        if isinstance(val, list):
+            return val if val else None
+        return val if val is not None else None
 
-def _sidebar_topic_snippet(topic_key: str, data: dict) -> str:
-    """
-    Return up to 2 plain-text summary lines for the sidebar button.
-    Line 1: first 2 available fields.
-    Line 2: next 2 available fields (omitted if empty).
-    Each field: "Label: Value", values truncated per _SIDEBAR_FIELDS config.
-    """
-    fields = _SIDEBAR_FIELDS.get(topic_key, [])
+    def yn(field):
+        return v(field) == "Yes"
 
-    def _val(field_id, max_chars):
-        v = data.get(field_id)
-        if v is None:
-            return None
-        if isinstance(v, list):
-            s = ", ".join(str(x) for x in v)
-        else:
-            s = str(v)
-        s = s.strip()
-        if not s or s.lower() in ("none", ""):
-            return None
-        if max_chars and len(s) > max_chars:
-            s = s[:max_chars - 1] + "…"
-        return s
+    if topic_key == "pain":
+        if v("has_pain") == "No":
+            return "No pain"
+        loc  = (v("pain_location") or "").lower()
+        sev  = v("throat_severity") or v("tongue_severity")
+        meds = v("pain_medications")
+        med_str = ""
+        if isinstance(meds, list) and "No pain medication" not in meds:
+            med_str = f", on {meds[0]}" if len(meds) == 1 else f", on {meds[0]} + {len(meds)-1} more"
+        if loc and sev is not None:
+            return f"{loc.capitalize()} pain ({sev}/10){med_str}"
+        elif loc:
+            return f"{loc.capitalize()} pain{med_str}"
+        return f"Pain reported{med_str}"
 
-    parts = []
-    for field_id, label, max_chars in fields:
-        v = _val(field_id, max_chars)
-        if v is not None:
-            parts.append(f"{label}: {v}")
-        if len(parts) == 4:
-            break
+    elif topic_key == "nutrition":
+        eating = v("eating_ability") or ""
+        weight = v("weight")
+        w_str  = f", {weight} lbs" if weight else ""
+        if "normally" in eating:
+            return f"Eating normally{w_str}"
+        elif "less" in eating:
+            return f"Eating less than usual{w_str}"
+        elif "Struggling" in eating:
+            return f"Struggling, liquids only{w_str}"
+        elif "tube" in eating.lower():
+            return f"On feeding tube{w_str}"
+        return f"Nutrition assessed{w_str}"
 
-    if not parts:
-        return ""
+    elif topic_key == "oral":
+        syms = []
+        if yn("mouth_sores"):      syms.append("mouth sores")
+        if yn("dry_mouth"):        syms.append("dry mouth")
+        if yn("mucus_issues"):     syms.append("thick mucus")
+        if yn("teeth_gum_issues"): syms.append("gum problems")
+        return ", ".join(syms).capitalize() if syms else "No oral symptoms"
 
-    line1 = "  ·  ".join(parts[:2])
-    line2 = "  ·  ".join(parts[2:]) if len(parts) > 2 else ""
-    return (line1 + "\n" + line2) if line2 else line1
+    elif topic_key == "gi":
+        syms = []
+        nv = v("nausea_vomiting") or []
+        if "Nausea" in nv:              syms.append("nausea")
+        if "Vomiting" in nv:            syms.append("vomiting")
+        if "Blood when coughing" in nv: syms.append("blood when coughing")
+        if yn("constipation"):          syms.append("constipation")
+        return ", ".join(syms).capitalize() if syms else "No GI symptoms"
 
+    elif topic_key == "fatigue":
+        fatigue = v("fatigue")
+        sleep   = v("sleep_quality")
+        if fatigue == "No" and sleep == "Yes":
+            return "No fatigue, sleeping well"
+        elif fatigue == "Yes" and sleep == "No":
+            return "Fatigued, trouble sleeping"
+        elif fatigue == "Yes":
+            return "Feeling fatigued"
+        elif sleep == "No":
+            return "Trouble sleeping"
+        return "Fatigue assessed"
 
-def _sidebar_topic_snippet_html(topic_key: str, data: dict) -> str:
-    """HTML version of _sidebar_topic_snippet — uses <br> and HTML-escapes values."""
-    fields = _SIDEBAR_FIELDS.get(topic_key, [])
+    elif topic_key == "activity":
+        level = v("activity_level") or ""
+        if "normally" in level:
+            return "Fully active"
+        elif "less" in level:
+            cause = (v("activity_limiting_factor") or "").lower()
+            return f"Less active — {cause}" if cause else "Less active than usual"
+        elif "Struggling" in level:
+            return "Struggling with daily tasks"
+        return "Activity assessed"
 
-    def _val(fid, mc):
-        v = data.get(fid)
-        if v is None:
-            return None
-        s = ", ".join(str(x) for x in v) if isinstance(v, list) else str(v)
-        s = s.strip()
-        if not s or s.lower() == "none":
-            return None
-        if mc and len(s) > mc:
-            s = s[:mc - 1] + "\u2026"
-        return _html.escape(s)
+    elif topic_key == "mood":
+        parts = []
+        if v("feeling_down") == "Yes":       parts.append("feeling depressed")
+        if v("support_adequate") == "No":    parts.append("limited support")
+        elif v("support_adequate") == "Yes": parts.append("good support")
+        if v("anxiety_impact") == "Yes":     parts.append("anxiety affecting daily life")
+        return ", ".join(parts[:2]).capitalize() if parts else "Mood assessed"
 
-    parts = []
-    for fid, lbl, mc in fields:
-        v = _val(fid, mc)
-        if v is not None:
-            parts.append(f"{_html.escape(lbl)}: {v}")
-        if len(parts) == 4:
-            break
+    elif topic_key == "other":
+        syms = []
+        if yn("breathing_issues"): syms.append("breathing difficulty")
+        if yn("hearing_changes"):  syms.append("hearing changes")
+        if yn("dizziness"):        syms.append("dizziness")
+        if yn("fever_chills"):     syms.append("fever/chills")
+        if yn("skin_issues"):      syms.append("skin issues")
+        if v("voice_hoarseness") == "Yes, problems with my voice":
+            syms.append("voice changes")
+        return ", ".join(syms[:3]).capitalize() if syms else "No other symptoms"
 
-    if not parts:
-        return ""
-    line1 = " &middot; ".join(parts[:2])
-    line2 = " &middot; ".join(parts[2:]) if len(parts) > 2 else ""
-    return (line1 + "<br>" + line2) if line2 else line1
+    return ""
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -1803,6 +1781,16 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
 
 def render_freeform_chat():
     """Render the open-ended 'Anything else?' chatbot panel."""
+    _stc.html("""<script>
+    (function(){
+        var s=['section[data-testid=\"stMain\"]',
+               'div[data-testid=\"stAppViewContainer\"]','.main'];
+        for(var i=0;i<s.length;i++){
+            var e=window.parent.document.querySelector(s[i]);
+            if(e){e.scrollTop=0;break;}
+        }
+    })();
+    </script>""", height=0)
     st.subheader("💬 Anything else you'd like to share?")
     st.caption(
         "Mention any other symptoms, questions, or concerns you'd like your care team "
@@ -1867,6 +1855,16 @@ def render_freeform_chat():
 
 def render_topic_detail(topic_label: str, topic_key: str):
     """Render the chat + current question for the selected topic."""
+    _stc.html("""<script>
+    (function(){
+        var s=['section[data-testid=\"stMain\"]',
+               'div[data-testid=\"stAppViewContainer\"]','.main'];
+        for(var i=0;i<s.length;i++){
+            var e=window.parent.document.querySelector(s[i]);
+            if(e){e.scrollTop=0;break;}
+        }
+    })();
+    </script>""", height=0)
     state        = st.session_state.topic_states[topic_key]
     last_data    = st.session_state.last_checkin.get(topic_key, {})
     has_prev     = st.session_state.has_prev_checkin
@@ -1995,10 +1993,8 @@ def render_sidebar():
             if has_prev:
                 prev_data = last_ck.get(key, {})
                 if prev_data:
-                    snip = _sidebar_topic_snippet(key, prev_data)
-                    # snip may contain \n for 2nd line; replace with single space for btn label
-                    flat_snip = snip.replace("\n", "  ·  ") if snip else ""
-                    btn += f"\n   {flat_snip}" if flat_snip else "\n   No data recorded"
+                    snip = _natural_summary(key, prev_data)
+                    btn += f"\n   {snip}" if snip else "\n   No data recorded"
                 else:
                     btn += "\n   No prior data"
 
