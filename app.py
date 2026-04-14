@@ -1443,13 +1443,15 @@ _SUMMARY_FIELDS = {
 }
 
 
-def format_topic_summary(topic_key: str, data: dict) -> str:
+def _checkin_summary_html(topic_key: str, data: dict) -> str:
     """
-    Build a compact one-line summary string from previous check-in data.
-    Returns Markdown-formatted text, or "" if nothing to show.
+    Build a chip-grid HTML block showing key facts from the previous check-in.
+    Each field becomes a small pill: Label on top, value below.
+    Returns an HTML string, or "" if no data to show.
     """
     fields = _SUMMARY_FIELDS.get(topic_key, [])
-    parts = []
+    chips  = []
+
     for field_id, label in fields:
         val = data.get(field_id)
         if val is None:
@@ -1458,11 +1460,28 @@ def format_topic_summary(topic_key: str, data: dict) -> str:
             val_str = ", ".join(str(v) for v in val)
         else:
             val_str = str(val)
-        # Truncate very long free-text answers
-        if len(val_str) > 50:
-            val_str = val_str[:47] + "…"
-        parts.append(f"**{label}:** {val_str}")
-    return "  ·  ".join(parts)
+        val_str = val_str.strip()
+        if not val_str:
+            continue
+        if len(val_str) > 35:
+            val_str = val_str[:32] + "…"
+
+        chips.append(
+            f'<div style="display:inline-flex;flex-direction:column;'
+            f'background:#f4f8ff;border:1px solid #d0e0f8;'
+            f'border-radius:10px;padding:5px 13px 6px 13px;'
+            f'min-width:70px;max-width:200px;">'            f'<span style="font-size:10px;color:#8fa8c8;font-weight:600;'
+            f'text-transform:uppercase;letter-spacing:0.4px;'
+            f'margin-bottom:2px;">{_html.escape(label)}</span>'            f'<span style="font-size:13px;color:#1e3a5f;font-weight:600;'
+            f'line-height:1.3;">{_html.escape(val_str)}</span>'            f'</div>'
+        )
+
+    if not chips:
+        return ""
+
+    return (
+        '<div style="display:flex;flex-wrap:wrap;gap:8px;padding:4px 0 6px 0;">'        + "".join(chips)        + '</div>'
+    )
 
 
 # ── Sidebar summary: natural-language sentence per topic ─────────
@@ -1869,20 +1888,22 @@ def render_topic_detail(topic_label: str, topic_key: str):
     last_data    = st.session_state.last_checkin.get(topic_key, {})
     has_prev     = st.session_state.has_prev_checkin
 
-    # ── Previous check-in summary banner ────────────────────────
+    # ── Previous check-in summary card ────────────────────────────
     if has_prev:
         if last_data:
-            summary = format_topic_summary(topic_key, last_data)
-            with st.expander("📋 Your last check-in — click to expand", expanded=False):
-                if summary:
-                    st.markdown(
-                        f'<div style="font-size:13.5px; line-height:1.7; color:#374151;">'                        f'{summary}</div>',
-                        unsafe_allow_html=True,
-                    )
-                else:
-                    st.caption("Previous data exists but couldn't be summarized.")
+            chips_html = _checkin_summary_html(topic_key, last_data)
+            if chips_html:
+                st.markdown(
+                    '<div style="background:#fafcff;border:1.5px solid #d8e8fb;'                    'border-radius:12px;padding:12px 16px 10px 16px;margin-bottom:12px;">'                    '<div style="font-size:11px;font-weight:700;color:#7a9ec5;'                    'text-transform:uppercase;letter-spacing:0.6px;margin-bottom:8px;">'                    '📋 Your last check-in</div>'                    + chips_html +
+                    '</div>',
+                    unsafe_allow_html=True,
+                )
         else:
-            st.info("ℹ️ No data from your previous check-in for this topic.", icon="📋")
+            st.markdown(
+                '<div style="background:#f8faff;border:1px dashed #c8d8ef;'                'border-radius:10px;padding:9px 14px;margin-bottom:12px;'                'font-size:12.5px;color:#9cb2cc;">'
+                '📋 No data recorded for this topic in your last visit.</div>',
+                unsafe_allow_html=True,
+            )
 
     # ── Initialize topic on first visit ─────────────────────────
     if state["status"] == "not_started":
