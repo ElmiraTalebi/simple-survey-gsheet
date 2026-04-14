@@ -590,14 +590,25 @@ TOPICS = [
 ]
 
 TOPIC_INTROS = {
-    "pain":      "Let's talk about any pain you've been having and the medications you're using.",
+    "pain":      "Let's talk about any pain you've been having, what you're taking for it, and whether that regimen is helping.",
     "nutrition": "I'd like to ask about your eating, drinking, and weight.",
-    "oral":      "Let's go over any problems in your mouth — sores, dryness, mucus, etc.",
-    "gi":        "I'll ask about nausea, vomiting, and bowel habits.",
+    "oral":      "Let's go over any mouth and throat symptoms like sticky mucus, thrush, dryness, and what you're using to manage them.",
+    "gi":        "I'll ask about nausea, vomiting, diarrhea, constipation, and how you're managing those symptoms.",
     "fatigue":   "Let's discuss how your energy and sleep have been.",
     "activity":  "Tell me about how your daily activities have been going.",
     "mood":      "This section covers how you've been feeling emotionally and your support system.",
     "other":     "Finally, let's cover any other symptoms — breathing, skin, hearing, and more.",
+}
+
+TOPIC_MAIN_RULES = {
+    "pain":      ["Main2", "Main3", "Main12", "Main38"],
+    "nutrition": ["Main5", "Main6", "Main8", "Main25", "Main26", "Main27", "Main34"],
+    "oral":      ["Main4", "Main7", "Main10", "Main24", "Main33"],
+    "gi":        ["Main11", "Main18"],
+    "fatigue":   ["Main13", "Main14"],
+    "activity":  ["Main30"],
+    "mood":      ["Main15", "Main35", "Main39"],
+    "other":     ["Main9", "Main16", "Main17", "Main19", "Main20", "Main21", "Main22", "Main23", "Main36", "Main37"],
 }
 
 
@@ -889,18 +900,18 @@ FLOW_NUTRITION = [
 
 # ── ORAL SYMPTOMS (Main 4, 7, 10, 24, 33) ─────────────────────────
 FLOW_ORAL = [
-    # Main 4 — Mouth sores
+    # Main 4 — Mouth sores / thrush
     _q("mouth_sores",
-       "Do you have any mouth sores or ulcers right now?",
+       "Do you have any mouth sores, ulcers, or white patches/thrush right now?",
        opts=["Yes", "No"]),
 
     _q("sore_new_or_old",
-       "Is this sore new since your last visit, or have you had it for a while?",
+       "Is this new since your last visit, or have you had it for a while?",
        opts=["New", "Not sure", "Same one as before"],
        when=lambda d: d.get("mouth_sores") == "Yes"),
 
     _q("sore_location",
-       "Where exactly is the sore?",
+       "Where exactly is it?",
        opts=["Inside the mouth/cheek", "On the tongue", "Back of the throat",
              "Gums/lips", "Multiple spots"],
        when=lambda d: (d.get("mouth_sores") == "Yes"
@@ -914,7 +925,7 @@ FLOW_ORAL = [
                        and d.get("sore_new_or_old") in ["New", "Not sure"])),
 
     _q("magic_mouthwash",
-       "Are you using magic mouthwash? If yes, is it helping?",
+       "Are you using anything for it, like magic mouthwash or thrush medicine? If yes, is it helping?",
        opts=["Yes, it helps", "Yes, but not enough",
              "No, I don't have it", "No, I don't use it"],
        when=lambda d: (d.get("mouth_sores") == "Yes"
@@ -1017,16 +1028,22 @@ FLOW_ORAL = [
 
 # ── GI SYMPTOMS (Main 11, 18) ─────────────────────────────────────
 FLOW_GI = [
-    # Main 11 — Nausea / Vomiting / Blood
+    # Main 11 — Nausea / Vomiting / Diarrhea
     _q("nausea_vomiting",
-       "Have you had any nausea, vomiting, or noticed any blood when you cough?",
+       "Have you had any nausea, vomiting, or diarrhea since your last visit?",
        type="multi_select",
-       opts=["Nausea", "Vomiting", "Blood when coughing", "None of these"]),
+       opts=["Nausea", "Vomiting", "Diarrhea", "None of these"]),
 
     _q("nausea_frequency",
        "How often are you feeling nauseated?",
        type="free_text",
        placeholder="e.g., a few times a day, mostly in the mornings…",
+       when=lambda d: "Nausea" in (d.get("nausea_vomiting") or [])),
+
+    _q("nausea_management",
+       "What are you using for nausea, and is it helping?",
+       type="free_text",
+       placeholder="e.g., Zofran twice a day and it helps a little…",
        when=lambda d: "Nausea" in (d.get("nausea_vomiting") or [])),
 
     _q("vomiting_frequency",
@@ -1035,11 +1052,23 @@ FLOW_GI = [
        placeholder="e.g., once or twice a day, small amounts…",
        when=lambda d: "Vomiting" in (d.get("nausea_vomiting") or [])),
 
-    _q("blood_cough_amount",
-       "How much blood have you noticed when coughing?",
+    _q("vomiting_management",
+       "What are you doing to manage the vomiting, and is it helping?",
        type="free_text",
-       placeholder="e.g., small streaks, about a teaspoon…",
-       when=lambda d: "Blood when coughing" in (d.get("nausea_vomiting") or [])),
+       placeholder="e.g., anti-nausea medication, small sips, and it is helping some…",
+       when=lambda d: "Vomiting" in (d.get("nausea_vomiting") or [])),
+
+    _q("diarrhea_frequency",
+       "How often are you having diarrhea?",
+       type="free_text",
+       placeholder="e.g., three loose stools a day…",
+       when=lambda d: "Diarrhea" in (d.get("nausea_vomiting") or [])),
+
+    _q("diarrhea_management",
+       "Are you taking anything for the diarrhea, and is it helping?",
+       type="free_text",
+       placeholder="e.g., Imodium and it helps some…",
+       when=lambda d: "Diarrhea" in (d.get("nausea_vomiting") or [])),
 
     # Main 18 — Constipation
     _q("constipation",
@@ -1435,8 +1464,8 @@ _SYSTEM_CONTEXT = (
 _TOPIC_LABELS_LLM = {
     "pain":      "Pain & Pain Medications",
     "nutrition": "Nutrition, Fluids & Weight",
-    "oral":      "Oral Symptoms (mouth sores, dryness, mucus)",
-    "gi":        "GI Symptoms (nausea, vomiting, constipation)",
+    "oral":      "Oral Symptoms (sticky mucus, thrush, dryness, oral care)",
+    "gi":        "GI Symptoms (nausea, vomiting, diarrhea, constipation)",
     "fatigue":   "Fatigue & Sleep",
     "activity":  "Daily Activity & Independence",
     "mood":      "Emotional Health & Support",
@@ -1446,7 +1475,6 @@ _TOPIC_LABELS_LLM = {
 # ── Red flag criteria — shared between clarification and report ───
 _RED_FLAGS = (
     "- Pain severity ≥ 7/10, uncontrolled or worsening despite medication\n"
-    "- Blood when coughing (hemoptysis) — any amount\n"
     "- Fever ≥ 100.4°F / 38°C or chills with possible infection signs\n"
     "- Significant unintentional weight loss (> 5 lbs since last visit)\n"
     "- Complete inability to swallow liquids or take any oral intake\n"
@@ -1456,6 +1484,7 @@ _RED_FLAGS = (
     "- Suicidal ideation or expression of wanting to harm oneself\n"
     "- Severe depression or distress that is interfering with daily functioning\n"
     "- New neurological symptoms: sudden weakness, numbness, confusion\n"
+    "- Severe diarrhea, ongoing vomiting, or poor intake causing dehydration risk\n"
     "- No bowel movement for > 3 days with discomfort\n"
     "- Medication non-adherence affecting symptom control"
 )
@@ -1692,7 +1721,7 @@ _SUMMARY_FIELDS = {
         ("oral_rinse_use", "Oral rinse"),
     ],
     "gi": [
-        ("nausea_vomiting", "Nausea/vomiting"),
+        ("nausea_vomiting", "Nausea/vomiting/diarrhea"),
         ("constipation",    "Constipation"),
     ],
     "fatigue": [
@@ -1806,9 +1835,9 @@ def _natural_summary(topic_key: str, data: dict) -> str:
 
     elif topic_key == "oral":
         syms = []
-        if yn("mouth_sores"):      syms.append("mouth sores")
+        if yn("mouth_sores"):      syms.append("mouth sores or thrush")
         if yn("dry_mouth"):        syms.append("dry mouth")
-        if yn("mucus_issues"):     syms.append("thick mucus")
+        if yn("mucus_issues"):     syms.append("sticky mucus")
         if yn("teeth_gum_issues"): syms.append("gum problems")
         return ", ".join(syms).capitalize() if syms else "No oral symptoms"
 
@@ -1817,7 +1846,7 @@ def _natural_summary(topic_key: str, data: dict) -> str:
         nv = v("nausea_vomiting") or []
         if "Nausea" in nv:              syms.append("nausea")
         if "Vomiting" in nv:            syms.append("vomiting")
-        if "Blood when coughing" in nv: syms.append("blood when coughing")
+        if "Diarrhea" in nv:            syms.append("diarrhea")
         if yn("constipation"):          syms.append("constipation")
         return ", ".join(syms).capitalize() if syms else "No GI symptoms"
 
