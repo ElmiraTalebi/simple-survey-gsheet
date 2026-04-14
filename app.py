@@ -1997,23 +1997,23 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
     # ── Options ─────────────────────────────────────────────────
     if stype == "options":
 
-    st.markdown("**Choose an option OR type your answer:**")
-
-    # ── OPTION BUTTONS ──
-    cols = st.columns(2 if len(step["opts"]) <= 4 else 1)
-
-    for i, opt in enumerate(step["opts"]):
-        with cols[i % len(cols)]:
-            if st.button(opt, key=f"opt_{topic_key}_{sid}_{i}"):
-                handle_answer(topic_key, step, opt)
-
-    # ── FREE TEXT INPUT ──
-    user_text = st.text_input(
-        "Or type your answer:",
-        key=f"opt_text_{topic_key}_{sid}"
-    )
-
-    col1, col2 = st.columns([2,1])
+        st.markdown("**Choose an option OR type your answer:**")
+    
+        # ── OPTION BUTTONS ──
+        cols = st.columns(2 if len(step["opts"]) <= 4 else 1)
+    
+        for i, opt in enumerate(step["opts"]):
+            with cols[i % len(cols)]:
+                if st.button(opt, key=f"opt_{topic_key}_{sid}_{i}"):
+                    handle_answer(topic_key, step, opt)
+    
+        # ── FREE TEXT INPUT ──
+        user_text = st.text_input(
+            "Or type your answer:",
+            key=f"opt_text_{topic_key}_{sid}"
+        )
+    
+        col1, col2 = st.columns([2,1])
 
     # ── TEXT SUBMIT ──
     with col1:
