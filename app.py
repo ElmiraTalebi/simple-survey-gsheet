@@ -2012,7 +2012,8 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
 
             is_selected = (prev == opt)
         
-            button_label = f"✓ {opt}" if is_selected else opt
+            button_label = opt
+            button_type = "primary" if is_selected else "secondary"
         
             # Apply visual highlight
             button_type = "primary" if is_selected else "secondary"
