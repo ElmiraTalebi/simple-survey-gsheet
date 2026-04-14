@@ -45,11 +45,11 @@ section[data-testid="stSidebar"] .block-container {
     padding-top: 1.5rem;
 }
 
-/* ── Buttons ── */
+/* ── Buttons (main content area) ── */
 .stButton > button {
     width: 100%;
     border-radius: 10px;
-    padding: 0.55rem 1rem;
+    padding: 0.5rem 1rem;
     font-family: 'DM Sans', sans-serif;
     font-size: 14px;
     font-weight: 500;
@@ -63,6 +63,32 @@ section[data-testid="stSidebar"] .block-container {
     border-color: #5b7fff;
     background: #eef2ff;
     color: #2545c0;
+}
+
+/* ── Sidebar nav buttons — compact, multi-line aware ── */
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button {
+    padding: 5px 10px 6px 10px !important;
+    font-size: 12.5px !important;
+    font-weight: 500 !important;
+    line-height: 1.45 !important;
+    min-height: 0 !important;
+    border-radius: 8px !important;
+    margin-bottom: 2px !important;
+    white-space: pre-wrap !important;   /* lets \n in label render as line break */
+    word-break: break-word !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button:hover {
+    border-color: #5b7fff !important;
+    background: #eef2ff !important;
+    color: #2545c0 !important;
+}
+
+/* ── Submit button stays prominent despite sidebar override ── */
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button[kind="primary"] {
+    font-size: 13.5px !important;
+    padding: 9px 10px !important;
+    font-weight: 600 !important;
+    white-space: normal !important;
 }
 
 /* ── Chat message overrides ── */
@@ -1431,67 +1457,102 @@ def format_topic_summary(topic_key: str, data: dict) -> str:
     return "  ·  ".join(parts)
 
 
-# ── Sidebar-specific snippet: max 2 key facts, plain text (no Markdown bold) ──
+# ── Sidebar snippet: up to 4 key fields per topic, rendered as two short lines ──
+#    Format: "Label: Value · Label: Value"  (line 1)
+#            "Label: Value · Label: Value"  (line 2, only if fields exist)
 
-# Most important single field per topic to headline in the sidebar
-_SIDEBAR_PRIMARY = {
-    "pain":      ("has_pain",            "Pain"),
-    "nutrition": ("eating_ability",      "Eating"),
-    "oral":      ("mouth_sores",         "Mouth sores"),
-    "gi":        ("nausea_vomiting",     "Nausea/vomiting"),
-    "fatigue":   ("fatigue",             "Fatigue"),
-    "activity":  ("activity_level",      "Activity"),
-    "mood":      ("feeling_down",        "Feeling down"),
-    "other":     ("breathing_issues",    "Breathing"),
-}
-
-# Secondary field (shown only if primary is "Yes" / non-trivial)
-_SIDEBAR_SECONDARY = {
-    "pain":      ("pain_medications",    "Meds"),
-    "nutrition": ("weight",              "Weight"),
-    "oral":      ("dry_mouth",           "Dry mouth"),
-    "gi":        ("constipation",        "Constipation"),
-    "fatigue":   ("sleep_quality",       "Sleep"),
-    "activity":  ("activity_limiting_factor", "Cause"),
-    "mood":      ("support_adequate",    "Support"),
-    "other":     ("skin_issues",         "Skin"),
+# Each topic: list of (field_id, short_label, max_val_chars)
+# Fields are shown in order; up to 2 per line, max 2 lines → 4 fields total.
+_SIDEBAR_FIELDS: dict[str, list[tuple]] = {
+    "pain": [
+        ("has_pain",              "Pain",     None),
+        ("pain_location",         "Location", 12),
+        ("throat_severity",       "Sev",      None),
+        ("tongue_severity",       "Sev",      None),
+        ("pain_medications",      "Meds",     18),
+        ("taking_as_prescribed",  "Adherence",8),
+    ],
+    "nutrition": [
+        ("eating_ability",        "Eating",   22),
+        ("weight",                "Weight",   None),
+        ("swallowing_difficulty", "Swallow",  None),
+        ("feeding_tube",          "Tube",     None),
+    ],
+    "oral": [
+        ("mouth_sores",           "Sores",    None),
+        ("dry_mouth",             "Dry mouth",None),
+        ("mucus_issues",          "Mucus",    None),
+        ("oral_rinse_use",        "Rinse",    None),
+    ],
+    "gi": [
+        ("nausea_vomiting",       "Nausea/vom",18),
+        ("constipation",          "Constip.",  None),
+        ("bloating",              "Bloating",  None),
+    ],
+    "fatigue": [
+        ("fatigue",               "Fatigue",  None),
+        ("sleep_quality",         "Sleep",    None),
+        ("medication_drowsy",     "Drowsy",   None),
+        ("fatigue_daily_impact",  "ADL impact",None),
+    ],
+    "activity": [
+        ("activity_level",        "Activity", 20),
+        ("activity_limiting_factor","Cause",  None),
+        ("difficult_activities",  "Difficulty",18),
+    ],
+    "mood": [
+        ("feeling_down",          "Depressed",None),
+        ("support_adequate",      "Support",  None),
+        ("anxiety_impact",        "Anxiety",  None),
+        ("social_support_quality","Network",  14),
+    ],
+    "other": [
+        ("breathing_issues",      "Breathing",None),
+        ("dizziness",             "Dizziness",None),
+        ("skin_issues",           "Skin",     None),
+        ("voice_hoarseness",      "Voice",    12),
+    ],
 }
 
 
 def _sidebar_topic_snippet(topic_key: str, data: dict) -> str:
     """
-    Return a very short plain-text summary for display in the sidebar
-    (1–2 key facts, no Markdown, max ~60 chars total).
+    Return up to 2 plain-text summary lines for the sidebar button.
+    Line 1: first 2 available fields.
+    Line 2: next 2 available fields (omitted if empty).
+    Each field: "Label: Value", values truncated per _SIDEBAR_FIELDS config.
     """
-    primary   = _SIDEBAR_PRIMARY.get(topic_key)
-    secondary = _SIDEBAR_SECONDARY.get(topic_key)
+    fields = _SIDEBAR_FIELDS.get(topic_key, [])
 
-    def _val(field_id):
+    def _val(field_id, max_chars):
         v = data.get(field_id)
         if v is None:
             return None
         if isinstance(v, list):
-            return ", ".join(str(x) for x in v)
-        return str(v)
+            s = ", ".join(str(x) for x in v)
+        else:
+            s = str(v)
+        s = s.strip()
+        if not s or s.lower() in ("none", ""):
+            return None
+        if max_chars and len(s) > max_chars:
+            s = s[:max_chars - 1] + "…"
+        return s
 
     parts = []
+    for field_id, label, max_chars in fields:
+        v = _val(field_id, max_chars)
+        if v is not None:
+            parts.append(f"{label}: {v}")
+        if len(parts) == 4:
+            break
 
-    if primary:
-        p_val = _val(primary[0])
-        if p_val:
-            # Truncate long free-text values
-            if len(p_val) > 30:
-                p_val = p_val[:27] + "…"
-            parts.append(f"{primary[1]}: {p_val}")
+    if not parts:
+        return ""
 
-    if secondary:
-        s_val = _val(secondary[0])
-        if s_val:
-            if len(s_val) > 25:
-                s_val = s_val[:22] + "…"
-            parts.append(f"{secondary[1]}: {s_val}")
-
-    return "  ·  ".join(parts)
+    line1 = "  ·  ".join(parts[:2])
+    line2 = "  ·  ".join(parts[2:]) if len(parts) > 2 else ""
+    return (line1 + "\n" + line2) if line2 else line1
 
 
 # ══════════════════════════════════════════════════════════════════
