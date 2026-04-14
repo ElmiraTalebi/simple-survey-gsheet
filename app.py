@@ -2282,8 +2282,6 @@ def render_topic_detail(topic_label: str, topic_key: str):
         with st.container(border=False):
             for msg in state["chat"]:
                 avatar = "👩‍⚕️" if msg["role"] == "assistant" else "🧑‍💼"
-                with st.chat_message(msg["role"], avatar=avatar):
-                    st.write(msg["content"])
 
     # ── Completed ────────────────────────────────────────────────
     if state["status"] == "completed":
