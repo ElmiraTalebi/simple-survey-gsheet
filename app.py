@@ -1923,8 +1923,8 @@ def handle_answer(topic_key: str, step: dict, answer, llm_ack: Optional[str] = N
     else:
         display = str(answer)
 
-    state["chat"].append({"role": "assistant", "content": step["text"]})
-    state["chat"].append({"role": "user", "content": display})
+    combined = f"{llm_ack} {next_step['text']}"
+    state["chat"].append({"role": "assistant", "content": combined})
 
     # ✅ NEW: LLM adaptive follow-up
     adaptive_q = None
