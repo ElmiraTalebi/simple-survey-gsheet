@@ -1949,6 +1949,9 @@ def handle_answer(topic_key: str, step: dict, answer, llm_ack: Optional[str] = N
     # fallback to original behavior
     if llm_ack:
         state["chat"].append({"role": "assistant", "content": llm_ack})
+        # 🔥 STOP here — do NOT move to next question yet
+        state["waiting_for_followup"] = True
+        return
 
     state["data"][step["id"]] = answer
     state["status"] = "in_progress"
@@ -2284,6 +2287,16 @@ def render_topic_detail(topic_label: str, topic_key: str):
         return
 
     # ── Current question ─────────────────────────────────────────
+    # 🔥 If waiting for LLM follow-up, do not ask next question
+    if state.get("waiting_for_followup"):
+        user_input = st.chat_input("Your response...")
+    
+        if user_input:
+            state["chat"].append({"role": "user", "content": user_input})
+            state["waiting_for_followup"] = False
+            st.rerun()
+    
+        return
     next_step = get_next_step(topic_key, state["data"])
     if next_step:
         # Look up previous answer for this specific question
