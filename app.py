@@ -1997,6 +1997,9 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
     stype = step["type"]
     sid   = step["id"]
 
+
+    state = st.session_state.topic_states[topic_key]
+    prev = state["data"].get(step["id"])
     # ── Options ─────────────────────────────────────────────────
     if stype == "options":
 
@@ -2006,8 +2009,20 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
         cols = st.columns(2 if len(step["opts"]) <= 4 else 1)
     
         for i, opt in enumerate(step["opts"]):
+
+            is_selected = (prev == opt)
+        
+            button_label = f"✓ {opt}" if is_selected else opt
+        
+            # Apply visual highlight
+            button_type = "primary" if is_selected else "secondary"
+        
             with cols[i % len(cols)]:
-                if st.button(opt, key=f"opt_{topic_key}_{sid}_{i}"):
+                if st.button(
+                    button_label,
+                    key=f"opt_{topic_key}_{sid}_{i}",
+                    type=button_type
+                ):
                     handle_answer(topic_key, step, opt)
     
         # ── FREE TEXT INPUT ──
