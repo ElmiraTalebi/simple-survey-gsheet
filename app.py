@@ -66,54 +66,36 @@ section[data-testid="stSidebar"] .block-container {
     color: #2545c0;
 }
 
-/* ── Sidebar topic cards (pure HTML, not st.button) ── */
-.sidebar-nav { display: flex; flex-direction: column; gap: 4px; margin-bottom: 4px; }
-
-.topic-card {
-    display: block;
-    background: #ffffff;
-    border: 1.5px solid #dde6f5;
-    border-radius: 10px;
-    padding: 8px 12px;
-    cursor: pointer;
-    transition: border-color 0.15s ease, background 0.15s ease;
-    text-decoration: none !important;
-}
-.topic-card:hover  { border-color: #7aa6ff; background: #f0f5ff; }
-.topic-card.tc-active { border-color: #3b82f6; background: #eff6ff; }
-.topic-card.tc-freeform {
-    border-style: dashed;
-    border-color: #c0cfe8;
-    margin-top: 4px;
-}
-.topic-card.tc-freeform.tc-active { border-color: #3b82f6; border-style: solid; }
-
-.tc-header {
-    font-size: 12.5px;
-    font-weight: 600;
-    color: #1e3a5f;
-    font-family: 'DM Sans', sans-serif;
-    line-height: 1.3;
-}
-.tc-summary {
-    font-size: 10.5px;
-    color: #6b7280;
-    line-height: 1.55;
-    font-family: 'DM Sans', sans-serif;
-    margin-top: 4px;
-}
-.tc-no-data {
-    font-size: 10.5px;
-    color: #b0bdd0;
-    font-style: italic;
-    margin-top: 4px;
-}
-/* ── Submit button ── */
+/* ── Sidebar nav buttons ── */
+/* All sidebar buttons: compact card style */
 section[data-testid="stSidebar"] div[data-testid="stButton"] > button {
+    padding: 7px 11px 8px 11px !important;
+    font-size: 12px !important;
+    font-weight: 500 !important;
+    line-height: 1.5 !important;
+    min-height: 0 !important;
+    border-radius: 9px !important;
+    margin-bottom: 3px !important;
+    white-space: pre-wrap !important;
+    word-break: break-word !important;
+    text-align: left !important;
+    color: #1e3a5f !important;
+    border-color: #dde6f5 !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button:hover {
+    border-color: #7aa6ff !important;
+    background: #f0f5ff !important;
+    color: #1e3a5f !important;
+}
+/* Submit button: override to be larger and prominent */
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button[kind="primaryFormSubmit"],
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button[kind="primary"] {
     font-size: 13.5px !important;
     font-weight: 600 !important;
-    padding: 9px 14px !important;
-    border-radius: 10px !important;
+    padding: 10px 14px !important;
+    white-space: normal !important;
+    color: white !important;
+    margin-top: 2px !important;
 }
 
 /* ── Chat message overrides ── */
@@ -1375,15 +1357,6 @@ def _init_state():
 
 _init_state()
 
-# ── Handle topic selection via HTML card links (query params) ─────
-try:
-    _qp = st.query_params.get("topic", "")
-    _valid_topics = [k for _, k in TOPICS] + ["freeform"]
-    if _qp in _valid_topics and st.session_state.get("selected_topic") != _qp:
-        st.session_state.selected_topic = _qp
-except Exception:
-    pass
-
 
 # ══════════════════════════════════════════════════════════════════
 # LOAD PREVIOUS CHECK-IN
@@ -1969,6 +1942,7 @@ def render_topic_detail(topic_label: str, topic_key: str):
 # ══════════════════════════════════════════════════════════════════
 
 
+
 def render_sidebar():
     with st.sidebar:
         # ── Header ───────────────────────────────────────────────
@@ -1998,54 +1972,54 @@ def render_sidebar():
             unsafe_allow_html=True,
         )
         st.progress(completed / total if total > 0 else 0)
-        st.markdown('<div style="height:8px;"></div>', unsafe_allow_html=True)
+        st.markdown('<div style="height:6px;"></div>', unsafe_allow_html=True)
 
-        # ── Topic cards (HTML anchor links → query params) ────────
+        # ── Topic nav buttons ─────────────────────────────────────
+        # Using st.button (not HTML anchors) so session state is preserved.
+        # The label has two parts separated by \n:
+        #   line 1: "{selected_marker}{icon} {topic_name}"
+        #   line 2: summary snippet or "No prior data" (when prev check-in exists)
+        # CSS white-space:pre-wrap renders the \n as a real line break.
+
         has_prev = st.session_state.get("has_prev_checkin", False)
         last_ck  = st.session_state.get("last_checkin", {})
-        selected = st.session_state.selected_topic
-
-        cards = '<div class="sidebar-nav">'
 
         for label, key in TOPICS:
             status = st.session_state.topic_states[key]["status"]
             icon   = {"completed": "✅", "in_progress": "🔵"}.get(status, "⚪")
             dname  = label.split(" ", 1)[1] if " " in label else label
-            active_cls = "tc-active" if selected == key else ""
+            marker = "▶ " if st.session_state.selected_topic == key else "   "
 
-            prev_data = last_ck.get(key, {})
+            # Build button label
+            btn = f"{marker}{icon} {dname}"
             if has_prev:
+                prev_data = last_ck.get(key, {})
                 if prev_data:
-                    snip = _sidebar_topic_snippet_html(key, prev_data)
-                    summary = (f'<div class="tc-summary">{snip}</div>'
-                               if snip else
-                               '<div class="tc-no-data">No data recorded</div>')
+                    snip = _sidebar_topic_snippet(key, prev_data)
+                    # snip may contain \n for 2nd line; replace with single space for btn label
+                    flat_snip = snip.replace("\n", "  ·  ") if snip else ""
+                    btn += f"\n   {flat_snip}" if flat_snip else "\n   No data recorded"
                 else:
-                    summary = '<div class="tc-no-data">No prior data</div>'
-            else:
-                summary = ""
+                    btn += "\n   No prior data"
 
-            cards += (
-                f'<a href="?topic={key}" target="_self" style="text-decoration:none;">'                f'<div class="topic-card {active_cls}">'                f'<div class="tc-header">{icon} {_html.escape(dname)}</div>'                f'{summary}</div></a>'
-            )
+            if st.button(btn, key=f"nav_{key}", use_container_width=True):
+                st.session_state.selected_topic = key
+                st.rerun()
 
-        # Freeform card
+        # ── Anything else? ────────────────────────────────────────
         ff_msgs  = [m for m in st.session_state.freeform_chat if m["role"] == "user"]
         ff_badge = f" ({len(ff_msgs)})" if ff_msgs else ""
-        ff_cls   = "tc-freeform tc-active" if selected == "freeform" else "tc-freeform"
-        cards += (
-            f'<a href="?topic=freeform" target="_self" style="text-decoration:none;">'            f'<div class="topic-card {ff_cls}">'            f'<div class="tc-header">💬 Anything else?{_html.escape(ff_badge)}</div>'            f'</div></a>'
-        )
-        cards += '</div>'
-        st.markdown(cards, unsafe_allow_html=True)
+        ff_mark  = "▶ " if st.session_state.selected_topic == "freeform" else "   "
+        if st.button(f"{ff_mark}💬 Anything else?{ff_badge}",
+                     key="nav_freeform", use_container_width=True):
+            st.session_state.selected_topic = "freeform"
+            st.rerun()
 
-        # ── Submit button ─────────────────────────────────────────
-        st.markdown('<div style="height:10px;"></div>', unsafe_allow_html=True)
+        # ── Submit ────────────────────────────────────────────────
         st.markdown(
-            '<hr style="margin:0 0 10px 0;border:none;border-top:1px solid #dde6f5;">',
+            '<hr style="margin:8px 0 8px 0;border:none;border-top:1px solid #dde6f5;">',
             unsafe_allow_html=True,
         )
-
         any_started = completed >= 1 or in_progress >= 1
         if any_started:
             if st.button("📤 Submit Check-In", use_container_width=True,
@@ -2065,7 +2039,6 @@ def render_sidebar():
                 st.session_state.report_saved = True
                 st.session_state.app_stage = "report"
                 st.rerun()
-
 
 # ══════════════════════════════════════════════════════════════════
 # SCREENS
