@@ -1986,32 +1986,15 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
 
     # ── Previous-answer hint (shown for all types) ───────────────
     if prev_answer is not None:
-
-        # 🔥 Do NOT show if same as current answer already in chat
-        current_data = st.session_state.topic_states[topic_key]["data"]
-        current_val = current_data.get(step["id"])
-    
-        if current_val == prev_answer:
-            pass  # skip showing
-        else:
-            hint = _fmt_prev(prev_answer)
-    
-            if hint and len(hint) < 50:
-                st.markdown(
-                    f'''
-                    <div style="
-                        background:#f8fafc;
-                        border-left:3px solid #cbd5f5;
-                        padding:6px 10px;
-                        border-radius:6px;
-                        font-size:12px;
-                        color:#64748b;
-                        margin-bottom:6px;">
-                        📋 Previous: {hint}
-                    </div>
-                    ''',
-                    unsafe_allow_html=True
-                )
+        hint = _fmt_prev(prev_answer)
+        if hint:
+            st.markdown(
+                f'<div style="background:#f0f7ff; border-left:3px solid #93c5fd; '
+                f'padding:6px 10px; border-radius:6px; font-size:13px; '
+                f'color:#1e40af; margin-bottom:8px;">'
+                f'📋 <strong>Last time:</strong> {hint}</div>',
+                unsafe_allow_html=True,
+            )
     # ── Options ─────────────────────────────────────────────────
     if stype == "options":
 
