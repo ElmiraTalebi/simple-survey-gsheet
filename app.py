@@ -2009,11 +2009,10 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
         cols = st.columns(2 if len(step["opts"]) <= 4 else 1)
     
         for i, opt in enumerate(step["opts"]):
-
+        
             is_selected = (prev == opt)
         
-            button_label = opt
-            button_type = "primary" if is_selected else "secondary"
+            button_label = f"✓ {opt}" if is_selected else opt
         
             # Apply visual highlight
             button_type = "primary" if is_selected else "secondary"
