@@ -46,6 +46,55 @@ def _short_prev_answer(value: Any) -> str:
     return text
 
 
+def _norm_text(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).strip()
+
+
+def _is_redundant_followup(original_question: str, answer: str, followup_question: str) -> bool:
+    oq = _norm_text(original_question)
+    aq = _norm_text(answer)
+    fq = _norm_text(followup_question)
+    if not fq:
+        return True
+    if fq == oq or fq in oq or oq in fq:
+        return True
+
+    answer_words = set(aq.split())
+    follow_words = set(fq.split())
+    if answer_words and len(answer_words) <= 4 and answer_words.issubset(follow_words):
+        return True
+
+    location_terms = {
+        "hand", "hands", "jaw", "ear", "ears", "tongue", "throat", "mouth",
+        "neck", "face", "lip", "lips", "gum", "gums", "shoulder", "chest",
+        "arm", "arms", "leg", "legs", "back", "head",
+    }
+    if answer_words & location_terms and ("where" in follow_words or "located" in follow_words):
+        return True
+
+    return False
+
+
+def _coerce_structured_answer(topic_key: str, step: dict, answer: Any, current_data: dict) -> Any:
+    if not isinstance(answer, str):
+        return answer
+
+    raw = answer.strip()
+    if not raw:
+        return answer
+
+    if topic_key == "pain" and step["id"] == "pain_location":
+        normalized = _norm_text(raw)
+        if normalized in {"throat", "my throat"}:
+            return "Throat"
+        if normalized in {"tongue", "my tongue"}:
+            return "Tongue"
+        current_data["other_pain_desc"] = raw
+        return "Somewhere else"
+
+    return answer
+
+
 
 
 
@@ -1511,6 +1560,8 @@ def get_llm_topic_turn(
         f"- If the patient gave enough detail, write a brief natural response that sounds human and specific.\n"
         f"- If comparing with the last visit is clearly helpful and accurate, you may briefly mention improvement, worsening, or similarity.\n"
         f"- If the answer is vague or opens an important clinical thread, ask one short follow-up question.\n"
+        f"- Do NOT ask a follow-up that simply repeats or paraphrases the original question.\n"
+        f"- If the patient already directly answered with a concrete detail like a body location, symptom trigger, or medication, accept it.\n"
         f"- If there is a red flag, stay calm, acknowledge it, and say the team will want to know before the visit.\n"
         f"- Avoid generic repetition. Do not always react the same way.\n"
         f"- Do not diagnose, prescribe, or give unsafe reassurance.\n"
@@ -2012,6 +2063,7 @@ def handle_answer(topic_key: str, step: dict, answer):
     state = st.session_state.topic_states[topic_key]
     display = ", ".join(answer) if isinstance(answer, list) else str(answer)
     state["chat"].append({"role": "user", "content": display})
+    answer = _coerce_structured_answer(topic_key, step, answer, state["data"])
     state["data"][step["id"]] = answer
     next_step = get_next_step(topic_key, state["data"])
     state["status"] = "in_progress"
@@ -2031,17 +2083,22 @@ def handle_answer(topic_key: str, step: dict, answer):
                     next_step=next_step,
                 )
             if turn.get("mode") == "follow_up":
-                if turn.get("assistant_message"):
+                followup_question = turn["follow_up_question"]
+                if _is_redundant_followup(step["text"], answer, followup_question):
+                    turn["mode"] = "continue"
+                    turn["follow_up_question"] = ""
+                else:
+                    if turn.get("assistant_message"):
+                        state["chat"].append({
+                            "role": "assistant",
+                            "content": turn["assistant_message"],
+                        })
                     state["chat"].append({
                         "role": "assistant",
-                        "content": turn["assistant_message"],
+                        "content": followup_question,
                     })
-                state["chat"].append({
-                    "role": "assistant",
-                    "content": turn["follow_up_question"],
-                })
-                _store_followup_prompt(state, step, turn["follow_up_question"])
-                st.rerun()
+                    _store_followup_prompt(state, step, followup_question)
+                    st.rerun()
 
             assistant_message = turn.get("assistant_message", "").strip()
 
