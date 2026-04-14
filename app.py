@@ -188,19 +188,27 @@ def _init_sheets():
         _sheet_error = str(e)
 
 
-def save_to_sheet(name: str, all_data: dict, report: str = ""):
+def save_to_sheet(name: str, all_data: dict, report: str = "") -> bool:
+    """
+    Append one row to the Google Sheet.
+    Columns: timestamp | name | all_data_json | report
+    Returns True on success, False on failure.
+    """
     _init_sheets()
     if _sheet is None:
-        return
+        st.error(f"Could not connect to Google Sheets: {_sheet_error}")
+        return False
     try:
         _sheet.append_row([
             datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             name,
-            json.dumps(all_data),
+            json.dumps(all_data, ensure_ascii=False),
             report,
         ])
-    except Exception:
-        pass
+        return True
+    except Exception as e:
+        st.error(f"Failed to save to Google Sheets: {e}")
+        return False
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -1423,6 +1431,69 @@ def format_topic_summary(topic_key: str, data: dict) -> str:
     return "  ·  ".join(parts)
 
 
+# ── Sidebar-specific snippet: max 2 key facts, plain text (no Markdown bold) ──
+
+# Most important single field per topic to headline in the sidebar
+_SIDEBAR_PRIMARY = {
+    "pain":      ("has_pain",            "Pain"),
+    "nutrition": ("eating_ability",      "Eating"),
+    "oral":      ("mouth_sores",         "Mouth sores"),
+    "gi":        ("nausea_vomiting",     "Nausea/vomiting"),
+    "fatigue":   ("fatigue",             "Fatigue"),
+    "activity":  ("activity_level",      "Activity"),
+    "mood":      ("feeling_down",        "Feeling down"),
+    "other":     ("breathing_issues",    "Breathing"),
+}
+
+# Secondary field (shown only if primary is "Yes" / non-trivial)
+_SIDEBAR_SECONDARY = {
+    "pain":      ("pain_medications",    "Meds"),
+    "nutrition": ("weight",              "Weight"),
+    "oral":      ("dry_mouth",           "Dry mouth"),
+    "gi":        ("constipation",        "Constipation"),
+    "fatigue":   ("sleep_quality",       "Sleep"),
+    "activity":  ("activity_limiting_factor", "Cause"),
+    "mood":      ("support_adequate",    "Support"),
+    "other":     ("skin_issues",         "Skin"),
+}
+
+
+def _sidebar_topic_snippet(topic_key: str, data: dict) -> str:
+    """
+    Return a very short plain-text summary for display in the sidebar
+    (1–2 key facts, no Markdown, max ~60 chars total).
+    """
+    primary   = _SIDEBAR_PRIMARY.get(topic_key)
+    secondary = _SIDEBAR_SECONDARY.get(topic_key)
+
+    def _val(field_id):
+        v = data.get(field_id)
+        if v is None:
+            return None
+        if isinstance(v, list):
+            return ", ".join(str(x) for x in v)
+        return str(v)
+
+    parts = []
+
+    if primary:
+        p_val = _val(primary[0])
+        if p_val:
+            # Truncate long free-text values
+            if len(p_val) > 30:
+                p_val = p_val[:27] + "…"
+            parts.append(f"{primary[1]}: {p_val}")
+
+    if secondary:
+        s_val = _val(secondary[0])
+        if s_val:
+            if len(s_val) > 25:
+                s_val = s_val[:22] + "…"
+            parts.append(f"{secondary[1]}: {s_val}")
+
+    return "  ·  ".join(parts)
+
+
 # ══════════════════════════════════════════════════════════════════
 # FREE-FORM CHAT LLM
 # ══════════════════════════════════════════════════════════════════
@@ -1797,6 +1868,9 @@ def render_sidebar():
         st.markdown("")
 
         # ── Topic navigation ─────────────────────────────────────
+        has_prev  = st.session_state.get("has_prev_checkin", False)
+        last_ck   = st.session_state.get("last_checkin", {})
+
         for label, key in TOPICS:
             status = st.session_state.topic_states[key]["status"]
 
@@ -1818,6 +1892,22 @@ def render_sidebar():
             ):
                 st.session_state.selected_topic = key
                 st.rerun()
+
+            # ── Inline last-visit snippet under each topic button ─
+            prev_topic_data = last_ck.get(key, {})
+            if has_prev:
+                if prev_topic_data:
+                    snippet = _sidebar_topic_snippet(key, prev_topic_data)
+                    if snippet:
+                        st.markdown(
+                            f'<div style="font-size:11.5px; color:#6b7280; '                            f'padding: 0 4px 6px 22px; line-height:1.5;">'                            f'{snippet}</div>',
+                            unsafe_allow_html=True,
+                        )
+                else:
+                    st.markdown(
+                        '<div style="font-size:11px; color:#9ca3af; '                        'padding: 0 4px 6px 22px;">No prior data</div>',
+                        unsafe_allow_html=True,
+                    )
 
         # ── "Anything else?" free-chat ───────────────────────────
         st.markdown("")
@@ -1863,12 +1953,7 @@ def render_sidebar():
                 st.session_state.app_stage = "report"
                 st.rerun()
 
-        # Start over
-        st.markdown("")
-        if st.button("🔄 Start Over", use_container_width=True, key="sidebar_reset"):
-            for k in list(st.session_state.keys()):
-                del st.session_state[k]
-            st.rerun()
+
 
 
 # ══════════════════════════════════════════════════════════════════
