@@ -2014,40 +2014,40 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
         )
     
         col1, col2 = st.columns([2,1])
-
-    # ── TEXT SUBMIT ──
-    with col1:
-        if st.button("Submit ✎", key=f"opt_submit_{topic_key}_{sid}"):
-
-            if user_text.strip():
-
-                # 🔥 LLM interprets text
-                interpreted = interpret_user_input_with_options(step, user_text)
-
-                # optional clarification (your existing logic)
-                ack = None
-                if openai_client:
-                    with st.spinner("Understanding your response…"):
-                        ack = get_llm_clarification(
-                            topic_key,
-                            step,
-                            user_text,
-                            st.session_state.topic_states[topic_key]["chat"]
-                        )
-
-                handle_answer(topic_key, step, interpreted, llm_ack=ack)
-
-            else:
-                st.warning("Please type something or select an option.")
-
-    # ── VOICE INPUT ──
-    with col2:
-        voice_text = voice_widget(f"{topic_key}_{sid}_opt")
-
-        if voice_text:
-            interpreted = interpret_user_input_with_options(step, voice_text)
-            handle_answer(topic_key, step, interpreted)
-            
+    
+        # ── TEXT SUBMIT ──
+        with col1:
+            if st.button("Submit ✎", key=f"opt_submit_{topic_key}_{sid}"):
+    
+                if user_text.strip():
+    
+                    # 🔥 LLM interprets text
+                    interpreted = interpret_user_input_with_options(step, user_text)
+    
+                    # optional clarification (your existing logic)
+                    ack = None
+                    if openai_client:
+                        with st.spinner("Understanding your response…"):
+                            ack = get_llm_clarification(
+                                topic_key,
+                                step,
+                                user_text,
+                                st.session_state.topic_states[topic_key]["chat"]
+                            )
+    
+                    handle_answer(topic_key, step, interpreted, llm_ack=ack)
+    
+                else:
+                    st.warning("Please type something or select an option.")
+    
+        # ── VOICE INPUT ──
+        with col2:
+            voice_text = voice_widget(f"{topic_key}_{sid}_opt")
+    
+            if voice_text:
+                interpreted = interpret_user_input_with_options(step, voice_text)
+                handle_answer(topic_key, step, interpreted)
+                
 
     # ── Multi-select ─────────────────────────────────────────────
     elif stype == "multi_select":
