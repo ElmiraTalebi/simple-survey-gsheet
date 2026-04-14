@@ -350,15 +350,23 @@ FLOW_PAIN = [
        type="free_text", placeholder="e.g., near my jaw and ear…",
        when=lambda d: d.get("pain_location") == "Somewhere else"),
 
-    _q("pain_start",                        # ← (Main 3, Somewhere else branch)
+    _q("ear_pain", "Do you have ear pain or hearing changes?",
+       opts=["Yes", "No"],
+       when=lambda d: d.get("pain_location") == "Somewhere else"),
+
+    _q("jaw_swelling", "Do you feel any swelling near your jaw?",
+       opts=["Yes", "No"],
+       when=lambda d: d.get("pain_location") == "Somewhere else"),
+
+    _q("pain_with_chewing",
+       "Does the pain worsen when chewing or opening your mouth?",
+       opts=["Yes", "No"],
+       when=lambda d: d.get("pain_location") == "Somewhere else"),
+
+    _q("pain_start",                        # ← added (Main 3, Somewhere else branch)
        "When did this pain start?",
        type="free_text",
        placeholder="e.g., about a week ago, since I started radiation…",
-       when=lambda d: d.get("pain_location") == "Somewhere else"),
-
-    _q("tongue_severity",
-       "On a scale of 0–10, how bad is this pain at its worst?",
-       type="number", min_v=0, max_v=10, default_v=5,
        when=lambda d: d.get("pain_location") == "Somewhere else"),
 
     # Main 12 — Medications
@@ -1286,15 +1294,20 @@ def generate_report(name: str, all_data: dict) -> str:
 
 def _init_state():
     defaults = {
-        "app_stage": "login",
-        "patient_name": "",
-        "selected_topic": None,
+        "app_stage":           "login",
+        "patient_name":        "",
+        "selected_topic":      None,
         "topic_states": {
             key: {"status": "not_started", "data": {}, "chat": []}
             for _, key in TOPICS
         },
-        "report": "",
-        "report_saved": False,
+        "report":              "",
+        "report_saved":        False,
+        # ── New: previous check-in data ──
+        "last_checkin":        {},    # {topic_key: {q_id: answer}} from last session
+        "has_prev_checkin":    False, # True if a previous session was found in Sheets
+        # ── New: free-form chat ──
+        "freeform_chat":       [],
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -1305,42 +1318,186 @@ _init_state()
 
 
 # ══════════════════════════════════════════════════════════════════
+# LOAD PREVIOUS CHECK-IN
+# ══════════════════════════════════════════════════════════════════
+
+def load_last_checkin(name: str) -> dict:
+    """
+    Fetch the most recent saved check-in for this patient from Google Sheets.
+    Returns a dict keyed by topic_key -> {q_id: answer}, or {} if none found.
+    """
+    _init_sheets()
+    if _sheet is None:
+        return {}
+    try:
+        rows = _sheet.get_all_values()
+        last_row = None
+        for row in rows[1:]:
+            if len(row) >= 3 and row[1].strip().lower() == name.strip().lower():
+                last_row = row          # keep iterating — last match wins
+        if last_row:
+            raw = json.loads(last_row[2])
+            # raw is {topic_key: {q_id: answer}}
+            return raw
+    except Exception:
+        pass
+    return {}
+
+
+# ══════════════════════════════════════════════════════════════════
+# TOPIC SUMMARY FORMATTER  (rule-based, no LLM)
+# ══════════════════════════════════════════════════════════════════
+
+# Key fields to surface per topic — (field_id, short_label)
+_SUMMARY_FIELDS = {
+    "pain": [
+        ("has_pain",            "Pain today"),
+        ("pain_location",       "Location"),
+        ("throat_severity",     "Throat severity"),
+        ("tongue_severity",     "Tongue severity"),
+        ("pain_medications",    "Medications"),
+        ("taking_as_prescribed","Adherence"),
+    ],
+    "nutrition": [
+        ("eating_ability",        "Eating"),
+        ("weight",                "Weight (lbs)"),
+        ("swallowing_difficulty", "Swallowing"),
+        ("feeding_tube",          "Feeding tube"),
+        ("iv_fluids",             "IV fluids"),
+        ("taste_changes",         "Taste changes"),
+    ],
+    "oral": [
+        ("mouth_sores",    "Mouth sores"),
+        ("dry_mouth",      "Dry mouth"),
+        ("mucus_issues",   "Mucus"),
+        ("oral_rinse_use", "Oral rinse"),
+    ],
+    "gi": [
+        ("nausea_vomiting", "Nausea/vomiting"),
+        ("constipation",    "Constipation"),
+    ],
+    "fatigue": [
+        ("fatigue",           "Fatigue"),
+        ("sleep_quality",     "Sleep"),
+        ("medication_drowsy", "Medication drowsiness"),
+    ],
+    "activity": [
+        ("activity_level",           "Activity level"),
+        ("activity_limiting_factor", "Limiting factor"),
+    ],
+    "mood": [
+        ("feeling_down",      "Feeling down"),
+        ("support_adequate",  "Support"),
+        ("anxiety_impact",    "Anxiety impact"),
+    ],
+    "other": [
+        ("breathing_issues",  "Breathing"),
+        ("hearing_changes",   "Hearing"),
+        ("dizziness",         "Dizziness"),
+        ("skin_issues",       "Skin"),
+        ("voice_hoarseness",  "Voice"),
+        ("fever_chills",      "Fever/chills"),
+    ],
+}
+
+
+def format_topic_summary(topic_key: str, data: dict) -> str:
+    """
+    Build a compact one-line summary string from previous check-in data.
+    Returns Markdown-formatted text, or "" if nothing to show.
+    """
+    fields = _SUMMARY_FIELDS.get(topic_key, [])
+    parts = []
+    for field_id, label in fields:
+        val = data.get(field_id)
+        if val is None:
+            continue
+        if isinstance(val, list):
+            val_str = ", ".join(str(v) for v in val)
+        else:
+            val_str = str(val)
+        # Truncate very long free-text answers
+        if len(val_str) > 50:
+            val_str = val_str[:47] + "…"
+        parts.append(f"**{label}:** {val_str}")
+    return "  ·  ".join(parts)
+
+
+# ══════════════════════════════════════════════════════════════════
+# FREE-FORM CHAT LLM
+# ══════════════════════════════════════════════════════════════════
+
+def _freeform_llm_response(messages: list) -> str:
+    """
+    Generate a nurse reply in the free-form "Anything else?" chat.
+    messages is the full conversation history: [{role, content}, ...].
+    """
+    if not openai_client:
+        return "I'm not able to respond right now — please let your care team know directly."
+
+    system = (
+        f"{_SYSTEM_CONTEXT}\n\n"
+        "You are now in an open conversation with the patient. They may raise anything not "
+        "covered by the structured check-in — a new symptom, a question about their treatment, "
+        "a concern about a medication, or just something they want their provider to know.\n\n"
+        "Guidelines:\n"
+        "- Listen carefully and respond with warmth and clinical awareness.\n"
+        "- If they mention a symptom that sounds urgent (e.g., chest pain, breathing difficulty, "
+        "  high fever, blood, suicidal thoughts), acknowledge it calmly and tell them it will be "
+        "  flagged for their care team.\n"
+        "- Do NOT diagnose or prescribe. You are gathering information, not treating.\n"
+        "- Keep responses short — 2-4 sentences maximum.\n"
+        "- If the patient seems to be done, gently close: 'Is there anything else you'd like "
+        "  to share with your team before your visit?'"
+    )
+
+    api_messages = [{"role": "system", "content": system}]
+    for m in messages:
+        api_messages.append({"role": m["role"], "content": m["content"]})
+
+    try:
+        r = openai_client.chat.completions.create(
+            model="gpt-4.1-mini",
+            messages=api_messages,
+            max_tokens=200,
+            temperature=0.5,
+        )
+        return r.choices[0].message.content.strip()
+    except Exception:
+        return "I'm having trouble responding right now — please share this with your care team directly."
+
+
+# ══════════════════════════════════════════════════════════════════
 # ANSWER HANDLING
 # ══════════════════════════════════════════════════════════════════
 
 def handle_answer(topic_key: str, step: dict, answer, llm_ack: Optional[str] = None):
     """
-    Persist answer → update chat history → check completion.
-    llm_ack: optional acknowledgment string for free-text responses.
+    Persist answer -> update chat history -> check completion.
     """
     state = st.session_state.topic_states[topic_key]
 
-    # Display-friendly version of the answer
     if isinstance(answer, list):
         display = ", ".join(answer) if answer else "(none)"
     else:
         display = str(answer)
 
-    # Add Q → A pair to chat
     state["chat"].append({"role": "assistant", "content": step["text"]})
-    state["chat"].append({"role": "user", "content": display})
+    state["chat"].append({"role": "user",      "content": display})
 
-    # Optional LLM acknowledgment
     if llm_ack:
         state["chat"].append({"role": "assistant", "content": llm_ack})
 
-    # Save answer
     state["data"][step["id"]] = answer
     state["status"] = "in_progress"
 
-    # Completion check
     if topic_is_complete(topic_key, state["data"]):
         state["status"] = "completed"
         state["chat"].append({
             "role": "assistant",
             "content": (
                 "✅ Thank you — I have everything I need for this topic. "
-                "You can move on to another topic using the sidebar, or generate your report when ready."
+                "You can move on to another topic using the sidebar, or submit whenever you're ready."
             ),
         })
 
@@ -1348,13 +1505,35 @@ def handle_answer(topic_key: str, step: dict, answer, llm_ack: Optional[str] = N
 
 
 # ══════════════════════════════════════════════════════════════════
-# INPUT RENDERING
+# INPUT RENDERING  (accepts prev_answer for pre-filling)
 # ══════════════════════════════════════════════════════════════════
 
-def render_input(topic_key: str, step: dict):
-    """Render the appropriate input widget for the current question step."""
+def _fmt_prev(val) -> str:
+    """Format a previous answer value for display."""
+    if val is None:
+        return ""
+    if isinstance(val, list):
+        return ", ".join(str(v) for v in val)
+    return str(val)
+
+
+def render_input(topic_key: str, step: dict, prev_answer=None):
+    """Render the appropriate input widget, pre-filled with prev_answer where possible."""
     stype = step["type"]
     sid   = step["id"]
+
+    # ── Previous-answer hint (shown for all types) ───────────────
+    if prev_answer is not None:
+        hint = _fmt_prev(prev_answer)
+        if hint:
+            if len(hint) > 80:
+                hint = hint[:77] + "…"
+            st.markdown(
+                f'<div style="background:#f0f7ff; border-left:3px solid #93c5fd; '                f'padding:6px 10px; border-radius:6px; font-size:13px; '                f'color:#1e40af; margin-bottom:8px;">'                f'📋 <strong>Last time:</strong> {hint}</div>',
+                unsafe_allow_html=True,
+            )
+    else:
+        st.caption("ℹ️ No previous answer for this question.")
 
     # ── Options ─────────────────────────────────────────────────
     if stype == "options":
@@ -1362,15 +1541,24 @@ def render_input(topic_key: str, step: dict):
         ncols = 2 if num_opts <= 4 else 1
         cols = st.columns(ncols)
         for i, opt in enumerate(step["opts"]):
+            # Visually highlight the previously chosen option
+            is_prev = (str(prev_answer) == opt) if prev_answer is not None else False
+            label = f"✔ {opt}" if is_prev else opt
             with cols[i % ncols]:
-                if st.button(opt, key=f"opt_{topic_key}_{sid}_{i}"):
+                if st.button(label, key=f"opt_{topic_key}_{sid}_{i}"):
                     handle_answer(topic_key, step, opt)
 
     # ── Multi-select ─────────────────────────────────────────────
     elif stype == "multi_select":
+        # Pre-select previous choices that still exist in options
+        safe_prev = (
+            [v for v in prev_answer if v in step["opts"]]
+            if isinstance(prev_answer, list) else []
+        )
         chosen = st.multiselect(
             "Select all that apply:",
             step["opts"],
+            default=safe_prev,
             key=f"ms_{topic_key}_{sid}",
         )
         if st.button("Confirm ✓", key=f"ms_submit_{topic_key}_{sid}"):
@@ -1381,11 +1569,21 @@ def render_input(topic_key: str, step: dict):
 
     # ── Number ───────────────────────────────────────────────────
     elif stype == "number":
+        # Use previous answer as default if valid
+        if prev_answer is not None:
+            try:
+                num_default = float(prev_answer)
+                num_default = max(float(step["min_v"]), min(float(step["max_v"]), num_default))
+            except (TypeError, ValueError):
+                num_default = float(step["default_v"])
+        else:
+            num_default = float(step["default_v"])
+
         val = st.number_input(
             "Enter value:",
             min_value=float(step["min_v"]),
             max_value=float(step["max_v"]),
-            value=float(step["default_v"]),
+            value=num_default,
             step=1.0,
             key=f"num_{topic_key}_{sid}",
         )
@@ -1395,11 +1593,13 @@ def render_input(topic_key: str, step: dict):
     # ── Free text ────────────────────────────────────────────────
     elif stype == "free_text":
         transcript_key = f"_vt_{topic_key}_{sid}"
-        widget_key = f"ft_{topic_key}_{sid}"
+        widget_key     = f"ft_{topic_key}_{sid}"
 
-        # Pre-populate from voice transcript before first render
+        # Priority for pre-fill: voice transcript > previous answer > empty
         if widget_key not in st.session_state:
-            st.session_state[widget_key] = st.session_state.get(transcript_key, "")
+            transcript  = st.session_state.get(transcript_key, "")
+            prev_str    = str(prev_answer) if prev_answer is not None else ""
+            st.session_state[widget_key] = transcript or prev_str
 
         st.text_area(
             "Your response:",
@@ -1413,13 +1613,12 @@ def render_input(topic_key: str, step: dict):
             if st.button("Submit ✓", key=f"ft_submit_{topic_key}_{sid}"):
                 text = st.session_state.get(widget_key, "").strip()
                 if text:
-                    # Optionally get LLM acknowledgment/probe/flag
                     ack = None
                     if openai_client:
                         with st.spinner("Processing…"):
                             ack = get_llm_clarification(
                                 topic_key, step, text,
-                                st.session_state.topic_states[topic_key]["chat"]
+                                st.session_state.topic_states[topic_key]["chat"],
                             )
                     handle_answer(topic_key, step, text, llm_ack=ack)
                 else:
@@ -1429,28 +1628,108 @@ def render_input(topic_key: str, step: dict):
 
 
 # ══════════════════════════════════════════════════════════════════
+# FREE-FORM CHAT PANEL
+# ══════════════════════════════════════════════════════════════════
+
+def render_freeform_chat():
+    """Render the open-ended 'Anything else?' chatbot panel."""
+    st.subheader("💬 Anything else you'd like to share?")
+    st.caption(
+        "Mention any other symptoms, questions, or concerns you'd like your care team "
+        "to know about before your visit."
+    )
+
+    # ── Initialise conversation ──────────────────────────────────
+    if not st.session_state.freeform_chat:
+        opening = (
+            "Is there anything else you'd like your care team to know before your visit? "
+            "Feel free to share any concerns, questions, or symptoms we haven't covered yet."
+        )
+        st.session_state.freeform_chat = [{"role": "assistant", "content": opening}]
+
+    # ── Show history ─────────────────────────────────────────────
+    chat_container = st.container(border=True)
+    with chat_container:
+        for msg in st.session_state.freeform_chat:
+            avatar = "👩‍⚕️" if msg["role"] == "assistant" else "🧑‍💼"
+            with st.chat_message(msg["role"], avatar=avatar):
+                st.write(msg["content"])
+
+    # ── Input ────────────────────────────────────────────────────
+    user_input = st.chat_input("Type here, or use the voice button below…",
+                                key="freeform_chat_input")
+
+    col_text, col_voice = st.columns([3, 1])
+    with col_voice:
+        vt = voice_widget("freeform")
+        if vt and not user_input:
+            user_input = vt
+            # Clear the transcript so it doesn't re-fire
+            st.session_state.pop("_vt_freeform", None)
+
+    if user_input and user_input.strip():
+        # Avoid re-appending if already in history (Streamlit reruns)
+        last_user = next(
+            (m["content"] for m in reversed(st.session_state.freeform_chat)
+             if m["role"] == "user"), None
+        )
+        if user_input.strip() != last_user:
+            st.session_state.freeform_chat.append(
+                {"role": "user", "content": user_input.strip()}
+            )
+            if openai_client:
+                with st.spinner("…"):
+                    reply = _freeform_llm_response(st.session_state.freeform_chat)
+            else:
+                reply = (
+                    "Got it — I've noted that for your care team. "
+                    "Is there anything else you'd like to add?"
+                )
+            st.session_state.freeform_chat.append(
+                {"role": "assistant", "content": reply}
+            )
+            st.rerun()
+
+
+# ══════════════════════════════════════════════════════════════════
 # TOPIC DETAIL PANEL
 # ══════════════════════════════════════════════════════════════════
 
 def render_topic_detail(topic_label: str, topic_key: str):
     """Render the chat + current question for the selected topic."""
-    state = st.session_state.topic_states[topic_key]
+    state        = st.session_state.topic_states[topic_key]
+    last_data    = st.session_state.last_checkin.get(topic_key, {})
+    has_prev     = st.session_state.has_prev_checkin
 
-    # Initialize topic on first visit
+    # ── Previous check-in summary banner ────────────────────────
+    if has_prev:
+        if last_data:
+            summary = format_topic_summary(topic_key, last_data)
+            with st.expander("📋 Your last check-in — click to expand", expanded=False):
+                if summary:
+                    st.markdown(
+                        f'<div style="font-size:13.5px; line-height:1.7; color:#374151;">'                        f'{summary}</div>',
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    st.caption("Previous data exists but couldn't be summarized.")
+        else:
+            st.info("ℹ️ No data from your previous check-in for this topic.", icon="📋")
+
+    # ── Initialize topic on first visit ─────────────────────────
     if state["status"] == "not_started":
         state["status"] = "in_progress"
         intro = TOPIC_INTROS.get(topic_key, "Let's go through this section together.")
         state["chat"] = [{"role": "assistant", "content": intro}]
 
-    # Header
+    # ── Header with progress bar ─────────────────────────────────
     answered, applicable = get_topic_progress(topic_key, state["data"])
     col_title, col_prog = st.columns([3, 1])
     with col_title:
         st.subheader(topic_label)
     with col_prog:
         if applicable > 0:
-            st.progress(answered / applicable,
-                        text=f"{answered}/{applicable} answered")
+            st.progress(answered / applicable, text=f"{answered}/{applicable} answered")
 
     # ── Chat history ─────────────────────────────────────────────
     if state["chat"]:
@@ -1466,14 +1745,12 @@ def render_topic_detail(topic_label: str, topic_key: str):
             '<div class="completion-badge">✅ This topic is complete</div>',
             unsafe_allow_html=True,
         )
-        # Allow re-opening a completed topic to add notes
         if st.button("✏️ Add a note or correction", key=f"reopen_{topic_key}"):
             state["status"] = "in_progress"
             state["chat"].append({
                 "role": "assistant",
                 "content": "Of course — please share any correction or additional detail.",
             })
-            # Add a free-text catch-all question
             state["data"].pop("_correction_note", None)
             st.rerun()
         return
@@ -1481,35 +1758,45 @@ def render_topic_detail(topic_label: str, topic_key: str):
     # ── Current question ─────────────────────────────────────────
     next_step = get_next_step(topic_key, state["data"])
     if next_step:
+        # Look up previous answer for this specific question
+        prev_answer = last_data.get(next_step["id"]) if last_data else None
+
         with st.container(border=True):
             with st.chat_message("assistant", avatar="👩‍⚕️"):
                 st.write(next_step["text"])
-            render_input(topic_key, next_step)
+            render_input(topic_key, next_step, prev_answer=prev_answer)
 
 
 # ══════════════════════════════════════════════════════════════════
-# SIDEBAR (MASTER PANEL)
+# SIDEBAR  (MASTER PANEL)
 # ══════════════════════════════════════════════════════════════════
 
 def render_sidebar():
     with st.sidebar:
+        # ── Branding ─────────────────────────────────────────────
         st.markdown("### 🩺 ChatReport")
         if st.session_state.patient_name:
-            st.markdown(f"**Patient:** {st.session_state.patient_name}")
+            st.markdown(
+                f'<div style="font-size:13px; color:#6b7280; margin-bottom:4px;">'                f'Patient: <strong>{st.session_state.patient_name}</strong></div>',
+                unsafe_allow_html=True,
+            )
         st.markdown("---")
 
-        # Progress summary
-        completed  = sum(1 for _, k in TOPICS
-                         if st.session_state.topic_states[k]["status"] == "completed")
+        # ── Overall progress ─────────────────────────────────────
+        completed   = sum(1 for _, k in TOPICS
+                          if st.session_state.topic_states[k]["status"] == "completed")
         in_progress = sum(1 for _, k in TOPICS
                           if st.session_state.topic_states[k]["status"] == "in_progress")
         total = len(TOPICS)
-        st.markdown(f"<div class='prog-label'>{completed}/{total} topics complete</div>",
-                    unsafe_allow_html=True)
+
+        st.markdown(
+            f'<div class="prog-label">{completed}/{total} topics complete</div>',
+            unsafe_allow_html=True,
+        )
         st.progress(completed / total if total > 0 else 0)
         st.markdown("")
 
-        # Topic nav buttons
+        # ── Topic navigation ─────────────────────────────────────
         for label, key in TOPICS:
             status = st.session_state.topic_states[key]["status"]
 
@@ -1520,8 +1807,8 @@ def render_sidebar():
             else:
                 icon = "⚪"
 
-            is_selected = st.session_state.selected_topic == key
-            prefix = "▶ " if is_selected else "   "
+            is_selected  = st.session_state.selected_topic == key
+            prefix       = "▶ " if is_selected else "    "
             display_name = label.split(" ", 1)[1] if " " in label else label
 
             if st.button(
@@ -1532,20 +1819,65 @@ def render_sidebar():
                 st.session_state.selected_topic = key
                 st.rerun()
 
+        # ── "Anything else?" free-chat ───────────────────────────
+        st.markdown("")
+        is_freeform  = st.session_state.selected_topic == "freeform"
+        ff_prefix    = "▶ " if is_freeform else "    "
+        # Show a badge if there are user messages in freeform
+        ff_msgs = [m for m in st.session_state.freeform_chat if m["role"] == "user"]
+        ff_badge = f" ({len(ff_msgs)})" if ff_msgs else ""
+        if st.button(
+            f"{ff_prefix}💬 Anything else?{ff_badge}",
+            key="nav_freeform",
+            use_container_width=True,
+        ):
+            st.session_state.selected_topic = "freeform"
+            st.rerun()
+
+        # ── Actions ──────────────────────────────────────────────
         st.markdown("---")
 
-        # Generate report button
-        if completed >= 1 or in_progress >= 1:
-            if st.button("📄 Generate Report", use_container_width=True, type="primary"):
-                st.session_state.report = ""   # reset to force regeneration
-                st.session_state.report_saved = False
+        # Submit button — always visible once at least one topic is touched
+        any_started = completed >= 1 or in_progress >= 1
+        if any_started:
+            if st.button(
+                "📤 Submit Check-In",
+                use_container_width=True,
+                type="primary",
+                key="sidebar_submit",
+            ):
+                all_data = {key: st.session_state.topic_states[key]["data"]
+                            for _, key in TOPICS}
+                # Attach freeform chat if it has patient messages
+                if ff_msgs:
+                    all_data["freeform_notes"] = [
+                        m["content"] for m in st.session_state.freeform_chat
+                        if m["role"] == "user"
+                    ]
+                with st.spinner("Generating report…"):
+                    report = generate_report(st.session_state.patient_name, all_data)
+                st.session_state.report = report
+                with st.spinner("Saving…"):
+                    save_to_sheet(st.session_state.patient_name, all_data, report)
+                st.session_state.report_saved = True
                 st.session_state.app_stage = "report"
                 st.rerun()
+
+        # Start over
+        st.markdown("")
+        if st.button("🔄 Start Over", use_container_width=True, key="sidebar_reset"):
+            for k in list(st.session_state.keys()):
+                del st.session_state[k]
+            st.rerun()
 
 
 # ══════════════════════════════════════════════════════════════════
 # SCREENS
 # ══════════════════════════════════════════════════════════════════
+
+TOPIC_LABELS = {key: label for label, key in TOPICS}
+TOPIC_KEYS   = [k for _, k in TOPICS]
+
 
 def screen_login():
     st.markdown("""
@@ -1558,22 +1890,29 @@ def screen_login():
     </div>
     """, unsafe_allow_html=True)
 
-    # Center the form
     _, col, _ = st.columns([1, 2, 1])
     with col:
         name = st.text_input("Please enter your name:", placeholder="First and last name…")
         if st.button("Begin Check-In →", type="primary", use_container_width=True):
             if name.strip():
                 st.session_state.patient_name = name.strip()
+
+                # ── Load previous check-in from Sheets ──────────
+                with st.spinner("Loading your previous check-in…"):
+                    prev = load_last_checkin(name.strip())
+
+                if prev:
+                    st.session_state.last_checkin     = prev
+                    st.session_state.has_prev_checkin = True
+                else:
+                    st.session_state.last_checkin     = {}
+                    st.session_state.has_prev_checkin = False
+
                 st.session_state.selected_topic = TOPIC_KEYS[0] if TOPIC_KEYS else None
-                st.session_state.app_stage = "main"
+                st.session_state.app_stage      = "main"
                 st.rerun()
             else:
                 st.warning("Please enter your name to continue.")
-
-
-TOPIC_LABELS = {key: label for label, key in TOPICS}
-TOPIC_KEYS   = [k for _, k in TOPICS]
 
 
 def screen_main():
@@ -1585,12 +1924,16 @@ def screen_main():
         st.markdown("### 👈 Select a topic from the sidebar to begin")
         st.markdown(
             "Work through each symptom area at your own pace. "
-            "You can switch topics anytime and come back to finish later."
+            "You can switch topics anytime and submit when ready."
         )
         return
 
-    topic_label = TOPIC_LABELS.get(selected, selected)
-    render_topic_detail(topic_label, selected)
+    # Route to free-form chat or regular topic
+    if selected == "freeform":
+        render_freeform_chat()
+    else:
+        topic_label = TOPIC_LABELS.get(selected, selected)
+        render_topic_detail(topic_label, selected)
 
 
 def screen_report():
@@ -1604,6 +1947,9 @@ def screen_report():
     st.markdown("---")
 
     all_data = {key: st.session_state.topic_states[key]["data"] for _, key in TOPICS}
+    ff_msgs  = [m for m in st.session_state.freeform_chat if m["role"] == "user"]
+    if ff_msgs:
+        all_data["freeform_notes"] = [m["content"] for m in ff_msgs]
 
     if not st.session_state.report:
         with st.spinner("Generating clinical report…"):
@@ -1624,7 +1970,7 @@ def screen_report():
             st.rerun()
 
     with col2:
-        saved = st.session_state.get("report_saved", False)
+        saved     = st.session_state.get("report_saved", False)
         btn_label = "✅ Saved" if saved else "💾 Save to Google Sheets"
         if st.button(btn_label, type="primary", disabled=saved):
             with st.spinner("Saving…"):
