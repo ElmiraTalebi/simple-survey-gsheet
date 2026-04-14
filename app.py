@@ -2027,36 +2027,29 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
     
         # ── FREE TEXT INPUT ──
         user_text = st.text_input(
-            "Or type your answer:",
-            key=f"opt_text_{topic_key}_{sid}"
-        )
+    "Your answer (press Enter to submit)",
+    key=f"text_{topic_key}_{sid}"
+)
     
-        col1, col2 = st.columns([2,1])
+    # 🔥 ENTER triggers automatically
+    if user_text and st.session_state.get(f"text_{topic_key}_{sid}_submitted") != user_text:
     
-        # ── TEXT SUBMIT ──
-        with col1:
-            if st.button("Submit ✎", key=f"opt_submit_{topic_key}_{sid}"):
+        # mark as submitted so it doesn't re-trigger
+        st.session_state[f"text_{topic_key}_{sid}_submitted"] = user_text
     
-                if user_text.strip():
+        # optional LLM processing
+        interpreted = interpret_user_input_with_options(step, user_text)
     
-                    # 🔥 LLM interprets text
-                    interpreted = interpret_user_input_with_options(step, user_text)
+        llm_ack = None
+        if openai_client:
+            llm_ack = get_llm_clarification(
+                topic_key,
+                step,
+                user_text,
+                st.session_state.topic_states[topic_key]["chat"]
+            )
     
-                    # optional clarification (your existing logic)
-                    ack = None
-                    if openai_client:
-                        with st.spinner("Understanding your response…"):
-                            ack = get_llm_clarification(
-                                topic_key,
-                                step,
-                                user_text,
-                                st.session_state.topic_states[topic_key]["chat"]
-                            )
-    
-                    handle_answer(topic_key, step, interpreted, llm_ack=ack)
-    
-                else:
-                    st.warning("Please type something or select an option.")
+        handle_answer(topic_key, step, interpreted, llm_ack=llm_ack)
     
         # ── VOICE INPUT ──
         with col2:
