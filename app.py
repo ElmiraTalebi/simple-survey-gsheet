@@ -133,14 +133,14 @@ def _looks_vague_answer(answer: Any) -> bool:
     words = text.split()
     if len(words) == 1 and words[0] in {"bad", "worse", "same", "fine", "hard"}:
         return True
-    if len(words) <= 2 and not any(ch.isdigit() for ch in answer):
-        return text in vague_phrases
     if len(words) >= 1:
         unique_chars = set(text.replace(" ", ""))
         if len(unique_chars) <= 2 and len(text.replace(" ", "")) >= 4:
             return True
         if re.fullmatch(r"[a-zA-Z]{1,2,}", text):
             return True
+    if len(words) <= 2 and not any(ch.isdigit() for ch in answer):
+        return text in vague_phrases
     return False
 
 
@@ -380,11 +380,8 @@ div[data-baseweb="select"] > div {
     margin-bottom: 10px;
     padding: 0.05rem 0;
     background: transparent;
-    width: 100%;
     display: flex;
-}
-[data-testid="stChatMessageAvatar"] {
-    display: none !important;
+    width: 100%;
 }
 [data-testid="stChatMessageContent"] {
     border-radius: 16px;
@@ -393,7 +390,10 @@ div[data-baseweb="select"] > div {
     box-shadow: none;
     background: #ffffff;
     width: fit-content;
-    max-width: min(72%, 760px);
+    max-width: min(72%, 680px);
+}
+[data-testid="stChatMessageAvatar"] {
+    display: none !important;
 }
 [data-testid="stChatMessage"]:has([aria-label="assistant"]) {
     justify-content: flex-start;
@@ -407,8 +407,9 @@ div[data-baseweb="select"] > div {
 }
 [data-testid="stChatMessage"]:has([aria-label="user"]) [data-testid="stChatMessageContent"] {
     background: #f8fbfe;
-    border-left: none;
+    border-left: 3px solid #0f6cbd;
     border-right: 3px solid #0f6cbd;
+    border-left: none;
 }
 
 /* ── Topic status pills ── */
@@ -2341,6 +2342,7 @@ def handle_pending_followup(topic_key: str, answer: str, source: str = "typed"):
         state["waiting_for_followup"] = False
         state.pop("pending_followup", None)
         st.rerun()
+        return
 
     state["chat"].append({"role": "user", "content": answer})
     state["data"][answer_key] = answer
@@ -2368,6 +2370,7 @@ def handle_pending_followup(topic_key: str, answer: str, source: str = "typed"):
         _append_next_question(state, next_step, closing)
 
     st.rerun()
+    return
 
 
 def handle_answer(topic_key: str, step: dict, answer, source: str = "structured"):
@@ -2411,6 +2414,7 @@ def handle_answer(topic_key: str, step: dict, answer, source: str = "structured"
                         turn.get("assistant_message", ""),
                     )
                     st.rerun()
+                    return
 
             assistant_message = turn.get("assistant_message", "").strip()
 
@@ -2422,6 +2426,7 @@ def handle_answer(topic_key: str, step: dict, answer, source: str = "structured"
                 _fallback_clarifying_question(step),
             )
             st.rerun()
+            return
 
         if not assistant_message and (len(answer.split()) >= 2 or source in {"typed", "voice", "free_text", "followup"}):
             assistant_message = _default_chatty_reply(
@@ -2435,9 +2440,11 @@ def handle_answer(topic_key: str, step: dict, answer, source: str = "structured"
             final_message = f"{assistant_message}\n\n{final_message}"
         state["chat"].append({"role": "assistant", "content": final_message})
         st.rerun()
+        return
 
     _append_next_question(state, next_step, assistant_message)
     st.rerun()
+    return
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -2563,6 +2570,7 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
     elif stype == "free_text":
         transcript_key = f"_vt_{topic_key}_{sid}"
         widget_key     = f"ft_{topic_key}_{sid}"
+        submit_key     = f"{widget_key}_submitted"
 
         # Priority for pre-fill: voice transcript > previous answer > empty
         transcript = st.session_state.get(transcript_key, "")
@@ -2576,16 +2584,22 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
         with composer_col:
             st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
             col_text, col_voice = st.columns([5.2, 0.8])
+            with col_voice:
+                voice_text = voice_widget(f"{topic_key}_{sid}", label="Mic")
+            if voice_text and voice_text != st.session_state.get(f"{widget_key}_voice_sync"):
+                st.session_state[widget_key] = voice_text
+                st.session_state[f"{widget_key}_voice_sync"] = voice_text
             with col_text:
-                st.text_area(
+                free_text = st.text_input(
                     "Reply",
                     placeholder=step.get("placeholder", "Please describe…"),
                     key=widget_key,
-                    height=110,
                     label_visibility="collapsed",
                 )
-            with col_voice:
-                voice_widget(f"{topic_key}_{sid}", label="Mic")
+
+            if free_text and st.session_state.get(submit_key) != free_text:
+                st.session_state[submit_key] = free_text
+                handle_answer(topic_key, step, free_text, source="free_text")
 
             st.markdown('</div>', unsafe_allow_html=True)
 
@@ -2741,6 +2755,7 @@ def render_topic_detail(topic_label: str, topic_key: str):
         pending = state.get("pending_followup") or {}
         pending_suffix = pending.get("answer_key", "pending")
         pending_key = f"pending_followup_{topic_key}_{pending_suffix}"
+        pending_submit_key = f"{pending_key}_submitted"
         if pending_key not in st.session_state:
             st.session_state[pending_key] = ""
         _, composer_col = st.columns([1.05, 0.95])
@@ -2748,19 +2763,22 @@ def render_topic_detail(topic_label: str, topic_key: str):
         with composer_col:
             st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
             col_text, col_voice = st.columns([5.2, 0.8])
+            with col_voice:
+                pending_voice = voice_widget(f"pending_{topic_key}_{pending_suffix}", label="Mic")
+            if pending_voice and pending_voice != st.session_state.get(f"{pending_key}_voice_sync"):
+                st.session_state[pending_key] = pending_voice
+                st.session_state[f"{pending_key}_voice_sync"] = pending_voice
             with col_text:
-                st.text_area(
+                pending_text = st.text_input(
                     "Reply",
                     key=pending_key,
                     placeholder="Type or speak your answer here...",
-                    height=100,
                     label_visibility="collapsed",
                 )
-            with col_voice:
-                pending_voice = voice_widget(f"pending_{topic_key}_{pending_suffix}", label="Mic")
-                if pending_voice and pending_voice != st.session_state.get(f"{pending_key}_voice_sync"):
-                    st.session_state[pending_key] = pending_voice
-                    st.session_state[f"{pending_key}_voice_sync"] = pending_voice
+
+            if pending_text and st.session_state.get(pending_submit_key) != pending_text:
+                st.session_state[pending_submit_key] = pending_text
+                handle_pending_followup(topic_key, pending_text, source="followup")
 
             st.markdown('</div>', unsafe_allow_html=True)
         return
@@ -2768,6 +2786,7 @@ def render_topic_detail(topic_label: str, topic_key: str):
     if next_step:
         # Look up previous answer for this specific question
         prev_answer = last_data.get(next_step["id"]) if last_data else None
+        _append_assistant_message(state, _step_prompt_text(next_step))
         render_input(topic_key, next_step, prev_answer=prev_answer)
 
 
