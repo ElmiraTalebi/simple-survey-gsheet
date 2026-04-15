@@ -645,6 +645,12 @@ div[data-baseweb="select"] > div {
     box-shadow: none !important;
 }
 
+.composer-shell div[data-baseweb="select"] > div {
+    border-radius: 14px !important;
+    min-height: 48px !important;
+    background: #ffffff !important;
+}
+
 [data-testid="stProgressBar"] > div {
     border-radius: 999px !important;
     background: rgba(15,108,189,0.12) !important;
@@ -2408,14 +2414,18 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
     if stype == "options":
         with composer_col:
             st.markdown('<div class="composer-shell"><div class="composer-title">Your reply</div>', unsafe_allow_html=True)
-            st.markdown('<div class="suggestion-label">Quick replies</div>', unsafe_allow_html=True)
-            cols = st.columns(max(1, min(len(step["opts"]), 4)))
+            dropdown_key = f"dropdown_{topic_key}_{sid}"
+            dropdown_options = ["Select an option..."] + step["opts"]
+            previous_dropdown = prev_answer if prev_answer in step["opts"] else "Select an option..."
+            if dropdown_key not in st.session_state:
+                st.session_state[dropdown_key] = previous_dropdown
 
-            for i, opt in enumerate(step["opts"]):
-                with cols[i % len(cols)]:
-                    if st.button(opt, key=f"opt_{topic_key}_{sid}_{i}", use_container_width=False):
-                        handle_answer(topic_key, step, opt, source="structured")
-
+            selected_option = st.selectbox(
+                "Options",
+                dropdown_options,
+                key=dropdown_key,
+                label_visibility="collapsed",
+            )
             col1, col2 = st.columns([3.8, 1.2])
 
             with col1:
@@ -2428,6 +2438,10 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
 
             with col2:
                 voice_text = voice_widget(f"{topic_key}_{sid}_opt", label="Mic")
+
+            if selected_option != "Select an option..." and st.session_state.get(f"{dropdown_key}_submitted") != selected_option:
+                st.session_state[f"{dropdown_key}_submitted"] = selected_option
+                handle_answer(topic_key, step, selected_option, source="structured")
 
             submitted_key = f"text_{topic_key}_{sid}_submitted"
 
