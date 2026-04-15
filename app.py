@@ -3,6 +3,7 @@ import html as _html
 import io
 import json
 import re
+from difflib import get_close_matches
 from datetime import datetime
 from typing import Any, Optional
 
@@ -156,6 +157,58 @@ def _fallback_clarifying_question(step: dict) -> str:
     return "Could you tell me a little more about that?"
 
 
+def _suggest_step_options(step: dict, user_input: str, limit: int = 3) -> list[str]:
+    raw = _norm_text(user_input)
+    if not raw:
+        return []
+
+    candidate_options = [
+        opt for opt in step.get("opts", [])
+        if _norm_text(opt) not in {"other", "somewhere else"}
+    ]
+    if not candidate_options:
+        return []
+
+    normalized_to_option = {_norm_text(opt): opt for opt in candidate_options}
+    matches = get_close_matches(raw, list(normalized_to_option.keys()), n=limit, cutoff=0.45)
+    suggestions = [normalized_to_option[m] for m in matches]
+
+    if suggestions:
+        return suggestions
+
+    raw_words = set(raw.split())
+    token_matches = []
+    for opt in candidate_options:
+        opt_words = set(_norm_text(opt).split())
+        if raw_words & opt_words:
+            token_matches.append(opt)
+    return token_matches[:limit]
+
+
+def _build_retry_prompt(step: dict, user_input: str) -> str:
+    if _looks_vague_answer(user_input):
+        return "I didn’t quite catch that. Could you please say it again?"
+
+    suggestions = _suggest_step_options(step, user_input)
+    if suggestions:
+        if len(suggestions) == 1:
+            return f"I want to make sure I record that correctly. Did you mean {suggestions[0]}?"
+        if len(suggestions) == 2:
+            return f"I want to make sure I record that correctly. Did you mean {suggestions[0]} or {suggestions[1]}?"
+        return (
+            f"I want to make sure I record that correctly. Did you mean "
+            f"{suggestions[0]}, {suggestions[1]}, or {suggestions[2]}?"
+        )
+
+    if "Other" in step.get("opts", []):
+        return (
+            "I didn’t find a clear match in the quick options. "
+            "Please type it again, and if it’s a different medication I’ll record it as another one."
+        )
+
+    return "I didn’t find a clear match there. Could you please say it again or choose the closest option?"
+
+
 
 
 
@@ -169,6 +222,9 @@ def interpret_user_input_with_options(step, user_input):
     if not options:
         return user_input
 
+    generic_options = {"other", "somewhere else"}
+    allowed_options = [opt for opt in options if _norm_text(opt) not in generic_options]
+
     prompt = f"""
     You are a clinical assistant.
     
@@ -176,13 +232,14 @@ def interpret_user_input_with_options(step, user_input):
     "{step['text']}"
     
     OPTIONS:
-    {options}
+    {allowed_options}
     
     PATIENT RESPONSE:
     "{user_input}"
     
     TASK:
-    - If the response clearly matches ONE option → return that option EXACTLY
+    - If the response clearly matches ONE non-generic option → return that option EXACTLY
+    - Do NOT map a typed answer to "Other" or "Somewhere else" unless the patient literally says "other" or "somewhere else"
     - Otherwise return the original response
     
     ONLY return one line.
@@ -197,7 +254,7 @@ def interpret_user_input_with_options(step, user_input):
         )
         mapped = r.choices[0].message.content.strip()
 
-        if mapped in options:
+        if mapped in options and _norm_text(mapped) not in generic_options:
             return mapped
 
         return user_input
@@ -1784,6 +1841,12 @@ QUESTION_TYPE_BY_ID = {
     for step in flow
 }
 
+STEP_BY_ID = {
+    step["id"]: step
+    for flow in FLOWS.values()
+    for step in flow
+}
+
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -2178,6 +2241,11 @@ def _checkin_summary_html(topic_key: str, data: dict) -> str:
             continue
         field_type = QUESTION_TYPE_BY_ID.get(field_id, "options")
         if isinstance(val, list):
+            if field_id == "pain_medications" and "Other" in val and data.get("pain_medications_other_detail"):
+                val = [
+                    data["pain_medications_other_detail"] if item == "Other" else item
+                    for item in val
+                ]
             val_str = ", ".join(str(v) for v in val)
         else:
             val_str = str(val)
@@ -2231,8 +2299,10 @@ def _natural_summary(topic_key: str, data: dict) -> str:
         loc  = (v("pain_location") or "").lower()
         sev  = v("throat_severity") or v("tongue_severity")
         meds = v("pain_medications")
+        other_med = v("pain_medications_other_detail")
         med_str = ""
         if isinstance(meds, list) and "No pain medication" not in meds:
+            meds = [other_med if item == "Other" and other_med else item for item in meds]
             med_str = f", on {meds[0]}" if len(meds) == 1 else f", on {meds[0]} + {len(meds)-1} more"
         if loc and sev is not None:
             return f"{loc.capitalize()} pain ({sev}/10){med_str}"
@@ -2397,6 +2467,8 @@ def _store_followup_prompt(
     step: dict,
     question: str,
     assistant_message: str = "",
+    retry_current_step: bool = False,
+    allow_other_detail: bool = False,
 ):
     if _looks_vague_answer(state["data"].get(step["id"], "")):
         assistant_message = ""
@@ -2406,9 +2478,27 @@ def _store_followup_prompt(
         "question": question,
         "answer_key": f"{step['id']}_llm_followup",
         "assistant_message": assistant_message.strip(),
+        "retry_current_step": retry_current_step,
+        "allow_other_detail": allow_other_detail,
     }
     combined_prompt = "\n\n".join([part for part in [assistant_message.strip(), question.strip()] if part])
     _append_assistant_message(state, combined_prompt)
+
+
+def _request_retry_for_step(topic_key: str, step: dict, raw_input: str, source: str = "typed"):
+    state = st.session_state.topic_states[topic_key]
+    text = (raw_input or "").strip()
+    if text:
+        state["chat"].append({"role": "user", "content": text})
+    _store_followup_prompt(
+        topic_key,
+        state,
+        step,
+        _build_retry_prompt(step, text),
+        retry_current_step=True,
+        allow_other_detail=("Other" in step.get("opts", [])),
+    )
+    st.rerun()
 
 
 def handle_pending_followup(topic_key: str, answer: str, source: str = "typed"):
@@ -2420,6 +2510,42 @@ def handle_pending_followup(topic_key: str, answer: str, source: str = "typed"):
         state.pop("pending_followup", None)
         st.rerun()
         return
+
+    if pending.get("retry_current_step"):
+        source_step_id = pending.get("source_step_id")
+        source_step = STEP_BY_ID.get(source_step_id)
+        state["waiting_for_followup"] = False
+        state.pop("pending_followup", None)
+        if not source_step:
+            st.rerun()
+            return
+
+        retry_text = (answer or "").strip()
+        if source_step["type"] == "options":
+            interpreted = interpret_user_input_with_options(source_step, retry_text)
+            if interpreted in source_step.get("opts", []):
+                handle_answer(topic_key, source_step, interpreted, source=source)
+                return
+            _request_retry_for_step(topic_key, source_step, retry_text, source=source)
+            return
+
+        if source_step["type"] == "multi_select":
+            parsed = parse_multi_select_typed_input(source_step, retry_text)
+            if parsed:
+                handle_answer(topic_key, source_step, parsed, source=source)
+                return
+            if pending.get("allow_other_detail") and retry_text and not _looks_vague_answer(retry_text):
+                state["data"][f"{source_step['id']}_other_detail"] = retry_text
+                handle_answer(
+                    topic_key,
+                    source_step,
+                    ["Other"],
+                    source=source,
+                    display_override=retry_text,
+                )
+                return
+            _request_retry_for_step(topic_key, source_step, retry_text, source=source)
+            return
 
     state["chat"].append({"role": "user", "content": answer})
     state["data"][answer_key] = answer
@@ -2450,9 +2576,9 @@ def handle_pending_followup(topic_key: str, answer: str, source: str = "typed"):
     return
 
 
-def handle_answer(topic_key: str, step: dict, answer, source: str = "structured"):
+def handle_answer(topic_key: str, step: dict, answer, source: str = "structured", display_override: Optional[str] = None):
     state = st.session_state.topic_states[topic_key]
-    display = ", ".join(answer) if isinstance(answer, list) else str(answer)
+    display = display_override if display_override is not None else (", ".join(answer) if isinstance(answer, list) else str(answer))
     state["chat"].append({"role": "user", "content": display})
     answer = _coerce_structured_answer(topic_key, step, answer, state["data"])
     state["data"][step["id"]] = answer
@@ -2576,13 +2702,21 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
             if user_text and st.session_state.get(submitted_key) != user_text:
                 st.session_state[submitted_key] = user_text
                 interpreted = interpret_user_input_with_options(step, user_text)
-                handle_answer(topic_key, step, interpreted, source="typed")
+                if interpreted in step.get("opts", []):
+                    handle_answer(topic_key, step, interpreted, source="typed")
+                else:
+                    _request_retry_for_step(topic_key, step, user_text, source="typed")
+                    return
 
             voice_submitted_key = f"voice_{topic_key}_{sid}_submitted"
             if voice_text and st.session_state.get(voice_submitted_key) != voice_text:
                 st.session_state[voice_submitted_key] = voice_text
                 interpreted = interpret_user_input_with_options(step, voice_text)
-                handle_answer(topic_key, step, interpreted, source="voice")
+                if interpreted in step.get("opts", []):
+                    handle_answer(topic_key, step, interpreted, source="voice")
+                else:
+                    _request_retry_for_step(topic_key, step, voice_text, source="voice")
+                    return
             st.markdown('</div>', unsafe_allow_html=True)
                 
 
@@ -2625,7 +2759,8 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
                 if parsed:
                     handle_answer(topic_key, step, parsed, source="typed")
                 else:
-                    st.warning("Please enter a valid option, or separate multiple options with commas.")
+                    _request_retry_for_step(topic_key, step, user_text, source="typed")
+                    return
 
             voice_submit_key = f"voice_{topic_key}_{sid}_submitted"
             if voice_text and st.session_state.get(voice_submit_key) != voice_text:
@@ -2634,7 +2769,8 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
                 if parsed:
                     handle_answer(topic_key, step, parsed, source="voice")
                 else:
-                    st.warning("Please say or enter one of the listed options.")
+                    _request_retry_for_step(topic_key, step, voice_text, source="voice")
+                    return
             st.markdown('</div>', unsafe_allow_html=True)
 
     # ── Number ───────────────────────────────────────────────────
