@@ -223,10 +223,10 @@ st.markdown("""
 @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap');
 
 :root {
-    --bg1: #f4f8fc;
-    --bg2: #edf4fa;
-    --bg3: #e7f0f8;
-    --card: rgba(255,255,255,0.92);
+    --bg1: #f7fafc;
+    --bg2: #f3f7fa;
+    --bg3: #eef4f8;
+    --card: rgba(255,255,255,0.94);
     --card-solid: #ffffff;
     --border: #d7e4ef;
     --border-strong: #bfd3e4;
@@ -241,8 +241,8 @@ st.markdown("""
     --success: #15803d;
     --success-soft: #ecfdf5;
     --warning-soft: #fff8e8;
-    --shadow: 0 20px 55px rgba(23, 50, 74, 0.08);
-    --shadow-sm: 0 10px 26px rgba(23, 50, 74, 0.06);
+    --shadow: 0 12px 32px rgba(23, 50, 74, 0.05);
+    --shadow-sm: 0 6px 18px rgba(23, 50, 74, 0.04);
 }
 
 html, body, [class*="css"] {
@@ -252,8 +252,8 @@ html, body, [class*="css"] {
 
 html, body, .stApp {
     background:
-        radial-gradient(circle at top left, rgba(15,108,189,0.10), transparent 24%),
-        radial-gradient(circle at top right, rgba(13,148,136,0.08), transparent 26%),
+        radial-gradient(circle at top left, rgba(15,108,189,0.05), transparent 22%),
+        radial-gradient(circle at top right, rgba(13,148,136,0.04), transparent 24%),
         linear-gradient(180deg, var(--bg1) 0%, var(--bg2) 58%, var(--bg3) 100%);
 }
 
@@ -287,8 +287,8 @@ section[data-testid="stSidebar"] .block-container {
 /* ── Buttons (main content area) ── */
 .stButton > button {
     width: 100%;
-    border-radius: 16px;
-    padding: 0.72rem 1rem;
+    border-radius: 14px;
+    padding: 0.68rem 0.95rem;
     font-family: 'Manrope', sans-serif;
     font-size: 14px;
     font-weight: 700;
@@ -297,14 +297,14 @@ section[data-testid="stSidebar"] .block-container {
     color: var(--text);
     transition: all 0.16s ease;
     text-align: center !important;
-    box-shadow: 0 2px 8px rgba(15, 23, 42, 0.03);
+    box-shadow: none;
 }
 .stButton > button:hover {
     border-color: #91b7d7;
     background: #ffffff;
     color: #123664;
     transform: translateY(-1px);
-    box-shadow: 0 12px 24px rgba(15, 108, 189, 0.10);
+    box-shadow: 0 8px 18px rgba(15, 108, 189, 0.08);
 }
 .stButton > button[kind="primary"] {
     background: linear-gradient(135deg, var(--primary) 0%, #2f88d5 100%);
@@ -355,10 +355,10 @@ section[data-testid="stSidebar"] div[data-testid="stButton"] > button[kind="prim
 .stTextArea textarea,
 .stNumberInput input,
 div[data-baseweb="select"] > div {
-    border-radius: 18px !important;
+    border-radius: 14px !important;
     border: 1px solid #cfdeeb !important;
     background: rgba(255,255,255,0.98) !important;
-    box-shadow: inset 0 1px 0 rgba(255,255,255,0.8) !important;
+    box-shadow: none !important;
 }
 .stTextInput input,
 .stTextArea textarea,
@@ -376,24 +376,26 @@ div[data-baseweb="select"] > div {
 
 /* ── Chat message wrappers ── */
 [data-testid="stChatMessage"] {
-    border-radius: 22px;
-    margin-bottom: 12px;
-    padding: 0.15rem 0;
+    border-radius: 16px;
+    margin-bottom: 8px;
+    padding: 0.05rem 0;
     background: transparent;
 }
 [data-testid="stChatMessageContent"] {
-    border-radius: 22px;
-    padding: 0.95rem 1.05rem !important;
-    border: 1px solid rgba(209, 223, 234, 0.9);
-    box-shadow: var(--shadow-sm);
-    background: linear-gradient(180deg, rgba(255,255,255,0.96) 0%, rgba(248,251,254,0.94) 100%);
+    border-radius: 16px;
+    padding: 0.8rem 0.95rem !important;
+    border: 1px solid rgba(215, 228, 239, 0.9);
+    box-shadow: none;
+    background: #ffffff;
 }
 [data-testid="stChatMessage"]:has([aria-label="assistant"]) [data-testid="stChatMessageContent"] {
-    border-left: 5px solid #7bc4f1;
+    border-left: 3px solid #b7d5eb;
 }
 [data-testid="stChatMessage"]:has([aria-label="user"]) [data-testid="stChatMessageContent"] {
-    background: linear-gradient(180deg, #f4fbff 0%, #eef8ff 100%);
-    border-left: 5px solid #0f6cbd;
+    background: #f8fbfe;
+    border-left: 3px solid #0f6cbd;
+    margin-left: auto;
+    max-width: 78%;
 }
 
 /* ── Topic status pills ── */
@@ -437,15 +439,7 @@ div[data-baseweb="select"] > div {
 }
 
 .assistant-chip {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 14px 16px;
-    background: linear-gradient(135deg, #ffffff 0%, #f5fbff 100%);
-    border: 1px solid #d4e4f1;
-    border-radius: 22px;
-    box-shadow: var(--shadow-sm);
-    margin-bottom: 14px;
+    display: none;
 }
 .assistant-chip .avatar {
     width: 46px;
@@ -532,16 +526,15 @@ div[data-baseweb="select"] > div {
 }
 
 .topic-panel {
-    background:
-        linear-gradient(180deg, rgba(255,255,255,0.96) 0%, rgba(249,252,254,0.96) 100%);
-    border: 1px solid #d7e3ee;
-    border-radius: 28px;
-    padding: 20px 20px 18px 20px;
-    box-shadow: var(--shadow);
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    padding: 0;
+    box-shadow: none;
 }
 
 .section-kicker {
-    display: inline-flex;
+    display: none;
     align-items: center;
     gap: 8px;
     border-radius: 999px;
@@ -557,46 +550,81 @@ div[data-baseweb="select"] > div {
 }
 
 .active-question {
-    background: linear-gradient(180deg, #f8fcff 0%, #f1f8fd 100%);
-    border: 1px solid #d3e4f0;
-    border-radius: 24px;
-    padding: 16px 18px;
-    margin: 4px 0 12px 0;
-    box-shadow: var(--shadow-sm);
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    padding: 0;
+    margin: 0 0 10px 0;
+    box-shadow: none;
 }
 
 .active-question .label {
     font-size: 11px;
-    font-weight: 800;
+    font-weight: 700;
     text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: #5c7f9b;
-    margin-bottom: 8px;
+    letter-spacing: 0.06em;
+    color: #7d92a7;
+    margin-bottom: 6px;
 }
 
 .active-question .text {
     font-family: 'Manrope', sans-serif;
-    font-size: 20px;
-    line-height: 1.45;
+    font-size: 18px;
+    line-height: 1.4;
     font-weight: 700;
     color: #153652;
 }
 
 .reply-shell {
-    background: linear-gradient(180deg, rgba(255,255,255,0.96) 0%, rgba(250,252,254,0.96) 100%);
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    padding: 0;
+    box-shadow: none;
+    margin-top: 4px;
+}
+
+.composer-shell {
+    background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
     border: 1px solid #d8e3ec;
-    border-radius: 24px;
-    padding: 14px 14px 10px 14px;
-    box-shadow: var(--shadow-sm);
-    margin-top: 8px;
+    border-radius: 20px;
+    padding: 12px;
+    box-shadow: 0 8px 20px rgba(23, 50, 74, 0.04);
+}
+
+.composer-title {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: #7b8fa4;
+    margin-bottom: 8px;
+}
+
+.telegram-hint {
+    font-size: 12px;
+    color: #7a8b9a;
+    margin: 2px 0 10px 0;
 }
 
 [data-testid="stAudioInput"] {
-    background: linear-gradient(180deg, #fbfdff 0%, #f4f9fd 100%);
-    border: 1px solid #d9e5ef;
-    border-radius: 20px;
-    padding: 10px 12px 4px 12px;
-    margin: 8px 0 10px 0;
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    padding: 0;
+    margin: 4px 0 8px 0;
+}
+
+.stTextInput input {
+    border-radius: 999px !important;
+}
+
+.stTextArea textarea {
+    border-radius: 18px !important;
+}
+
+[data-testid="stAudioInput"] audio {
+    border-radius: 14px;
 }
 
 [data-testid="stProgressBar"] > div {
@@ -2357,89 +2385,94 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
 
     state = st.session_state.topic_states[topic_key]
     prev = state["data"].get(step["id"])
+    _, composer_col = st.columns([1.05, 0.95])
     # ── Options ─────────────────────────────────────────────────
     if stype == "options":
-        # ── OPTION BUTTONS ──
-        cols = st.columns(2 if len(step["opts"]) <= 4 else 1)
-        
-        for i, opt in enumerate(step["opts"]):
-            with cols[i % len(cols)]:
-                if st.button(opt, key=f"opt_{topic_key}_{sid}_{i}"):
-                    handle_answer(topic_key, step, opt, source="structured")
-        
-        # ─────────────────────────────
-        # 🔥 TEXT + VOICE SIDE-BY-SIDE
-        # ─────────────────────────────
-        col1, col2 = st.columns([3, 1])
-        
-        with col1:
-            user_text = st.text_input(
-                "Type your answer (press Enter)",
-                key=f"text_{topic_key}_{sid}"
-            )
-        
-        with col2:
-            voice_text = voice_widget(f"{topic_key}_{sid}_opt")
-        
-        # ── ENTER SUBMIT ──
-        submitted_key = f"text_{topic_key}_{sid}_submitted"
-        
-        if user_text and st.session_state.get(submitted_key) != user_text:
-        
-            st.session_state[submitted_key] = user_text
-        
-            interpreted = interpret_user_input_with_options(step, user_text)
-            handle_answer(topic_key, step, interpreted, source="typed")
-        
-        # ── VOICE SUBMIT ──
-        voice_submitted_key = f"voice_{topic_key}_{sid}_submitted"
-        if voice_text and st.session_state.get(voice_submitted_key) != voice_text:
-            st.session_state[voice_submitted_key] = voice_text
-            interpreted = interpret_user_input_with_options(step, voice_text)
-            handle_answer(topic_key, step, interpreted, source="voice")
+        with composer_col:
+            st.markdown('<div class="composer-shell"><div class="composer-title">Your reply</div>', unsafe_allow_html=True)
+            cols = st.columns(2 if len(step["opts"]) <= 4 else 1)
+
+            for i, opt in enumerate(step["opts"]):
+                with cols[i % len(cols)]:
+                    if st.button(opt, key=f"opt_{topic_key}_{sid}_{i}"):
+                        handle_answer(topic_key, step, opt, source="structured")
+
+            st.markdown('<div class="telegram-hint">Or send a typed or voice reply</div>', unsafe_allow_html=True)
+            col1, col2 = st.columns([3.8, 1.2])
+
+            with col1:
+                user_text = st.text_input(
+                    "Message",
+                    key=f"text_{topic_key}_{sid}",
+                    label_visibility="collapsed",
+                    placeholder="Type a reply..."
+                )
+
+            with col2:
+                voice_text = voice_widget(f"{topic_key}_{sid}_opt")
+
+            submitted_key = f"text_{topic_key}_{sid}_submitted"
+
+            if user_text and st.session_state.get(submitted_key) != user_text:
+                st.session_state[submitted_key] = user_text
+                interpreted = interpret_user_input_with_options(step, user_text)
+                handle_answer(topic_key, step, interpreted, source="typed")
+
+            voice_submitted_key = f"voice_{topic_key}_{sid}_submitted"
+            if voice_text and st.session_state.get(voice_submitted_key) != voice_text:
+                st.session_state[voice_submitted_key] = voice_text
+                interpreted = interpret_user_input_with_options(step, voice_text)
+                handle_answer(topic_key, step, interpreted, source="voice")
+            st.markdown('</div>', unsafe_allow_html=True)
                 
 
     # ── Multi-select ─────────────────────────────────────────────
     elif stype == "multi_select":
-        # Pre-select previous choices that still exist in options
-        safe_prev = (
-            [v for v in prev_answer if v in step["opts"]]
-            if isinstance(prev_answer, list) else []
-        )
-        chosen = st.multiselect(
-            "Select all that apply:",
-            step["opts"],
-            default=safe_prev,
-            key=f"ms_{topic_key}_{sid}",
-        )
-        if st.button("Confirm ✓", key=f"ms_submit_{topic_key}_{sid}"):
-            if chosen:
-                handle_answer(topic_key, step, chosen, source="structured")
-            else:
-                st.warning("Please select at least one option, or choose 'None of these'.")
+        with composer_col:
+            st.markdown('<div class="composer-shell"><div class="composer-title">Your reply</div>', unsafe_allow_html=True)
+            safe_prev = (
+                [v for v in prev_answer if v in step["opts"]]
+                if isinstance(prev_answer, list) else []
+            )
+            chosen = st.multiselect(
+                "Select all that apply:",
+                step["opts"],
+                default=safe_prev,
+                key=f"ms_{topic_key}_{sid}",
+                label_visibility="collapsed",
+            )
+            if st.button("Send ✓", key=f"ms_submit_{topic_key}_{sid}"):
+                if chosen:
+                    handle_answer(topic_key, step, chosen, source="structured")
+                else:
+                    st.warning("Please select at least one option, or choose 'None of these'.")
+            st.markdown('</div>', unsafe_allow_html=True)
 
     # ── Number ───────────────────────────────────────────────────
     elif stype == "number":
-        # Use previous answer as default if valid
-        if prev_answer is not None:
-            try:
-                num_default = float(prev_answer)
-                num_default = max(float(step["min_v"]), min(float(step["max_v"]), num_default))
-            except (TypeError, ValueError):
+        with composer_col:
+            st.markdown('<div class="composer-shell"><div class="composer-title">Your reply</div>', unsafe_allow_html=True)
+            if prev_answer is not None:
+                try:
+                    num_default = float(prev_answer)
+                    num_default = max(float(step["min_v"]), min(float(step["max_v"]), num_default))
+                except (TypeError, ValueError):
+                    num_default = float(step["default_v"])
+            else:
                 num_default = float(step["default_v"])
-        else:
-            num_default = float(step["default_v"])
 
-        val = st.number_input(
-            "Enter value:",
-            min_value=float(step["min_v"]),
-            max_value=float(step["max_v"]),
-            value=num_default,
-            step=1.0,
-            key=f"num_{topic_key}_{sid}",
-        )
-        if st.button("Submit ✓", key=f"num_submit_{topic_key}_{sid}"):
-            handle_answer(topic_key, step, int(val), source="structured")
+            val = st.number_input(
+                "Enter value:",
+                min_value=float(step["min_v"]),
+                max_value=float(step["max_v"]),
+                value=num_default,
+                step=1.0,
+                key=f"num_{topic_key}_{sid}",
+                label_visibility="collapsed",
+            )
+            if st.button("Send ✓", key=f"num_submit_{topic_key}_{sid}"):
+                handle_answer(topic_key, step, int(val), source="structured")
+            st.markdown('</div>', unsafe_allow_html=True)
 
     # ── Free text ────────────────────────────────────────────────
     elif stype == "free_text":
@@ -2455,23 +2488,27 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
             st.session_state[widget_key] = transcript
             st.session_state[f"{widget_key}_voice_sync"] = transcript
 
-        st.text_area(
-            "Your response:",
-            placeholder=step.get("placeholder", "Please describe…"),
-            key=widget_key,
-            height=100,
-        )
+        with composer_col:
+            st.markdown('<div class="composer-shell"><div class="composer-title">Your reply</div>', unsafe_allow_html=True)
+            col_text, col_voice = st.columns([3.8, 1.2])
+            with col_text:
+                st.text_area(
+                    "Reply",
+                    placeholder=step.get("placeholder", "Please describe…"),
+                    key=widget_key,
+                    height=110,
+                    label_visibility="collapsed",
+                )
+            with col_voice:
+                voice_widget(f"{topic_key}_{sid}")
 
-        col_submit, col_voice = st.columns([2, 1])
-        with col_submit:
-            if st.button("Submit ✓", key=f"ft_submit_{topic_key}_{sid}"):
+            if st.button("Send ✓", key=f"ft_submit_{topic_key}_{sid}"):
                 text = st.session_state.get(widget_key, "").strip()
                 if text:
                     handle_answer(topic_key, step, text, source="free_text")
                 else:
                     st.warning("Please enter a response before submitting.")
-        with col_voice:
-            voice_widget(f"{topic_key}_{sid}")
+            st.markdown('</div>', unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -2490,9 +2527,6 @@ def render_freeform_chat():
         }
     })();
     </script>""", height=0)
-    render_assistant_chip()
-    st.markdown('<div class="topic-panel">', unsafe_allow_html=True)
-    render_section_kicker("Open Note")
     st.subheader("Anything else you’d like to share?")
     st.caption(
         "Mention any other symptoms, questions, or concerns you’d like your care team "
@@ -2549,7 +2583,6 @@ def render_freeform_chat():
                 {"role": "assistant", "content": reply}
             )
             st.rerun()
-    st.markdown('</div>', unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -2572,27 +2605,15 @@ def render_topic_detail(topic_label: str, topic_key: str):
     last_data    = st.session_state.last_checkin.get(topic_key, {})
     has_prev     = st.session_state.has_prev_checkin
 
-    render_assistant_chip()
-    st.markdown('<div class="topic-panel">', unsafe_allow_html=True)
-
     # ── Previous check-in summary card ────────────────────────────
     if has_prev:
         if last_data:
             chips_html = _checkin_summary_html(topic_key, last_data)
             if chips_html:
-                render_memory_banner("From your last check-in, here are the main details we already have on file.")
-                st.markdown(
-                    '<div class="soft-card" style="margin-bottom:12px;">'
-                    '<div style="font-size:11px;font-weight:700;color:#7a9ec5;'
-                    'text-transform:uppercase;letter-spacing:0.6px;margin-bottom:8px;">'
-                    'Your last check-in</div>' + chips_html + '</div>',
-                    unsafe_allow_html=True,
-                )
+                with st.expander("Last check-in summary", expanded=False):
+                    st.markdown(chips_html, unsafe_allow_html=True)
         else:
-            st.markdown(
-                '<div class="subtle-note">📋 No information from your last visit was recorded for this section.</div>',
-                unsafe_allow_html=True,
-            )
+            st.caption("No information from your last visit was recorded for this section.")
 
     # ── Initialize topic on first visit ─────────────────────────
     if state["status"] == "not_started":
@@ -2604,11 +2625,10 @@ def render_topic_detail(topic_label: str, topic_key: str):
     answered, applicable = get_topic_progress(topic_key, state["data"])
     col_title, col_prog = st.columns([3, 1])
     with col_title:
-        render_section_kicker("Symptom Review")
         st.subheader(topic_label)
     with col_prog:
         if applicable > 0:
-            st.progress(answered / applicable, text=f"{answered}/{applicable} answered")
+            st.caption(f"{answered}/{applicable} answered")
 
     # ── Chat history ─────────────────────────────────────────────
     if state["chat"]:
@@ -2632,7 +2652,6 @@ def render_topic_detail(topic_label: str, topic_key: str):
             })
             state["data"].pop("_correction_note", None)
             st.rerun()
-        st.markdown('</div>', unsafe_allow_html=True)
         return
 
     # ── Current question ─────────────────────────────────────────
@@ -2644,6 +2663,7 @@ def render_topic_detail(topic_label: str, topic_key: str):
         prompt_question = (pending.get("question") or "").strip()
         if pending_key not in st.session_state:
             st.session_state[pending_key] = ""
+        _, composer_col = st.columns([1.05, 0.95])
 
         if prompt_intro:
             with st.chat_message("assistant", avatar="👩‍⚕️"):
@@ -2651,27 +2671,28 @@ def render_topic_detail(topic_label: str, topic_key: str):
         if prompt_question:
             render_active_question(prompt_question, "Clarifying question")
 
-        st.markdown('<div class="reply-shell">', unsafe_allow_html=True)
-        pending_voice = voice_widget(f"pending_{topic_key}_{pending_suffix}")
-        if pending_voice and pending_voice != st.session_state.get(f"{pending_key}_voice_sync"):
-            st.session_state[pending_key] = pending_voice
-            st.session_state[f"{pending_key}_voice_sync"] = pending_voice
+        with composer_col:
+            st.markdown('<div class="composer-shell"><div class="composer-title">Your reply</div>', unsafe_allow_html=True)
+            pending_voice = voice_widget(f"pending_{topic_key}_{pending_suffix}")
+            if pending_voice and pending_voice != st.session_state.get(f"{pending_key}_voice_sync"):
+                st.session_state[pending_key] = pending_voice
+                st.session_state[f"{pending_key}_voice_sync"] = pending_voice
 
-        st.text_area(
-            "Reply",
-            key=pending_key,
-            placeholder="Type or speak your answer here...",
-            height=90,
-        )
+            st.text_area(
+                "Reply",
+                key=pending_key,
+                placeholder="Type or speak your answer here...",
+                height=100,
+                label_visibility="collapsed",
+            )
 
-        if st.button("Submit ✓", key=f"pending_submit_{topic_key}"):
-            reply = st.session_state.get(pending_key, "").strip()
-            if reply:
-                handle_pending_followup(topic_key, reply, source="followup")
-            else:
-                st.warning("Please enter a response before submitting.")
-        st.markdown('</div>', unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
+            if st.button("Send ✓", key=f"pending_submit_{topic_key}"):
+                reply = st.session_state.get(pending_key, "").strip()
+                if reply:
+                    handle_pending_followup(topic_key, reply, source="followup")
+                else:
+                    st.warning("Please enter a response before submitting.")
+            st.markdown('</div>', unsafe_allow_html=True)
         return
     next_step = get_next_step(topic_key, state["data"])
     if next_step:
@@ -2682,10 +2703,7 @@ def render_topic_detail(topic_label: str, topic_key: str):
         if next_step.get("type") == "options":
             question_text += " (Choose an option below, or answer in your own words if that fits better.)"
         render_active_question(question_text)
-        st.markdown('<div class="reply-shell">', unsafe_allow_html=True)
         render_input(topic_key, next_step, prev_answer=prev_answer)
-        st.markdown('</div>', unsafe_allow_html=True)
-    st.markdown('</div>', unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════════════════════════════
