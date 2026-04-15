@@ -61,8 +61,6 @@ def _is_redundant_followup(original_question: str, answer: str, followup_questio
 
     answer_words = set(aq.split())
     follow_words = set(fq.split())
-    if answer_words and len(answer_words) <= 4 and answer_words.issubset(follow_words):
-        return True
 
     location_terms = {
         "hand", "hands", "jaw", "ear", "ears", "tongue", "throat", "mouth",
@@ -93,6 +91,39 @@ def _coerce_structured_answer(topic_key: str, step: dict, answer: Any, current_d
         return "Somewhere else"
 
     return answer
+
+
+def _looks_vague_answer(answer: Any) -> bool:
+    if not isinstance(answer, str):
+        return False
+    text = _norm_text(answer)
+    if not text:
+        return True
+
+    vague_phrases = {
+        "idk", "i dont know", "dont know", "not sure", "unsure", "maybe",
+        "kinda", "kind of", "sort of", "bad", "worse", "same", "fine",
+        "ok", "okay", "ugh", "hard", "stuff", "things", "whatever",
+    }
+    if text in vague_phrases:
+        return True
+
+    words = text.split()
+    if len(words) == 1 and words[0] in {"bad", "worse", "same", "fine", "hard"}:
+        return True
+    if len(words) <= 2 and not any(ch.isdigit() for ch in answer):
+        return text in vague_phrases
+    return False
+
+
+def _fallback_clarifying_question(step: dict) -> str:
+    text = step.get("text", "").strip()
+    if not text:
+        return "Could you tell me a little more about that so I can capture it accurately for your care team?"
+    return (
+        f"I want to make sure I capture this accurately for your team. "
+        f"Could you tell me a little more about that?"
+    )
 
 
 
@@ -1527,7 +1558,7 @@ def get_llm_topic_turn(
       assistant_message: optional supportive/flagging message
       follow_up_question: optional targeted follow-up question
     """
-    if not openai_client or len(answer.strip().split()) < 2:
+    if not openai_client or not answer.strip():
         return {}
 
     topic_label = _TOPIC_LABELS_LLM.get(topic_key, topic_key)
@@ -1560,6 +1591,7 @@ def get_llm_topic_turn(
         f"- If the patient gave enough detail, write a brief natural response that sounds human and specific.\n"
         f"- If comparing with the last visit is clearly helpful and accurate, you may briefly mention improvement, worsening, or similarity.\n"
         f"- If the answer is vague or opens an important clinical thread, ask one short follow-up question.\n"
+        f"- If the patient's answer is very short, unclear, misspelled, or incomplete, ask a gentle clarifying question in natural language.\n"
         f"- Do NOT ask a follow-up that simply repeats or paraphrases the original question.\n"
         f"- If the patient already directly answered with a concrete detail like a body location, symptom trigger, or medication, accept it.\n"
         f"- If there is a red flag, stay calm, acknowledge it, and say the team will want to know before the visit.\n"
@@ -2022,7 +2054,7 @@ def _store_followup_prompt(state: dict, step: dict, question: str):
     }
 
 
-def handle_pending_followup(topic_key: str, answer: str):
+def handle_pending_followup(topic_key: str, answer: str, source: str = "typed"):
     state = st.session_state.topic_states[topic_key]
     pending = state.get("pending_followup") or {}
     answer_key = pending.get("answer_key")
@@ -2059,7 +2091,7 @@ def handle_pending_followup(topic_key: str, answer: str):
     st.rerun()
 
 
-def handle_answer(topic_key: str, step: dict, answer):
+def handle_answer(topic_key: str, step: dict, answer, source: str = "structured"):
     state = st.session_state.topic_states[topic_key]
     display = ", ".join(answer) if isinstance(answer, list) else str(answer)
     state["chat"].append({"role": "user", "content": display})
@@ -2071,7 +2103,9 @@ def handle_answer(topic_key: str, step: dict, answer):
     assistant_message = ""
     if isinstance(answer, str):
         last_topic_data = st.session_state.last_checkin.get(topic_key, {})
-        if len(answer.split()) >= 2 and openai_client:
+        is_vague = _looks_vague_answer(answer)
+        should_use_llm = source in {"typed", "voice", "free_text", "followup"} or is_vague
+        if should_use_llm and openai_client:
             with st.spinner("Thinking…"):
                 turn = get_llm_topic_turn(
                     topic_key=topic_key,
@@ -2102,7 +2136,15 @@ def handle_answer(topic_key: str, step: dict, answer):
 
             assistant_message = turn.get("assistant_message", "").strip()
 
-        if not assistant_message and len(answer.split()) >= 2:
+        if not assistant_message and is_vague and source in {"typed", "voice", "free_text", "followup"}:
+            state["chat"].append({
+                "role": "assistant",
+                "content": _fallback_clarifying_question(step),
+            })
+            _store_followup_prompt(state, step, _fallback_clarifying_question(step))
+            st.rerun()
+
+        if not assistant_message and (len(answer.split()) >= 2 or source in {"typed", "voice", "free_text", "followup"}):
             assistant_message = _default_chatty_reply(
                 topic_key, answer, step, last_topic_data
             )
@@ -2150,7 +2192,7 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
         for i, opt in enumerate(step["opts"]):
             with cols[i % len(cols)]:
                 if st.button(opt, key=f"opt_{topic_key}_{sid}_{i}"):
-                    handle_answer(topic_key, step, opt)
+                    handle_answer(topic_key, step, opt, source="structured")
         
         # ─────────────────────────────
         # 🔥 TEXT + VOICE SIDE-BY-SIDE
@@ -2174,12 +2216,14 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
             st.session_state[submitted_key] = user_text
         
             interpreted = interpret_user_input_with_options(step, user_text)
-            handle_answer(topic_key, step, interpreted)
+            handle_answer(topic_key, step, interpreted, source="typed")
         
         # ── VOICE SUBMIT ──
-        if voice_text:
+        voice_submitted_key = f"voice_{topic_key}_{sid}_submitted"
+        if voice_text and st.session_state.get(voice_submitted_key) != voice_text:
+            st.session_state[voice_submitted_key] = voice_text
             interpreted = interpret_user_input_with_options(step, voice_text)
-            handle_answer(topic_key, step, interpreted)
+            handle_answer(topic_key, step, interpreted, source="voice")
                 
 
     # ── Multi-select ─────────────────────────────────────────────
@@ -2197,7 +2241,7 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
         )
         if st.button("Confirm ✓", key=f"ms_submit_{topic_key}_{sid}"):
             if chosen:
-                handle_answer(topic_key, step, chosen)
+                handle_answer(topic_key, step, chosen, source="structured")
             else:
                 st.warning("Please select at least one option, or choose 'None of these'.")
 
@@ -2222,7 +2266,7 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
             key=f"num_{topic_key}_{sid}",
         )
         if st.button("Submit ✓", key=f"num_submit_{topic_key}_{sid}"):
-            handle_answer(topic_key, step, int(val))
+            handle_answer(topic_key, step, int(val), source="structured")
 
     # ── Free text ────────────────────────────────────────────────
     elif stype == "free_text":
@@ -2230,10 +2274,13 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
         widget_key     = f"ft_{topic_key}_{sid}"
 
         # Priority for pre-fill: voice transcript > previous answer > empty
+        transcript = st.session_state.get(transcript_key, "")
         if widget_key not in st.session_state:
-            transcript  = st.session_state.get(transcript_key, "")
             prev_str    = str(prev_answer) if prev_answer is not None else ""
             st.session_state[widget_key] = transcript or prev_str
+        elif transcript and transcript != st.session_state.get(f"{widget_key}_voice_sync"):
+            st.session_state[widget_key] = transcript
+            st.session_state[f"{widget_key}_voice_sync"] = transcript
 
         st.text_area(
             "Your response:",
@@ -2247,7 +2294,7 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
             if st.button("Submit ✓", key=f"ft_submit_{topic_key}_{sid}"):
                 text = st.session_state.get(widget_key, "").strip()
                 if text:
-                    handle_answer(topic_key, step, text)
+                    handle_answer(topic_key, step, text, source="free_text")
                 else:
                     st.warning("Please enter a response before submitting.")
         with col_voice:
@@ -2416,6 +2463,9 @@ def render_topic_detail(topic_label: str, topic_key: str):
         pending_voice = voice_widget(f"pending_{topic_key}")
         if pending_key not in st.session_state:
             st.session_state[pending_key] = pending_voice or ""
+        elif pending_voice and pending_voice != st.session_state.get(f"{pending_key}_voice_sync"):
+            st.session_state[pending_key] = pending_voice
+            st.session_state[f"{pending_key}_voice_sync"] = pending_voice
 
         st.text_area(
             "Your response:",
@@ -2429,7 +2479,8 @@ def render_topic_detail(topic_label: str, topic_key: str):
         if st.button("Submit ✓", key=f"pending_submit_{topic_key}"):
             reply = st.session_state.get(pending_key, "").strip()
             if reply:
-                handle_pending_followup(topic_key, reply)
+                handle_pending_followup(topic_key, reply, source="followup")
+                st.session_state[pending_key] = ""
             else:
                 st.warning("Please enter a response before submitting.")
         return
