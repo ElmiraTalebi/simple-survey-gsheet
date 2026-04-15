@@ -588,7 +588,7 @@ div[data-baseweb="select"] > div {
     background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
     border: 1px solid #d8e3ec;
     border-radius: 18px;
-    padding: 12px 12px 10px 12px;
+    padding: 10px 10px 8px 10px;
     box-shadow: 0 8px 20px rgba(23, 50, 74, 0.04);
 }
 
@@ -598,7 +598,7 @@ div[data-baseweb="select"] > div {
     text-transform: uppercase;
     letter-spacing: 0.06em;
     color: #7b8fa4;
-    margin-bottom: 8px;
+    margin-bottom: 6px;
 }
 
 .suggestion-label {
@@ -647,8 +647,29 @@ div[data-baseweb="select"] > div {
 
 .composer-shell div[data-baseweb="select"] > div {
     border-radius: 14px !important;
-    min-height: 48px !important;
+    min-height: 44px !important;
     background: #ffffff !important;
+}
+
+.composer-shell [data-testid="stTextInput"] {
+    margin-bottom: 0 !important;
+}
+
+.composer-shell [data-testid="stSelectbox"] {
+    margin-bottom: 0 !important;
+}
+
+.composer-shell [data-testid="stAudioInput"] {
+    border-radius: 14px;
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2px 6px 0 6px;
+}
+
+.composer-shell [data-testid="stAudioInput"] button {
+    border-radius: 12px !important;
 }
 
 [data-testid="stProgressBar"] > div {
@@ -793,7 +814,7 @@ def voice_widget(key_suffix: str, label: str = "Speak your answer") -> Optional[
     if hash_key not in st.session_state:
         st.session_state[hash_key] = None
 
-    audio = st.audio_input(label, key=f"_vrec_{key_suffix}")
+    audio = st.audio_input(label, key=f"_vrec_{key_suffix}", label_visibility="collapsed")
     if not audio:
         return st.session_state.get(transcript_key)
 
@@ -2419,16 +2440,9 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
             previous_dropdown = prev_answer if prev_answer in step["opts"] else "Select an option..."
             if dropdown_key not in st.session_state:
                 st.session_state[dropdown_key] = previous_dropdown
+            col_text, col_select, col_voice = st.columns([4.2, 1.8, 1.0])
 
-            selected_option = st.selectbox(
-                "Options",
-                dropdown_options,
-                key=dropdown_key,
-                label_visibility="collapsed",
-            )
-            col1, col2 = st.columns([3.8, 1.2])
-
-            with col1:
+            with col_text:
                 user_text = st.text_input(
                     "Message",
                     key=f"text_{topic_key}_{sid}",
@@ -2436,7 +2450,15 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
                     placeholder="Type a reply..."
                 )
 
-            with col2:
+            with col_select:
+                selected_option = st.selectbox(
+                    "Quick option",
+                    dropdown_options,
+                    key=dropdown_key,
+                    label_visibility="collapsed",
+                )
+
+            with col_voice:
                 voice_text = voice_widget(f"{topic_key}_{sid}_opt", label="Mic")
 
             if selected_option != "Select an option..." and st.session_state.get(f"{dropdown_key}_submitted") != selected_option:
