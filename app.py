@@ -799,9 +799,9 @@ div[data-baseweb="select"] > div {
     border: none;
     border-radius: 999px;
     min-height: 46px;
-    width: 46px;
-    min-width: 46px;
-    max-width: 46px;
+    width: 60px;
+    min-width: 60px;
+    max-width: 60px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -811,8 +811,8 @@ div[data-baseweb="select"] > div {
 }
 
 .composer-shell [data-testid="stAudioInput"] > div {
-    width: 46px;
-    min-width: 46px;
+    width: 60px;
+    min-width: 60px;
     display: flex;
     justify-content: center;
     align-items: center;
@@ -822,9 +822,9 @@ div[data-baseweb="select"] > div {
 
 .composer-shell [data-testid="stAudioInput"] button {
     border-radius: 999px !important;
-    width: 46px !important;
+    width: 60px !important;
     height: 46px !important;
-    min-width: 46px !important;
+    min-width: 60px !important;
     padding: 0 !important;
     margin: 0 auto !important;
     border: 1px solid #d7e4ee !important;
@@ -2709,7 +2709,7 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
             dropdown_options = ["Select an option..."] + step["opts"]
             if dropdown_key not in st.session_state:
                 st.session_state[dropdown_key] = "Select an option..."
-            col_text, col_dropdown, col_voice = st.columns([4.5, 1.65, 0.38])
+            col_text, col_dropdown = st.columns([4.6, 1.7])
 
             with col_text:
                 user_text = st.text_input(
@@ -2727,6 +2727,7 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
                     label_visibility="collapsed",
                 )
 
+            _, col_voice = st.columns([6.0, 0.65])
             with col_voice:
                 voice_text = voice_widget(f"{topic_key}_{sid}_opt", label="Mic")
 
@@ -2765,7 +2766,7 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
             dropdown_options = ["Select an option..."] + step["opts"]
             if dropdown_key not in st.session_state:
                 st.session_state[dropdown_key] = "Select an option..."
-            col_text, col_dropdown, col_voice = st.columns([4.5, 1.65, 0.38])
+            col_text, col_dropdown = st.columns([4.6, 1.7])
             text_key = f"text_{topic_key}_{sid}"
             submit_key = f"{text_key}_submitted"
             with col_text:
@@ -2782,6 +2783,7 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
                     key=dropdown_key,
                     label_visibility="collapsed",
                 )
+            _, col_voice = st.columns([6.0, 0.65])
             with col_voice:
                 voice_text = voice_widget(f"{topic_key}_{sid}_multi", label="Mic")
 
@@ -2817,7 +2819,7 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
             submit_key = f"{text_key}_submitted"
             if text_key not in st.session_state:
                 st.session_state[text_key] = ""
-            col_text, col_voice = st.columns([5.6, 0.34])
+            col_text = st.columns([1])[0]
             with col_text:
                 user_text = st.text_input(
                     "Reply",
@@ -2825,6 +2827,7 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
                     label_visibility="collapsed",
                     placeholder=f"Enter a number ({int(step['min_v'])}-{int(step['max_v'])})"
                 )
+            _, col_voice = st.columns([6.0, 0.65])
             with col_voice:
                 voice_text = voice_widget(f"{topic_key}_{sid}_num", label="Mic")
 
@@ -2857,19 +2860,19 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
 
         with composer_col:
             st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
-            col_text, col_voice = st.columns([5.6, 0.34])
-            with col_voice:
-                voice_text = voice_widget(f"{topic_key}_{sid}", label="Mic")
-            if voice_text and voice_text != st.session_state.get(f"{widget_key}_voice_sync"):
-                st.session_state[widget_key] = voice_text
-                st.session_state[f"{widget_key}_voice_sync"] = voice_text
-            with col_text:
+            with st.container():
                 free_text = st.text_input(
                     "Reply",
                     placeholder=step.get("placeholder", "Please describe…"),
                     key=widget_key,
                     label_visibility="collapsed",
                 )
+            _, col_voice = st.columns([6.0, 0.65])
+            with col_voice:
+                voice_text = voice_widget(f"{topic_key}_{sid}", label="Mic")
+            if voice_text and voice_text != st.session_state.get(f"{widget_key}_voice_sync"):
+                st.session_state[widget_key] = voice_text
+                st.session_state[f"{widget_key}_voice_sync"] = voice_text
 
             if free_text and st.session_state.get(submit_key) != free_text:
                 st.session_state[submit_key] = free_text
@@ -2918,7 +2921,7 @@ def render_freeform_chat():
     user_input = st.chat_input("Type here, or use the voice button below…",
                                 key="freeform_chat_input")
 
-    col_text, col_voice = st.columns([3.35, 0.32])
+    _, col_voice = st.columns([6.0, 0.65])
     with col_voice:
         vt = voice_widget("freeform")
         if vt and not user_input:
@@ -3033,19 +3036,19 @@ def render_topic_detail(topic_label: str, topic_key: str):
 
         with composer_col:
             st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
-            col_text, col_voice = st.columns([5.6, 0.34])
-            with col_voice:
-                pending_voice = voice_widget(f"pending_{topic_key}_{pending_suffix}", label="Mic")
-            if pending_voice and pending_voice != st.session_state.get(f"{pending_key}_voice_sync"):
-                st.session_state[pending_key] = pending_voice
-                st.session_state[f"{pending_key}_voice_sync"] = pending_voice
-            with col_text:
+            with st.container():
                 pending_text = st.text_input(
                     "Reply",
                     key=pending_key,
                     placeholder="Type or speak your answer here...",
                     label_visibility="collapsed",
                 )
+            _, col_voice = st.columns([6.0, 0.65])
+            with col_voice:
+                pending_voice = voice_widget(f"pending_{topic_key}_{pending_suffix}", label="Mic")
+            if pending_voice and pending_voice != st.session_state.get(f"{pending_key}_voice_sync"):
+                st.session_state[pending_key] = pending_voice
+                st.session_state[f"{pending_key}_voice_sync"] = pending_voice
 
             if pending_text and st.session_state.get(pending_submit_key) != pending_text:
                 st.session_state[pending_submit_key] = pending_text
