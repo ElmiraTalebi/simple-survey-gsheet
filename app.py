@@ -2222,12 +2222,6 @@ def _store_followup_prompt(
         "answer_key": f"{step['id']}_llm_followup",
         "assistant_message": assistant_message.strip(),
     }
-    followup_widget_key = f"pending_followup_{topic_key}"
-    if followup_widget_key in st.session_state:
-        st.session_state[followup_widget_key] = ""
-    sync_key = f"{followup_widget_key}_voice_sync"
-    if sync_key in st.session_state:
-        st.session_state.pop(sync_key, None)
 
 
 def handle_pending_followup(topic_key: str, answer: str, source: str = "typed"):
@@ -2248,8 +2242,6 @@ def handle_pending_followup(topic_key: str, answer: str, source: str = "typed"):
     state["data"][answer_key] = answer
     state["waiting_for_followup"] = False
     state.pop("pending_followup", None)
-    st.session_state[f"pending_followup_{topic_key}"] = ""
-    st.session_state.pop(f"pending_followup_{topic_key}_voice_sync", None)
 
     last_topic_data = st.session_state.last_checkin.get(topic_key, {})
     closing = _default_chatty_reply(
@@ -2646,7 +2638,8 @@ def render_topic_detail(topic_label: str, topic_key: str):
     # ── Current question ─────────────────────────────────────────
     if state.get("waiting_for_followup"):
         pending = state.get("pending_followup") or {}
-        pending_key = f"pending_followup_{topic_key}"
+        pending_suffix = pending.get("answer_key", "pending")
+        pending_key = f"pending_followup_{topic_key}_{pending_suffix}"
         prompt_intro = (pending.get("assistant_message") or "").strip()
         prompt_question = (pending.get("question") or "").strip()
         if pending_key not in st.session_state:
@@ -2659,7 +2652,7 @@ def render_topic_detail(topic_label: str, topic_key: str):
             render_active_question(prompt_question, "Clarifying question")
 
         st.markdown('<div class="reply-shell">', unsafe_allow_html=True)
-        pending_voice = voice_widget(f"pending_{topic_key}")
+        pending_voice = voice_widget(f"pending_{topic_key}_{pending_suffix}")
         if pending_voice and pending_voice != st.session_state.get(f"{pending_key}_voice_sync"):
             st.session_state[pending_key] = pending_voice
             st.session_state[f"{pending_key}_voice_sync"] = pending_voice
@@ -2675,7 +2668,6 @@ def render_topic_detail(topic_label: str, topic_key: str):
             reply = st.session_state.get(pending_key, "").strip()
             if reply:
                 handle_pending_followup(topic_key, reply, source="followup")
-                st.session_state[pending_key] = ""
             else:
                 st.warning("Please enter a response before submitting.")
         st.markdown('</div>', unsafe_allow_html=True)
