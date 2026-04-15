@@ -2079,6 +2079,7 @@ def _append_next_question(
 
 
 def _store_followup_prompt(
+    topic_key: str,
     state: dict,
     step: dict,
     question: str,
@@ -2093,6 +2094,12 @@ def _store_followup_prompt(
         "answer_key": f"{step['id']}_llm_followup",
         "assistant_message": assistant_message.strip(),
     }
+    followup_widget_key = f"pending_followup_{topic_key}"
+    if followup_widget_key in st.session_state:
+        st.session_state[followup_widget_key] = ""
+    sync_key = f"{followup_widget_key}_voice_sync"
+    if sync_key in st.session_state:
+        st.session_state.pop(sync_key, None)
 
 
 def handle_pending_followup(topic_key: str, answer: str, source: str = "typed"):
@@ -2113,6 +2120,8 @@ def handle_pending_followup(topic_key: str, answer: str, source: str = "typed"):
     state["data"][answer_key] = answer
     state["waiting_for_followup"] = False
     state.pop("pending_followup", None)
+    st.session_state[f"pending_followup_{topic_key}"] = ""
+    st.session_state.pop(f"pending_followup_{topic_key}_voice_sync", None)
 
     last_topic_data = st.session_state.last_checkin.get(topic_key, {})
     closing = _default_chatty_reply(
@@ -2171,6 +2180,7 @@ def handle_answer(topic_key: str, step: dict, answer, source: str = "structured"
                     turn["follow_up_question"] = ""
                 else:
                     _store_followup_prompt(
+                        topic_key,
                         state,
                         step,
                         followup_question,
@@ -2182,6 +2192,7 @@ def handle_answer(topic_key: str, step: dict, answer, source: str = "structured"
 
         if not assistant_message and is_vague and source in {"typed", "voice", "free_text", "followup"}:
             _store_followup_prompt(
+                topic_key,
                 state,
                 step,
                 _fallback_clarifying_question(step),
@@ -2502,19 +2513,20 @@ def render_topic_detail(topic_label: str, topic_key: str):
     if state.get("waiting_for_followup"):
         pending = state.get("pending_followup") or {}
         pending_key = f"pending_followup_{topic_key}"
-        pending_voice = voice_widget(f"pending_{topic_key}")
         prompt_intro = (pending.get("assistant_message") or "").strip()
         prompt_question = (pending.get("question") or "").strip()
         if pending_key not in st.session_state:
-            st.session_state[pending_key] = pending_voice or ""
-        elif pending_voice and pending_voice != st.session_state.get(f"{pending_key}_voice_sync"):
-            st.session_state[pending_key] = pending_voice
-            st.session_state[f"{pending_key}_voice_sync"] = pending_voice
+            st.session_state[pending_key] = ""
 
         with st.container(border=False):
             with st.chat_message("assistant", avatar="👩‍⚕️"):
                 parts = [part for part in [prompt_intro, prompt_question] if part]
                 st.write("\n\n".join(parts))
+
+        pending_voice = voice_widget(f"pending_{topic_key}")
+        if pending_voice and pending_voice != st.session_state.get(f"{pending_key}_voice_sync"):
+            st.session_state[pending_key] = pending_voice
+            st.session_state[f"{pending_key}_voice_sync"] = pending_voice
 
         st.text_area(
             "Reply",
@@ -2522,8 +2534,6 @@ def render_topic_detail(topic_label: str, topic_key: str):
             placeholder="Type or speak your answer here...",
             height=90,
         )
-        if pending_voice:
-            st.session_state[pending_key] = pending_voice
 
         if st.button("Submit ✓", key=f"pending_submit_{topic_key}"):
             reply = st.session_state.get(pending_key, "").strip()
