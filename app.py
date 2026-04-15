@@ -586,28 +586,23 @@ div[data-baseweb="select"] > div {
 
 .composer-shell {
     background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
-    border: 1px solid #d8e3ec;
-    border-radius: 18px;
-    padding: 10px 10px 8px 10px;
-    box-shadow: 0 8px 20px rgba(23, 50, 74, 0.04);
+    border: 1px solid #d9e4ed;
+    border-radius: 24px;
+    padding: 10px;
+    box-shadow: 0 12px 26px rgba(23, 50, 74, 0.05);
 }
 
-.composer-title {
-    font-size: 11px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: #7b8fa4;
-    margin-bottom: 6px;
+.composer-shell.compact {
+    padding: 8px;
 }
 
-.suggestion-label {
-    font-size: 11px;
-    color: #89a0b3;
-    margin: 0 0 8px 2px;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
+.composer-subtle {
+    font-size: 10px;
     font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #8aa0b5;
+    margin: 0 0 6px 4px;
 }
 
 .composer-row {
@@ -646,9 +641,10 @@ div[data-baseweb="select"] > div {
 }
 
 .composer-shell div[data-baseweb="select"] > div {
-    border-radius: 14px !important;
-    min-height: 44px !important;
-    background: #ffffff !important;
+    border-radius: 16px !important;
+    min-height: 46px !important;
+    background: #f7fbfe !important;
+    border: 1px solid #d7e4ee !important;
 }
 
 .composer-shell [data-testid="stTextInput"] {
@@ -660,28 +656,47 @@ div[data-baseweb="select"] > div {
 }
 
 .composer-shell [data-testid="stAudioInput"] {
-    border-radius: 14px;
-    min-height: 40px;
+    background: #f7fbfe;
+    border: 1px solid #d7e4ee;
+    border-radius: 18px;
+    min-height: 46px;
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 0 4px;
-    max-width: 64px;
+    padding: 0 2px;
+    max-width: 54px;
     margin-left: auto;
 }
 
+.composer-shell [data-testid="stAudioInput"] > div {
+    width: 100%;
+}
+
 .composer-shell [data-testid="stAudioInput"] button {
-    border-radius: 12px !important;
+    border-radius: 14px !important;
+    width: 40px !important;
+    height: 40px !important;
+    min-width: 40px !important;
+    padding: 0 !important;
+    margin: 0 auto !important;
 }
 
 .send-btn button {
-    min-width: 44px !important;
-    width: 44px !important;
-    height: 44px !important;
+    min-width: 46px !important;
+    width: 46px !important;
+    height: 46px !important;
     padding: 0 !important;
     border-radius: 999px !important;
     font-size: 18px !important;
     line-height: 1 !important;
+    background: linear-gradient(135deg, #0f6cbd 0%, #2f88d5 100%) !important;
+    color: white !important;
+    border: none !important;
+    box-shadow: 0 8px 20px rgba(15, 108, 189, 0.18) !important;
+}
+
+.send-btn button:hover {
+    background: linear-gradient(135deg, #0a5a9f 0%, #0f6cbd 100%) !important;
 }
 
 [data-testid="stProgressBar"] > div {
@@ -2446,13 +2461,22 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
     # ── Options ─────────────────────────────────────────────────
     if stype == "options":
         with composer_col:
-            st.markdown('<div class="composer-shell"><div class="composer-title">Your reply</div>', unsafe_allow_html=True)
+            st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
             dropdown_key = f"dropdown_{topic_key}_{sid}"
             dropdown_options = ["Select an option..."] + step["opts"]
             previous_dropdown = prev_answer if prev_answer in step["opts"] else "Select an option..."
             if dropdown_key not in st.session_state:
                 st.session_state[dropdown_key] = previous_dropdown
-            col_text, col_send, col_select, col_voice = st.columns([4.0, 0.65, 1.9, 0.75])
+            st.markdown('<div class="composer-subtle">Reply</div>', unsafe_allow_html=True)
+            utility_left, utility_right = st.columns([2.3, 1.0])
+            with utility_right:
+                selected_option = st.selectbox(
+                    "Quick option",
+                    dropdown_options,
+                    key=dropdown_key,
+                    label_visibility="collapsed",
+                )
+            col_text, col_send, col_voice = st.columns([4.5, 0.8, 0.75])
 
             with col_text:
                 user_text = st.text_input(
@@ -2466,14 +2490,6 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
                 st.markdown('<div class="send-btn">', unsafe_allow_html=True)
                 send_clicked = st.button("➤", key=f"send_{topic_key}_{sid}", use_container_width=True)
                 st.markdown('</div>', unsafe_allow_html=True)
-
-            with col_select:
-                selected_option = st.selectbox(
-                    "Quick option",
-                    dropdown_options,
-                    key=dropdown_key,
-                    label_visibility="collapsed",
-                )
 
             with col_voice:
                 voice_text = voice_widget(f"{topic_key}_{sid}_opt", label="Mic")
@@ -2500,7 +2516,8 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
     # ── Multi-select ─────────────────────────────────────────────
     elif stype == "multi_select":
         with composer_col:
-            st.markdown('<div class="composer-shell"><div class="composer-title">Your reply</div>', unsafe_allow_html=True)
+            st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
+            st.markdown('<div class="composer-subtle">Reply</div>', unsafe_allow_html=True)
             safe_prev = (
                 [v for v in prev_answer if v in step["opts"]]
                 if isinstance(prev_answer, list) else []
@@ -2522,7 +2539,8 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
     # ── Number ───────────────────────────────────────────────────
     elif stype == "number":
         with composer_col:
-            st.markdown('<div class="composer-shell"><div class="composer-title">Your reply</div>', unsafe_allow_html=True)
+            st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
+            st.markdown('<div class="composer-subtle">Reply</div>', unsafe_allow_html=True)
             if prev_answer is not None:
                 try:
                     num_default = float(prev_answer)
@@ -2560,7 +2578,8 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
             st.session_state[f"{widget_key}_voice_sync"] = transcript
 
         with composer_col:
-            st.markdown('<div class="composer-shell"><div class="composer-title">Your reply</div>', unsafe_allow_html=True)
+            st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
+            st.markdown('<div class="composer-subtle">Reply</div>', unsafe_allow_html=True)
             col_text, col_send, col_voice = st.columns([4.4, 0.65, 0.75])
             with col_text:
                 st.text_area(
@@ -2747,7 +2766,8 @@ def render_topic_detail(topic_label: str, topic_key: str):
             render_active_question(prompt_question, "Clarifying question")
 
         with composer_col:
-            st.markdown('<div class="composer-shell"><div class="composer-title">Your reply</div>', unsafe_allow_html=True)
+            st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
+            st.markdown('<div class="composer-subtle">Reply</div>', unsafe_allow_html=True)
             col_text, col_send, col_voice = st.columns([4.4, 0.65, 0.75])
             with col_text:
                 st.text_area(
