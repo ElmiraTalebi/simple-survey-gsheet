@@ -73,6 +73,28 @@ def _is_redundant_followup(original_question: str, answer: str, followup_questio
     return False
 
 
+def _is_semantically_redundant_question(text_a: str, text_b: str) -> bool:
+    a = _norm_text(text_a)
+    b = _norm_text(text_b)
+    if not a or not b:
+        return False
+    if a == b or a in b or b in a:
+        return True
+
+    stop = {
+        "are", "you", "having", "have", "had", "any", "right", "now", "can",
+        "could", "tell", "me", "about", "before", "please", "noticed", "notice",
+        "your", "the", "do", "did", "is", "it", "feels", "feel",
+    }
+    a_words = {w for w in a.split() if w not in stop}
+    b_words = {w for w in b.split() if w not in stop}
+    if not a_words or not b_words:
+        return False
+    overlap = len(a_words & b_words)
+    smallest = min(len(a_words), len(b_words))
+    return overlap >= 2 and overlap >= smallest - 1
+
+
 def _coerce_structured_answer(topic_key: str, step: dict, answer: Any, current_data: dict) -> Any:
     if not isinstance(answer, str):
         return answer
@@ -2041,6 +2063,8 @@ def _append_next_question(
     assistant_message: str = "",
 ):
     message = assistant_message.strip()
+    if message and next_step and _is_semantically_redundant_question(message, next_step["text"]):
+        message = ""
     if message:
         state["chat"].append({"role": "assistant", "content": message})
 
