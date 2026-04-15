@@ -2448,20 +2448,12 @@ def handle_answer(topic_key: str, step: dict, answer, source: str = "structured"
 
 
 # ══════════════════════════════════════════════════════════════════
-# INPUT RENDERING  (accepts prev_answer for pre-filling)
+# INPUT RENDERING
 # ══════════════════════════════════════════════════════════════════
-
-def _fmt_prev(val) -> str:
-    """Format a previous answer value for display."""
-    if val is None:
-        return ""
-    if isinstance(val, list):
-        return ", ".join(str(v) for v in val)
-    return str(val)
 
 
 def render_input(topic_key: str, step: dict, prev_answer=None):
-    """Render the appropriate input widget, pre-filled with prev_answer where possible."""
+    """Render the appropriate input widget for the current question."""
     stype = step["type"]
     sid   = step["id"]
 
@@ -2475,9 +2467,8 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
             st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
             dropdown_key = f"dropdown_{topic_key}_{sid}"
             dropdown_options = ["Select an option..."] + step["opts"]
-            previous_dropdown = prev_answer if prev_answer in step["opts"] else "Select an option..."
             if dropdown_key not in st.session_state:
-                st.session_state[dropdown_key] = previous_dropdown
+                st.session_state[dropdown_key] = "Select an option..."
             utility_left, utility_right = st.columns([2.3, 1.0])
             with utility_right:
                 selected_option = st.selectbox(
@@ -2522,14 +2513,10 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
     elif stype == "multi_select":
         with composer_col:
             st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
-            safe_prev = (
-                [v for v in prev_answer if v in step["opts"]]
-                if isinstance(prev_answer, list) else []
-            )
             chosen = st.multiselect(
                 "Select all that apply:",
                 step["opts"],
-                default=safe_prev,
+                default=[],
                 key=f"ms_{topic_key}_{sid}",
                 label_visibility="collapsed",
             )
@@ -2544,20 +2531,11 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
     elif stype == "number":
         with composer_col:
             st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
-            if prev_answer is not None:
-                try:
-                    num_default = float(prev_answer)
-                    num_default = max(float(step["min_v"]), min(float(step["max_v"]), num_default))
-                except (TypeError, ValueError):
-                    num_default = float(step["default_v"])
-            else:
-                num_default = float(step["default_v"])
-
             val = st.number_input(
                 "Enter value:",
                 min_value=float(step["min_v"]),
                 max_value=float(step["max_v"]),
-                value=num_default,
+                value=float(step["default_v"]),
                 step=1.0,
                 key=f"num_{topic_key}_{sid}",
                 label_visibility="collapsed",
@@ -2572,11 +2550,10 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
         widget_key     = f"ft_{topic_key}_{sid}"
         submit_key     = f"{widget_key}_submitted"
 
-        # Priority for pre-fill: voice transcript > previous answer > empty
+        # Priority for pre-fill: voice transcript > empty
         transcript = st.session_state.get(transcript_key, "")
         if widget_key not in st.session_state:
-            prev_str    = str(prev_answer) if prev_answer is not None else ""
-            st.session_state[widget_key] = transcript or prev_str
+            st.session_state[widget_key] = transcript or ""
         elif transcript and transcript != st.session_state.get(f"{widget_key}_voice_sync"):
             st.session_state[widget_key] = transcript
             st.session_state[f"{widget_key}_voice_sync"] = transcript
