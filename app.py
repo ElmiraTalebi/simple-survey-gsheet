@@ -794,29 +794,49 @@ div[data-baseweb="select"] > div {
 }
 
 .composer-shell [data-testid="stAudioInput"] {
-    background: #f7fbfe;
-    border: 1px solid #d7e4ee;
-    border-radius: 18px;
+    background: transparent;
+    border: none;
+    border-radius: 999px;
     min-height: 46px;
+    width: 46px;
+    min-width: 46px;
+    max-width: 46px;
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 0 2px;
-    max-width: 54px;
+    padding: 0;
     margin-left: auto;
 }
 
 .composer-shell [data-testid="stAudioInput"] > div {
     width: 100%;
+    display: flex;
+    justify-content: center;
+    align-items: center;
 }
 
 .composer-shell [data-testid="stAudioInput"] button {
-    border-radius: 14px !important;
-    width: 40px !important;
-    height: 40px !important;
-    min-width: 40px !important;
+    border-radius: 999px !important;
+    width: 46px !important;
+    height: 46px !important;
+    min-width: 46px !important;
     padding: 0 !important;
     margin: 0 auto !important;
+    border: 1px solid #d7e4ee !important;
+    background: linear-gradient(180deg, #ffffff 0%, #f5f9fd 100%) !important;
+    box-shadow: 0 8px 18px rgba(23, 50, 74, 0.08) !important;
+}
+
+.composer-shell [data-testid="stAudioInput"] button:hover {
+    border-color: #bed4e7 !important;
+    background: #ffffff !important;
+    box-shadow: 0 10px 20px rgba(15, 108, 189, 0.10) !important;
+}
+
+.composer-shell [data-testid="stAudioInput"] button svg {
+    width: 17px !important;
+    height: 17px !important;
+    color: #0f6cbd !important;
 }
 
 
