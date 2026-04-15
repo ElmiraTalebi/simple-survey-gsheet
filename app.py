@@ -206,6 +206,29 @@ def interpret_user_input_with_options(step, user_input):
         return user_input
 
 
+def parse_multi_select_typed_input(step: dict, user_input: str):
+    if not user_input.strip():
+        return []
+
+    lowered_map = {opt.lower(): opt for opt in step.get("opts", [])}
+    parts = [p.strip() for p in re.split(r",|/|;|\n", user_input) if p.strip()]
+    resolved = []
+    for part in parts:
+        match = lowered_map.get(part.lower())
+        if match:
+            resolved.append(match)
+        else:
+            interpreted = interpret_user_input_with_options(step, part)
+            if interpreted in step.get("opts", []):
+                resolved.append(interpreted)
+
+    deduped = []
+    for item in resolved:
+        if item not in deduped:
+            deduped.append(item)
+    return deduped
+
+
 # ══════════════════════════════════════════════════════════════════
 # PAGE CONFIG
 # ══════════════════════════════════════════════════════════════════
@@ -410,6 +433,50 @@ div[data-baseweb="select"] > div {
     border-left: 3px solid #0f6cbd;
     border-right: 3px solid #0f6cbd;
     border-left: none;
+}
+
+.chat-row {
+    display: flex !important;
+    width: 100% !important;
+    margin-bottom: 10px;
+    align-items: flex-start;
+}
+
+.chat-row.assistant {
+    justify-content: flex-start !important;
+    padding-right: 24%;
+}
+
+.chat-row.user {
+    justify-content: flex-end !important;
+    padding-left: 24%;
+}
+
+.chat-bubble {
+    display: inline-block;
+    width: auto !important;
+    max-width: min(72%, 680px);
+    border-radius: 16px;
+    padding: 0.8rem 0.95rem;
+    border: 1px solid rgba(215, 228, 239, 0.9);
+    background: #ffffff;
+    line-height: 1.65;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.chat-row.assistant .chat-bubble {
+    margin-left: 0 !important;
+    margin-right: auto !important;
+    border-left: 3px solid #b7d5eb;
+}
+
+.chat-row.user .chat-bubble {
+    margin-left: auto !important;
+    margin-right: 0 !important;
+    background: #f8fbfe;
+    border-left: none;
+    border-right: 3px solid #0f6cbd;
 }
 
 /* ── Topic status pills ── */
@@ -701,18 +768,6 @@ div[data-baseweb="select"] > div {
 
 
 
-def render_assistant_chip():
-    st.markdown("""
-    <div class="assistant-chip">
-        <div class="avatar">👩‍⚕️</div>
-        <div>
-            <div class="name">Nurse Assistant</div>
-            <div class="role">Head &amp; Neck Oncology Care Team</div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-
 def render_memory_banner(message: str):
     st.markdown(f'<div class="memory-banner">📋 {message}</div>', unsafe_allow_html=True)
 
@@ -745,6 +800,15 @@ def _append_assistant_message(state: dict, text: str):
     if state["chat"] and state["chat"][-1]["role"] == "assistant" and state["chat"][-1]["content"].strip() == text:
         return
     state["chat"].append({"role": "assistant", "content": text})
+
+
+def render_chat_bubble(role: str, content: str):
+    safe = _html.escape(content or "").replace("\n", "<br>")
+    role_cls = "user" if role == "user" else "assistant"
+    st.markdown(
+        f'<div class="chat-row {role_cls}"><div class="chat-bubble">{safe}</div></div>',
+        unsafe_allow_html=True,
+    )
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -1714,6 +1778,12 @@ FLOWS = {
     "other":     FLOW_OTHER,
 }
 
+QUESTION_TYPE_BY_ID = {
+    step["id"]: step.get("type", "options")
+    for flow in FLOWS.values()
+    for step in flow
+}
+
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -2106,6 +2176,7 @@ def _checkin_summary_html(topic_key: str, data: dict) -> str:
         val = data.get(field_id)
         if val is None:
             continue
+        field_type = QUESTION_TYPE_BY_ID.get(field_id, "options")
         if isinstance(val, list):
             val_str = ", ".join(str(v) for v in val)
         else:
@@ -2116,13 +2187,19 @@ def _checkin_summary_html(topic_key: str, data: dict) -> str:
         if len(val_str) > 35:
             val_str = val_str[:32] + "…"
 
+        is_option_value = field_type in {"options", "multi_select"}
+        chip_bg = "#fff7ed" if is_option_value else "#f4f8ff"
+        chip_border = "#fdba74" if is_option_value else "#d0e0f8"
+        label_color = "#9a6a1a" if is_option_value else "#8fa8c8"
+        value_color = "#c2410c" if is_option_value else "#1e3a5f"
+
         chips.append(
             f'<div style="display:inline-flex;flex-direction:column;'
-            f'background:#f4f8ff;border:1px solid #d0e0f8;'
+            f'background:{chip_bg};border:1px solid {chip_border};'
             f'border-radius:10px;padding:5px 13px 6px 13px;'
-            f'min-width:70px;max-width:200px;">'            f'<span style="font-size:10px;color:#8fa8c8;font-weight:600;'
+            f'min-width:70px;max-width:200px;">'            f'<span style="font-size:10px;color:{label_color};font-weight:600;'
             f'text-transform:uppercase;letter-spacing:0.4px;'
-            f'margin-bottom:2px;">{_html.escape(label)}</span>'            f'<span style="font-size:13px;color:#1e3a5f;font-weight:600;'
+            f'margin-bottom:2px;">{_html.escape(label)}</span>'            f'<span style="font-size:13px;color:{value_color};font-weight:700;'
             f'line-height:1.3;">{_html.escape(val_str)}</span>'            f'</div>'
         )
 
@@ -2513,35 +2590,83 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
     elif stype == "multi_select":
         with composer_col:
             st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
-            chosen = st.multiselect(
-                "Select all that apply:",
-                step["opts"],
-                default=[],
-                key=f"ms_{topic_key}_{sid}",
-                label_visibility="collapsed",
-            )
-            if st.button("Send ✓", key=f"ms_submit_{topic_key}_{sid}"):
-                if chosen:
-                    handle_answer(topic_key, step, chosen, source="structured")
+            dropdown_key = f"dropdown_{topic_key}_{sid}"
+            dropdown_options = ["Select an option..."] + step["opts"]
+            if dropdown_key not in st.session_state:
+                st.session_state[dropdown_key] = "Select an option..."
+            utility_left, utility_right = st.columns([2.3, 1.0])
+            with utility_right:
+                selected_option = st.selectbox(
+                    "Quick option",
+                    dropdown_options,
+                    key=dropdown_key,
+                    label_visibility="collapsed",
+                )
+            col_text, col_voice = st.columns([5.2, 0.8])
+            text_key = f"text_{topic_key}_{sid}"
+            submit_key = f"{text_key}_submitted"
+            with col_text:
+                user_text = st.text_input(
+                    "Reply",
+                    key=text_key,
+                    label_visibility="collapsed",
+                    placeholder="Type one or more answers, separated by commas..."
+                )
+            with col_voice:
+                voice_text = voice_widget(f"{topic_key}_{sid}_multi", label="Mic")
+
+            if selected_option != "Select an option..." and st.session_state.get(f"{dropdown_key}_submitted") != selected_option:
+                st.session_state[f"{dropdown_key}_submitted"] = selected_option
+                handle_answer(topic_key, step, [selected_option], source="structured")
+
+            if user_text and st.session_state.get(submit_key) != user_text:
+                st.session_state[submit_key] = user_text
+                parsed = parse_multi_select_typed_input(step, user_text)
+                if parsed:
+                    handle_answer(topic_key, step, parsed, source="typed")
                 else:
-                    st.warning("Please select at least one option, or choose 'None of these'.")
+                    st.warning("Please enter a valid option, or separate multiple options with commas.")
+
+            voice_submit_key = f"voice_{topic_key}_{sid}_submitted"
+            if voice_text and st.session_state.get(voice_submit_key) != voice_text:
+                st.session_state[voice_submit_key] = voice_text
+                parsed = parse_multi_select_typed_input(step, voice_text)
+                if parsed:
+                    handle_answer(topic_key, step, parsed, source="voice")
+                else:
+                    st.warning("Please say or enter one of the listed options.")
             st.markdown('</div>', unsafe_allow_html=True)
 
     # ── Number ───────────────────────────────────────────────────
     elif stype == "number":
         with composer_col:
             st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
-            val = st.number_input(
-                "Enter value:",
-                min_value=float(step["min_v"]),
-                max_value=float(step["max_v"]),
-                value=float(step["default_v"]),
-                step=1.0,
-                key=f"num_{topic_key}_{sid}",
-                label_visibility="collapsed",
-            )
-            if st.button("Send ✓", key=f"num_submit_{topic_key}_{sid}"):
-                handle_answer(topic_key, step, int(val), source="structured")
+            text_key = f"text_{topic_key}_{sid}"
+            submit_key = f"{text_key}_submitted"
+            if text_key not in st.session_state:
+                st.session_state[text_key] = ""
+            col_text, col_voice = st.columns([5.2, 0.8])
+            with col_text:
+                user_text = st.text_input(
+                    "Reply",
+                    key=text_key,
+                    label_visibility="collapsed",
+                    placeholder=f"Enter a number ({int(step['min_v'])}-{int(step['max_v'])})"
+                )
+            with col_voice:
+                voice_text = voice_widget(f"{topic_key}_{sid}_num", label="Mic")
+
+            candidate = user_text or voice_text or ""
+            if candidate and st.session_state.get(submit_key) != candidate:
+                st.session_state[submit_key] = candidate
+                try:
+                    val = int(float(candidate))
+                    if val < step["min_v"] or val > step["max_v"]:
+                        st.warning(f"Please enter a value between {int(step['min_v'])} and {int(step['max_v'])}.")
+                    else:
+                        handle_answer(topic_key, step, val, source="typed")
+                except ValueError:
+                    st.warning("Please enter a number.")
             st.markdown('</div>', unsafe_allow_html=True)
 
     # ── Free text ────────────────────────────────────────────────
@@ -2615,9 +2740,7 @@ def render_freeform_chat():
     chat_container = st.container(border=False)
     with chat_container:
         for msg in st.session_state.freeform_chat:
-            avatar = "👩‍⚕️" if msg["role"] == "assistant" else "🧑‍💼"
-            with st.chat_message(msg["role"], avatar=avatar):
-                st.write(msg["content"])
+            render_chat_bubble(msg["role"], msg["content"])
 
     # ── Input ────────────────────────────────────────────────────
     user_input = st.chat_input("Type here, or use the voice button below…",
@@ -2680,7 +2803,8 @@ def render_topic_detail(topic_label: str, topic_key: str):
         if last_data:
             chips_html = _checkin_summary_html(topic_key, last_data)
             if chips_html:
-                with st.expander("Last check-in summary", expanded=False):
+                with st.expander("Last visit summary", expanded=False):
+                    st.caption("These answers are from your last visit. You can change any of them for this visit.")
                     st.markdown(chips_html, unsafe_allow_html=True)
         else:
             st.caption("No information from your last visit was recorded for this section.")
@@ -2707,9 +2831,7 @@ def render_topic_detail(topic_label: str, topic_key: str):
     if state["chat"]:
         with st.container(border=False):
             for msg in state["chat"]:
-                avatar = "👩‍⚕️" if msg["role"] == "assistant" else "🧑‍💼"
-                with st.chat_message(msg["role"], avatar=avatar):
-                    st.write(msg["content"])
+                render_chat_bubble(msg["role"], msg["content"])
 
     # ── Completed ────────────────────────────────────────────────
     if state["status"] == "completed":
