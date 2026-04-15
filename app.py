@@ -587,8 +587,8 @@ div[data-baseweb="select"] > div {
 .composer-shell {
     background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
     border: 1px solid #d8e3ec;
-    border-radius: 20px;
-    padding: 12px;
+    border-radius: 18px;
+    padding: 12px 12px 10px 12px;
     box-shadow: 0 8px 20px rgba(23, 50, 74, 0.04);
 }
 
@@ -601,18 +601,27 @@ div[data-baseweb="select"] > div {
     margin-bottom: 8px;
 }
 
-.telegram-hint {
-    font-size: 12px;
-    color: #7a8b9a;
-    margin: 2px 0 10px 0;
+.suggestion-label {
+    font-size: 11px;
+    color: #89a0b3;
+    margin: 0 0 8px 2px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-weight: 700;
+}
+
+.composer-row {
+    display: flex;
+    align-items: flex-end;
+    gap: 10px;
 }
 
 [data-testid="stAudioInput"] {
-    background: transparent;
-    border: none;
-    border-radius: 0;
-    padding: 0;
-    margin: 4px 0 8px 0;
+    background: #f6fafc;
+    border: 1px solid #d9e6ef;
+    border-radius: 16px;
+    padding: 8px 10px 2px 10px;
+    margin: 0;
 }
 
 .stTextInput input {
@@ -625,6 +634,15 @@ div[data-baseweb="select"] > div {
 
 [data-testid="stAudioInput"] audio {
     border-radius: 14px;
+}
+
+.composer-shell div[data-testid="stButton"] > button {
+    width: auto !important;
+    min-width: 0 !important;
+    padding: 0.46rem 0.9rem !important;
+    border-radius: 999px !important;
+    font-size: 13px !important;
+    box-shadow: none !important;
 }
 
 [data-testid="stProgressBar"] > div {
@@ -762,14 +780,14 @@ def _transcribe(audio_bytes: bytes) -> str:
         return ""
 
 
-def voice_widget(key_suffix: str) -> Optional[str]:
+def voice_widget(key_suffix: str, label: str = "Speak your answer") -> Optional[str]:
     """Renders voice recorder. Returns transcript string if new audio was processed."""
     transcript_key = f"_vt_{key_suffix}"
     hash_key = f"_vh_{key_suffix}"
     if hash_key not in st.session_state:
         st.session_state[hash_key] = None
 
-    audio = st.audio_input("🎤 Speak your answer", key=f"_vrec_{key_suffix}")
+    audio = st.audio_input(label, key=f"_vrec_{key_suffix}")
     if not audio:
         return st.session_state.get(transcript_key)
 
@@ -2390,14 +2408,14 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
     if stype == "options":
         with composer_col:
             st.markdown('<div class="composer-shell"><div class="composer-title">Your reply</div>', unsafe_allow_html=True)
-            cols = st.columns(2 if len(step["opts"]) <= 4 else 1)
+            st.markdown('<div class="suggestion-label">Quick replies</div>', unsafe_allow_html=True)
+            cols = st.columns(max(1, min(len(step["opts"]), 4)))
 
             for i, opt in enumerate(step["opts"]):
                 with cols[i % len(cols)]:
-                    if st.button(opt, key=f"opt_{topic_key}_{sid}_{i}"):
+                    if st.button(opt, key=f"opt_{topic_key}_{sid}_{i}", use_container_width=False):
                         handle_answer(topic_key, step, opt, source="structured")
 
-            st.markdown('<div class="telegram-hint">Or send a typed or voice reply</div>', unsafe_allow_html=True)
             col1, col2 = st.columns([3.8, 1.2])
 
             with col1:
@@ -2409,7 +2427,7 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
                 )
 
             with col2:
-                voice_text = voice_widget(f"{topic_key}_{sid}_opt")
+                voice_text = voice_widget(f"{topic_key}_{sid}_opt", label="Mic")
 
             submitted_key = f"text_{topic_key}_{sid}_submitted"
 
@@ -2500,7 +2518,7 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
                     label_visibility="collapsed",
                 )
             with col_voice:
-                voice_widget(f"{topic_key}_{sid}")
+                voice_widget(f"{topic_key}_{sid}", label="Mic")
 
             if st.button("Send ✓", key=f"ft_submit_{topic_key}_{sid}"):
                 text = st.session_state.get(widget_key, "").strip()
@@ -2673,18 +2691,20 @@ def render_topic_detail(topic_label: str, topic_key: str):
 
         with composer_col:
             st.markdown('<div class="composer-shell"><div class="composer-title">Your reply</div>', unsafe_allow_html=True)
-            pending_voice = voice_widget(f"pending_{topic_key}_{pending_suffix}")
-            if pending_voice and pending_voice != st.session_state.get(f"{pending_key}_voice_sync"):
-                st.session_state[pending_key] = pending_voice
-                st.session_state[f"{pending_key}_voice_sync"] = pending_voice
-
-            st.text_area(
-                "Reply",
-                key=pending_key,
-                placeholder="Type or speak your answer here...",
-                height=100,
-                label_visibility="collapsed",
-            )
+            col_text, col_voice = st.columns([3.8, 1.2])
+            with col_text:
+                st.text_area(
+                    "Reply",
+                    key=pending_key,
+                    placeholder="Type or speak your answer here...",
+                    height=100,
+                    label_visibility="collapsed",
+                )
+            with col_voice:
+                pending_voice = voice_widget(f"pending_{topic_key}_{pending_suffix}", label="Mic")
+                if pending_voice and pending_voice != st.session_state.get(f"{pending_key}_voice_sync"):
+                    st.session_state[pending_key] = pending_voice
+                    st.session_state[f"{pending_key}_voice_sync"] = pending_voice
 
             if st.button("Send ✓", key=f"pending_submit_{topic_key}"):
                 reply = st.session_state.get(pending_key, "").strip()
