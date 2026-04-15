@@ -773,12 +773,20 @@ div[data-baseweb="select"] > div {
 .composer-shell div[data-baseweb="select"] > div {
     border-radius: 16px !important;
     min-height: 46px !important;
+    height: 46px !important;
     background: #f7fbfe !important;
     border: 1px solid #d7e4ee !important;
+    display: flex !important;
+    align-items: center !important;
 }
 
 .composer-shell [data-testid="stTextInput"] {
     margin-bottom: 0 !important;
+}
+
+.composer-shell [data-testid="stTextInput"] input {
+    min-height: 46px !important;
+    height: 46px !important;
 }
 
 .composer-shell [data-testid="stSelectbox"] {
@@ -2672,15 +2680,7 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
             dropdown_options = ["Select an option..."] + step["opts"]
             if dropdown_key not in st.session_state:
                 st.session_state[dropdown_key] = "Select an option..."
-            utility_left, utility_right = st.columns([2.3, 1.0])
-            with utility_right:
-                selected_option = st.selectbox(
-                    "Quick option",
-                    dropdown_options,
-                    key=dropdown_key,
-                    label_visibility="collapsed",
-                )
-            col_text, col_voice = st.columns([5.2, 0.8])
+            col_text, col_dropdown, col_voice = st.columns([4.3, 1.7, 0.55])
 
             with col_text:
                 user_text = st.text_input(
@@ -2688,6 +2688,14 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
                     key=f"text_{topic_key}_{sid}",
                     label_visibility="collapsed",
                     placeholder="Type a reply..."
+                )
+
+            with col_dropdown:
+                selected_option = st.selectbox(
+                    "Quick option",
+                    dropdown_options,
+                    key=dropdown_key,
+                    label_visibility="collapsed",
                 )
 
             with col_voice:
@@ -2728,15 +2736,7 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
             dropdown_options = ["Select an option..."] + step["opts"]
             if dropdown_key not in st.session_state:
                 st.session_state[dropdown_key] = "Select an option..."
-            utility_left, utility_right = st.columns([2.3, 1.0])
-            with utility_right:
-                selected_option = st.selectbox(
-                    "Quick option",
-                    dropdown_options,
-                    key=dropdown_key,
-                    label_visibility="collapsed",
-                )
-            col_text, col_voice = st.columns([5.2, 0.8])
+            col_text, col_dropdown, col_voice = st.columns([4.3, 1.7, 0.55])
             text_key = f"text_{topic_key}_{sid}"
             submit_key = f"{text_key}_submitted"
             with col_text:
@@ -2745,6 +2745,13 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
                     key=text_key,
                     label_visibility="collapsed",
                     placeholder="Type one or more answers, separated by commas..."
+                )
+            with col_dropdown:
+                selected_option = st.selectbox(
+                    "Quick option",
+                    dropdown_options,
+                    key=dropdown_key,
+                    label_visibility="collapsed",
                 )
             with col_voice:
                 voice_text = voice_widget(f"{topic_key}_{sid}_multi", label="Mic")
