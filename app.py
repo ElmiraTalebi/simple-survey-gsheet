@@ -2069,12 +2069,18 @@ def _append_next_question(
         state["chat"].append({"role": "assistant", "content": message})
 
 
-def _store_followup_prompt(state: dict, step: dict, question: str):
+def _store_followup_prompt(
+    state: dict,
+    step: dict,
+    question: str,
+    assistant_message: str = "",
+):
     state["waiting_for_followup"] = True
     state["pending_followup"] = {
         "source_step_id": step["id"],
         "question": question,
         "answer_key": f"{step['id']}_llm_followup",
+        "assistant_message": assistant_message.strip(),
     }
 
 
@@ -2087,6 +2093,11 @@ def handle_pending_followup(topic_key: str, answer: str, source: str = "typed"):
         state.pop("pending_followup", None)
         st.rerun()
 
+    prompt_text = pending.get("question", "").strip()
+    prompt_intro = pending.get("assistant_message", "").strip()
+    combined_prompt = "\n\n".join([part for part in [prompt_intro, prompt_text] if part])
+    if combined_prompt:
+        state["chat"].append({"role": "assistant", "content": combined_prompt})
     state["chat"].append({"role": "user", "content": answer})
     state["data"][answer_key] = answer
     state["waiting_for_followup"] = False
@@ -2146,26 +2157,22 @@ def handle_answer(topic_key: str, step: dict, answer, source: str = "structured"
                     turn["mode"] = "continue"
                     turn["follow_up_question"] = ""
                 else:
-                    if turn.get("assistant_message"):
-                        state["chat"].append({
-                            "role": "assistant",
-                            "content": turn["assistant_message"],
-                        })
-                    state["chat"].append({
-                        "role": "assistant",
-                        "content": followup_question,
-                    })
-                    _store_followup_prompt(state, step, followup_question)
+                    _store_followup_prompt(
+                        state,
+                        step,
+                        followup_question,
+                        turn.get("assistant_message", ""),
+                    )
                     st.rerun()
 
             assistant_message = turn.get("assistant_message", "").strip()
 
         if not assistant_message and is_vague and source in {"typed", "voice", "free_text", "followup"}:
-            state["chat"].append({
-                "role": "assistant",
-                "content": _fallback_clarifying_question(step),
-            })
-            _store_followup_prompt(state, step, _fallback_clarifying_question(step))
+            _store_followup_prompt(
+                state,
+                step,
+                _fallback_clarifying_question(step),
+            )
             st.rerun()
 
         if not assistant_message and (len(answer.split()) >= 2 or source in {"typed", "voice", "free_text", "followup"}):
@@ -2485,11 +2492,20 @@ def render_topic_detail(topic_label: str, topic_key: str):
         pending = state.get("pending_followup") or {}
         pending_key = f"pending_followup_{topic_key}"
         pending_voice = voice_widget(f"pending_{topic_key}")
+        prompt_intro = (pending.get("assistant_message") or "").strip()
+        prompt_question = (pending.get("question") or "").strip()
         if pending_key not in st.session_state:
             st.session_state[pending_key] = pending_voice or ""
         elif pending_voice and pending_voice != st.session_state.get(f"{pending_key}_voice_sync"):
             st.session_state[pending_key] = pending_voice
             st.session_state[f"{pending_key}_voice_sync"] = pending_voice
+
+        with st.container(border=False):
+            with st.chat_message("assistant", avatar="👩‍⚕️"):
+                if prompt_intro:
+                    st.write(prompt_intro)
+                if prompt_question:
+                    st.markdown(f"**{prompt_question}**")
 
         st.text_area(
             "Your response:",
