@@ -220,24 +220,29 @@ st.set_page_config(
 # ══════════════════════════════════════════════════════════════════
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap');
 
 :root {
-    --bg1: #f6f9fc;
-    --bg2: #eef4fb;
-    --card: rgba(255,255,255,0.88);
+    --bg1: #f4f8fc;
+    --bg2: #edf4fa;
+    --bg3: #e7f0f8;
+    --card: rgba(255,255,255,0.92);
     --card-solid: #ffffff;
-    --border: #dbe5f1;
-    --border-strong: #c6d5e6;
-    --text: #142033;
-    --muted: #66758a;
-    --primary: #2563eb;
-    --primary-strong: #1d4ed8;
-    --primary-soft: #eff6ff;
-    --success: #0f9f6e;
+    --border: #d7e4ef;
+    --border-strong: #bfd3e4;
+    --text: #17324a;
+    --muted: #65788d;
+    --primary: #0f6cbd;
+    --primary-strong: #0a5a9f;
+    --primary-soft: #eef7ff;
+    --primary-ink: #11456d;
+    --accent: #0d9488;
+    --accent-soft: #ecfdf8;
+    --success: #15803d;
     --success-soft: #ecfdf5;
-    --shadow: 0 10px 30px rgba(15, 23, 42, 0.07);
-    --shadow-sm: 0 6px 18px rgba(15, 23, 42, 0.05);
+    --warning-soft: #fff8e8;
+    --shadow: 0 20px 55px rgba(23, 50, 74, 0.08);
+    --shadow-sm: 0 10px 26px rgba(23, 50, 74, 0.06);
 }
 
 html, body, [class*="css"] {
@@ -247,18 +252,18 @@ html, body, [class*="css"] {
 
 html, body, .stApp {
     background:
-        radial-gradient(circle at top left, rgba(37,99,235,0.08), transparent 28%),
-        radial-gradient(circle at top right, rgba(16,185,129,0.05), transparent 25%),
-        linear-gradient(180deg, var(--bg1) 0%, var(--bg2) 100%);
+        radial-gradient(circle at top left, rgba(15,108,189,0.10), transparent 24%),
+        radial-gradient(circle at top right, rgba(13,148,136,0.08), transparent 26%),
+        linear-gradient(180deg, var(--bg1) 0%, var(--bg2) 58%, var(--bg3) 100%);
 }
 
 /* ── Layout ── */
 .block-container {
-    padding-top: 1rem;
-    padding-bottom: 2rem;
+    padding-top: 1.15rem;
+    padding-bottom: 2.2rem;
     max-width: 1380px;
-    padding-left: 1rem;
-    padding-right: 1rem;
+    padding-left: 1.1rem;
+    padding-right: 1.1rem;
 }
 
 @media (max-width: 768px) {
@@ -270,8 +275,10 @@ html, body, .stApp {
 
 /* ── Sidebar nav ── */
 section[data-testid="stSidebar"] {
-    background: linear-gradient(180deg, #f8fbff 0%, #f1f6fd 100%);
-    border-right: 1px solid #dce5f1;
+    background:
+        radial-gradient(circle at top, rgba(255,255,255,0.20), transparent 35%),
+        linear-gradient(180deg, #123a5b 0%, #163f60 55%, #183b58 100%);
+    border-right: 1px solid rgba(255,255,255,0.08);
 }
 section[data-testid="stSidebar"] .block-container {
     padding-top: 1.2rem;
@@ -280,30 +287,30 @@ section[data-testid="stSidebar"] .block-container {
 /* ── Buttons (main content area) ── */
 .stButton > button {
     width: 100%;
-    border-radius: 14px;
-    padding: 0.65rem 1rem;
-    font-family: 'Inter', sans-serif;
+    border-radius: 16px;
+    padding: 0.72rem 1rem;
+    font-family: 'Manrope', sans-serif;
     font-size: 14px;
-    font-weight: 600;
+    font-weight: 700;
     border: 1px solid var(--border);
-    background: linear-gradient(180deg, #ffffff 0%, #f9fbff 100%);
+    background: linear-gradient(180deg, #ffffff 0%, #f8fbfe 100%);
     color: var(--text);
-    transition: all 0.15s ease;
-    text-align: left !important;
+    transition: all 0.16s ease;
+    text-align: center !important;
     box-shadow: 0 2px 8px rgba(15, 23, 42, 0.03);
 }
 .stButton > button:hover {
-    border-color: #9fbfeb;
+    border-color: #91b7d7;
     background: #ffffff;
     color: #123664;
     transform: translateY(-1px);
-    box-shadow: 0 8px 18px rgba(37, 99, 235, 0.08);
+    box-shadow: 0 12px 24px rgba(15, 108, 189, 0.10);
 }
 .stButton > button[kind="primary"] {
-    background: linear-gradient(135deg, var(--primary) 0%, #3b82f6 100%);
+    background: linear-gradient(135deg, var(--primary) 0%, #2f88d5 100%);
     color: white;
     border: none;
-    box-shadow: 0 12px 24px rgba(37, 99, 235, 0.18);
+    box-shadow: 0 14px 28px rgba(15, 108, 189, 0.22);
 }
 .stButton > button[kind="primary"]:hover {
     background: linear-gradient(135deg, var(--primary-strong) 0%, var(--primary) 100%);
@@ -312,33 +319,35 @@ section[data-testid="stSidebar"] .block-container {
 
 /* ── Sidebar nav buttons ── */
 section[data-testid="stSidebar"] div[data-testid="stButton"] > button {
-    padding: 10px 12px !important;
-    font-size: 12.4px !important;
-    font-weight: 600 !important;
+    padding: 12px 13px !important;
+    font-size: 12.8px !important;
+    font-weight: 700 !important;
     line-height: 1.45 !important;
     min-height: 0 !important;
-    border-radius: 13px !important;
+    border-radius: 16px !important;
     margin-bottom: 6px !important;
     white-space: pre-wrap !important;
     word-break: break-word !important;
     text-align: left !important;
-    color: #173457 !important;
-    border-color: #dbe5f1 !important;
-    background: rgba(255,255,255,0.84) !important;
+    color: #eef7ff !important;
+    border-color: rgba(255,255,255,0.10) !important;
+    background: rgba(255,255,255,0.06) !important;
+    box-shadow: none !important;
 }
 section[data-testid="stSidebar"] div[data-testid="stButton"] > button:hover {
-    border-color: #9ec1ef !important;
-    background: #ffffff !important;
-    color: #173457 !important;
+    border-color: rgba(255,255,255,0.16) !important;
+    background: rgba(255,255,255,0.11) !important;
+    color: #ffffff !important;
 }
 section[data-testid="stSidebar"] div[data-testid="stButton"] > button[kind="primaryFormSubmit"],
 section[data-testid="stSidebar"] div[data-testid="stButton"] > button[kind="primary"] {
-    font-size: 13.5px !important;
+    font-size: 13.4px !important;
     font-weight: 700 !important;
-    padding: 11px 14px !important;
+    padding: 12px 14px !important;
     white-space: normal !important;
     color: white !important;
     margin-top: 4px !important;
+    background: linear-gradient(135deg, #1184d1 0%, #0f6cbd 100%) !important;
 }
 
 /* ── Inputs ── */
@@ -346,17 +355,45 @@ section[data-testid="stSidebar"] div[data-testid="stButton"] > button[kind="prim
 .stTextArea textarea,
 .stNumberInput input,
 div[data-baseweb="select"] > div {
-    border-radius: 14px !important;
-    border: 1px solid #d6e0ec !important;
+    border-radius: 18px !important;
+    border: 1px solid #cfdeeb !important;
     background: rgba(255,255,255,0.98) !important;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.8) !important;
+}
+.stTextInput input,
+.stTextArea textarea,
+.stNumberInput input {
+    padding: 0.9rem 1rem !important;
+}
+.stTextInput label,
+.stTextArea label,
+.stNumberInput label,
+[data-testid="stAudioInput"] label {
+    font-family: 'Manrope', sans-serif !important;
+    font-weight: 700 !important;
+    color: var(--primary-ink) !important;
 }
 
 /* ── Chat message wrappers ── */
 [data-testid="stChatMessage"] {
-    border-radius: 16px;
-    margin-bottom: 10px;
-    padding: 0;
+    border-radius: 22px;
+    margin-bottom: 12px;
+    padding: 0.15rem 0;
     background: transparent;
+}
+[data-testid="stChatMessageContent"] {
+    border-radius: 22px;
+    padding: 0.95rem 1.05rem !important;
+    border: 1px solid rgba(209, 223, 234, 0.9);
+    box-shadow: var(--shadow-sm);
+    background: linear-gradient(180deg, rgba(255,255,255,0.96) 0%, rgba(248,251,254,0.94) 100%);
+}
+[data-testid="stChatMessage"]:has([aria-label="assistant"]) [data-testid="stChatMessageContent"] {
+    border-left: 5px solid #7bc4f1;
+}
+[data-testid="stChatMessage"]:has([aria-label="user"]) [data-testid="stChatMessageContent"] {
+    background: linear-gradient(180deg, #f4fbff 0%, #eef8ff 100%);
+    border-left: 5px solid #0f6cbd;
 }
 
 /* ── Topic status pills ── */
@@ -376,9 +413,9 @@ div[data-baseweb="select"] > div {
 .card {
     background: var(--card);
     backdrop-filter: blur(10px);
-    border: 1px solid rgba(255,255,255,0.6);
-    border-radius: 20px;
-    padding: 20px 24px;
+    border: 1px solid rgba(255,255,255,0.7);
+    border-radius: 24px;
+    padding: 22px 24px;
     margin-bottom: 16px;
     box-shadow: var(--shadow);
 }
@@ -386,8 +423,8 @@ div[data-baseweb="select"] > div {
 .soft-card {
     background: #ffffff;
     border: 1px solid var(--border);
-    border-radius: 18px;
-    padding: 16px 18px;
+    border-radius: 20px;
+    padding: 18px 18px;
     box-shadow: var(--shadow-sm);
 }
 
@@ -403,40 +440,41 @@ div[data-baseweb="select"] > div {
     display: flex;
     align-items: center;
     gap: 12px;
-    padding: 12px 14px;
-    background: linear-gradient(135deg, #ffffff 0%, #f7fbff 100%);
-    border: 1px solid #dbe8f7;
-    border-radius: 18px;
+    padding: 14px 16px;
+    background: linear-gradient(135deg, #ffffff 0%, #f5fbff 100%);
+    border: 1px solid #d4e4f1;
+    border-radius: 22px;
     box-shadow: var(--shadow-sm);
-    margin-bottom: 12px;
+    margin-bottom: 14px;
 }
 .assistant-chip .avatar {
-    width: 42px;
-    height: 42px;
+    width: 46px;
+    height: 46px;
     border-radius: 50%;
     display: flex;
     align-items: center;
     justify-content: center;
-    background: linear-gradient(135deg, #dbeafe, #e0f2fe);
+    background: linear-gradient(135deg, #d5ecfb, #edf8ff);
     font-size: 22px;
 }
 .assistant-chip .name {
+    font-family: 'Manrope', sans-serif;
     font-size: 14px;
-    font-weight: 700;
-    color: #0f172a;
+    font-weight: 800;
+    color: #113553;
     margin-bottom: 2px;
 }
 .assistant-chip .role {
     font-size: 12px;
-    color: #64748b;
+    color: #678196;
 }
 
 .memory-banner {
-    background: linear-gradient(135deg, #eff6ff 0%, #f8fbff 100%);
-    border: 1px solid #cfe0f6;
-    border-radius: 16px;
+    background: linear-gradient(135deg, #edf7ff 0%, #f9fcff 100%);
+    border: 1px solid #cadeef;
+    border-radius: 18px;
     padding: 12px 14px;
-    color: #1e3a5f;
+    color: #23486f;
     font-size: 13px;
     margin-bottom: 12px;
 }
@@ -460,37 +498,113 @@ div[data-baseweb="select"] > div {
     font-weight: 600;
 }
 .completion-badge {
-    background: linear-gradient(135deg, #10b981, #2563eb);
-    border-radius: 16px;
-    padding: 16px 20px;
+    background: linear-gradient(135deg, #0f9f6e, #0f6cbd);
+    border-radius: 20px;
+    padding: 18px 20px;
     color: white;
     font-weight: 700;
     text-align: center;
     margin-bottom: 12px;
-    box-shadow: 0 12px 24px rgba(37, 99, 235, 0.16);
+    box-shadow: 0 14px 28px rgba(15, 108, 189, 0.20);
 }
 
 /* ── Welcome / login ── */
 .welcome-card {
     background:
-        radial-gradient(circle at top right, rgba(59,130,246,0.12), transparent 30%),
-        linear-gradient(135deg, rgba(255,255,255,0.95) 0%, rgba(248,251,255,0.98) 100%);
-    border: 1px solid #d9e6f5;
-    border-radius: 26px;
-    padding: 30px 34px;
+        radial-gradient(circle at top right, rgba(15,108,189,0.12), transparent 30%),
+        linear-gradient(135deg, rgba(255,255,255,0.96) 0%, rgba(246,250,254,0.99) 100%);
+    border: 1px solid #d6e4f0;
+    border-radius: 30px;
+    padding: 32px 36px;
     max-width: 720px;
     margin: 56px auto 24px auto;
     box-shadow: var(--shadow);
 }
 
 .subtle-note {
-    background: #f8fbff;
-    border: 1px dashed #ccd9ea;
-    border-radius: 14px;
+    background: #f7fbfe;
+    border: 1px dashed #c6d8e7;
+    border-radius: 16px;
     padding: 10px 12px;
     font-size: 12.5px;
     color: #6b7d92;
     margin-top: 8px;
+}
+
+.topic-panel {
+    background:
+        linear-gradient(180deg, rgba(255,255,255,0.96) 0%, rgba(249,252,254,0.96) 100%);
+    border: 1px solid #d7e3ee;
+    border-radius: 28px;
+    padding: 20px 20px 18px 20px;
+    box-shadow: var(--shadow);
+}
+
+.section-kicker {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    border-radius: 999px;
+    padding: 6px 12px;
+    background: #edf7ff;
+    border: 1px solid #cfe2f2;
+    color: #0f5d93;
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-bottom: 10px;
+}
+
+.active-question {
+    background: linear-gradient(180deg, #f8fcff 0%, #f1f8fd 100%);
+    border: 1px solid #d3e4f0;
+    border-radius: 24px;
+    padding: 16px 18px;
+    margin: 4px 0 12px 0;
+    box-shadow: var(--shadow-sm);
+}
+
+.active-question .label {
+    font-size: 11px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #5c7f9b;
+    margin-bottom: 8px;
+}
+
+.active-question .text {
+    font-family: 'Manrope', sans-serif;
+    font-size: 20px;
+    line-height: 1.45;
+    font-weight: 700;
+    color: #153652;
+}
+
+.reply-shell {
+    background: linear-gradient(180deg, rgba(255,255,255,0.96) 0%, rgba(250,252,254,0.96) 100%);
+    border: 1px solid #d8e3ec;
+    border-radius: 24px;
+    padding: 14px 14px 10px 14px;
+    box-shadow: var(--shadow-sm);
+    margin-top: 8px;
+}
+
+[data-testid="stAudioInput"] {
+    background: linear-gradient(180deg, #fbfdff 0%, #f4f9fd 100%);
+    border: 1px solid #d9e5ef;
+    border-radius: 20px;
+    padding: 10px 12px 4px 12px;
+    margin: 8px 0 10px 0;
+}
+
+[data-testid="stProgressBar"] > div {
+    border-radius: 999px !important;
+    background: rgba(15,108,189,0.12) !important;
+}
+[data-testid="stProgressBar"] div[role="progressbar"] {
+    background: linear-gradient(90deg, #0d9488 0%, #0f6cbd 100%) !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -512,6 +626,20 @@ def render_assistant_chip():
 
 def render_memory_banner(message: str):
     st.markdown(f'<div class="memory-banner">📋 {message}</div>', unsafe_allow_html=True)
+
+
+def render_section_kicker(text: str):
+    st.markdown(f'<div class="section-kicker">{_html.escape(text)}</div>', unsafe_allow_html=True)
+
+
+def render_active_question(question: str, label: str = "Current question"):
+    st.markdown(
+        '<div class="active-question">'
+        f'<div class="label">{_html.escape(label)}</div>'
+        f'<div class="text">{_html.escape(question)}</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -2371,7 +2499,9 @@ def render_freeform_chat():
     })();
     </script>""", height=0)
     render_assistant_chip()
-    st.subheader("💬 Anything else you’d like to share?")
+    st.markdown('<div class="topic-panel">', unsafe_allow_html=True)
+    render_section_kicker("Open Note")
+    st.subheader("Anything else you’d like to share?")
     st.caption(
         "Mention any other symptoms, questions, or concerns you’d like your care team "
         "to know about before your visit."
@@ -2427,6 +2557,7 @@ def render_freeform_chat():
                 {"role": "assistant", "content": reply}
             )
             st.rerun()
+    st.markdown('</div>', unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -2450,6 +2581,7 @@ def render_topic_detail(topic_label: str, topic_key: str):
     has_prev     = st.session_state.has_prev_checkin
 
     render_assistant_chip()
+    st.markdown('<div class="topic-panel">', unsafe_allow_html=True)
 
     # ── Previous check-in summary card ────────────────────────────
     if has_prev:
@@ -2480,6 +2612,7 @@ def render_topic_detail(topic_label: str, topic_key: str):
     answered, applicable = get_topic_progress(topic_key, state["data"])
     col_title, col_prog = st.columns([3, 1])
     with col_title:
+        render_section_kicker("Symptom Review")
         st.subheader(topic_label)
     with col_prog:
         if applicable > 0:
@@ -2507,6 +2640,7 @@ def render_topic_detail(topic_label: str, topic_key: str):
             })
             state["data"].pop("_correction_note", None)
             st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
         return
 
     # ── Current question ─────────────────────────────────────────
@@ -2518,11 +2652,13 @@ def render_topic_detail(topic_label: str, topic_key: str):
         if pending_key not in st.session_state:
             st.session_state[pending_key] = ""
 
-        with st.container(border=False):
+        if prompt_intro:
             with st.chat_message("assistant", avatar="👩‍⚕️"):
-                parts = [part for part in [prompt_intro, prompt_question] if part]
-                st.write("\n\n".join(parts))
+                st.write(prompt_intro)
+        if prompt_question:
+            render_active_question(prompt_question, "Clarifying question")
 
+        st.markdown('<div class="reply-shell">', unsafe_allow_html=True)
         pending_voice = voice_widget(f"pending_{topic_key}")
         if pending_voice and pending_voice != st.session_state.get(f"{pending_key}_voice_sync"):
             st.session_state[pending_key] = pending_voice
@@ -2542,19 +2678,22 @@ def render_topic_detail(topic_label: str, topic_key: str):
                 st.session_state[pending_key] = ""
             else:
                 st.warning("Please enter a response before submitting.")
+        st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
         return
     next_step = get_next_step(topic_key, state["data"])
     if next_step:
         # Look up previous answer for this specific question
         prev_answer = last_data.get(next_step["id"]) if last_data else None
 
-        with st.container(border=False):
-            with st.chat_message("assistant", avatar="👩‍⚕️"):
-                question_text = next_step["text"]
-                if next_step.get("type") == "options":
-                    question_text += " (Choose an option below, or answer in your own words if that fits better.)"
-                st.write(question_text)
-            render_input(topic_key, next_step, prev_answer=prev_answer)
+        question_text = next_step["text"]
+        if next_step.get("type") == "options":
+            question_text += " (Choose an option below, or answer in your own words if that fits better.)"
+        render_active_question(question_text)
+        st.markdown('<div class="reply-shell">', unsafe_allow_html=True)
+        render_input(topic_key, next_step, prev_answer=prev_answer)
+        st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════════════════════════════
