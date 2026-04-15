@@ -665,7 +665,7 @@ div[data-baseweb="select"] > div {
     box-shadow: var(--shadow);
 }
 
-.overview-table {
+.overview-table-wrap {
     margin-top: 18px;
     border: 1px solid #d7e4ee;
     border-radius: 22px;
@@ -674,36 +674,40 @@ div[data-baseweb="select"] > div {
     box-shadow: 0 8px 20px rgba(23, 50, 74, 0.04);
 }
 
-.overview-table-header,
-.overview-table-row {
-    display: grid;
-    grid-template-columns: 220px 1fr;
+.overview-table {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
 }
 
-.overview-table-header {
-    background: #f5f9fd;
-    border-bottom: 1px solid #d7e4ee;
+.overview-table col.topic-col {
+    width: 220px;
 }
 
-.overview-table-row {
+.overview-table col.summary-col {
+    width: 250px;
+}
+
+.overview-table th,
+.overview-table td {
+    padding: 16px 18px;
+    vertical-align: top;
     border-bottom: 1px solid #edf3f7;
 }
 
-.overview-table-row:last-child {
-    border-bottom: none;
-}
-
-.overview-th,
-.overview-td {
-    padding: 16px 18px;
-}
-
-.overview-th {
+.overview-table thead th {
+    background: #f5f9fd;
     font-size: 11px;
     font-weight: 800;
     letter-spacing: 0.08em;
     text-transform: uppercase;
     color: #6a8198;
+    text-align: left;
+    border-bottom: 1px solid #d7e4ee;
+}
+
+.overview-table tbody tr:last-child td {
+    border-bottom: none;
 }
 
 .overview-topic-name {
@@ -729,14 +733,30 @@ div[data-baseweb="select"] > div {
 }
 
 @media (max-width: 768px) {
-    .overview-table-header,
-    .overview-table-row {
-        grid-template-columns: 1fr;
+    .overview-table,
+    .overview-table thead,
+    .overview-table tbody,
+    .overview-table tr,
+    .overview-table th,
+    .overview-table td {
+        display: block;
+        width: 100%;
     }
 
-    .overview-th,
-    .overview-td {
+    .overview-table thead {
+        display: none;
+    }
+
+    .overview-table td {
         padding: 14px 15px;
+    }
+
+    .overview-table tbody tr {
+        border-bottom: 1px solid #edf3f7;
+    }
+
+    .overview-table tbody tr:last-child {
+        border-bottom: none;
     }
 
     .overview-topic-name {
@@ -3339,25 +3359,27 @@ def screen_overview():
                 continue
             topic_name = label.split(" ", 1)[1] if " " in label else label
             summary = _natural_summary(key, prev_data) or "Information was recorded for this topic."
-            detail_html = _checkin_summary_html(key, prev_data) or ""
+            detail_html = _checkin_summary_html(key, prev_data) or '<span style="color:#7a8ea4;">No extra details recorded</span>'
             rows.append(
-                '<div class="overview-table-row">'
-                f'<div class="overview-td"><div class="overview-topic-name">{_html.escape(topic_name)}</div></div>'
-                '<div class="overview-td">'
-                f'<div class="overview-summary-main">{_html.escape(summary)}</div>'
-                f'<div class="overview-summary-details">{detail_html}</div>'
-                '</div>'
-                '</div>'
+                "<tr>"
+                f'<td><div class="overview-topic-name">{_html.escape(topic_name)}</div></td>'
+                f'<td><div class="overview-summary-main">{_html.escape(summary)}</div></td>'
+                f'<td><div class="overview-summary-details">{detail_html}</div></td>'
+                "</tr>"
             )
 
         if rows:
             st.markdown(
-                '<div class="overview-table">'
-                '<div class="overview-table-header">'
-                '<div class="overview-th">Topic</div>'
-                '<div class="overview-th">Last Visit Summary</div>'
-                '</div>'
-                f'{"".join(rows)}'
+                '<div class="overview-table-wrap">'
+                '<table class="overview-table">'
+                '<colgroup>'
+                '<col class="topic-col">'
+                '<col class="summary-col">'
+                '<col>'
+                '</colgroup>'
+                '<thead><tr><th>Topic</th><th>Main Summary</th><th>Details From Last Visit</th></tr></thead>'
+                f'<tbody>{"".join(rows)}</tbody>'
+                '</table>'
                 '</div>',
                 unsafe_allow_html=True,
             )
