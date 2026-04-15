@@ -380,6 +380,11 @@ div[data-baseweb="select"] > div {
     margin-bottom: 10px;
     padding: 0.05rem 0;
     background: transparent;
+    width: 100%;
+    display: flex;
+}
+[data-testid="stChatMessageAvatar"] {
+    display: none !important;
 }
 [data-testid="stChatMessageContent"] {
     border-radius: 16px;
@@ -387,17 +392,23 @@ div[data-baseweb="select"] > div {
     border: 1px solid rgba(215, 228, 239, 0.9);
     box-shadow: none;
     background: #ffffff;
-    max-width: 820px;
+    width: fit-content;
+    max-width: min(72%, 760px);
+}
+[data-testid="stChatMessage"]:has([aria-label="assistant"]) {
+    justify-content: flex-start;
 }
 [data-testid="stChatMessage"]:has([aria-label="assistant"]) [data-testid="stChatMessageContent"] {
     border-left: 3px solid #b7d5eb;
     background: #ffffff;
 }
+[data-testid="stChatMessage"]:has([aria-label="user"]) {
+    justify-content: flex-end;
+}
 [data-testid="stChatMessage"]:has([aria-label="user"]) [data-testid="stChatMessageContent"] {
     background: #f8fbfe;
-    border-left: 3px solid #0f6cbd;
-    margin-left: auto;
-    max-width: 72%;
+    border-left: none;
+    border-right: 3px solid #0f6cbd;
 }
 
 /* ── Topic status pills ── */
@@ -2293,10 +2304,13 @@ def _append_next_question(
     assistant_message: str = "",
 ):
     message = assistant_message.strip()
-    if message and next_step and _is_semantically_redundant_question(message, next_step["text"]):
+    next_text = _step_prompt_text(next_step) if next_step else ""
+    if message and next_text and _is_semantically_redundant_question(message, next_text):
         message = ""
     if message:
         _append_assistant_message(state, message)
+    if next_text:
+        _append_assistant_message(state, next_text)
 
 
 def _store_followup_prompt(
@@ -2315,6 +2329,8 @@ def _store_followup_prompt(
         "answer_key": f"{step['id']}_llm_followup",
         "assistant_message": assistant_message.strip(),
     }
+    combined_prompt = "\n\n".join([part for part in [assistant_message.strip(), question.strip()] if part])
+    _append_assistant_message(state, combined_prompt)
 
 
 def handle_pending_followup(topic_key: str, answer: str, source: str = "typed"):
@@ -2683,6 +2699,9 @@ def render_topic_detail(topic_label: str, topic_key: str):
         state["status"] = "in_progress"
         intro = TOPIC_INTROS.get(topic_key, "Let's go through this section together.")
         state["chat"] = [{"role": "assistant", "content": intro}]
+        first_step = get_next_step(topic_key, state["data"])
+        if first_step:
+            _append_assistant_message(state, _step_prompt_text(first_step))
 
     # ── Header with progress bar ─────────────────────────────────
     answered, applicable = get_topic_progress(topic_key, state["data"])
@@ -2722,17 +2741,9 @@ def render_topic_detail(topic_label: str, topic_key: str):
         pending = state.get("pending_followup") or {}
         pending_suffix = pending.get("answer_key", "pending")
         pending_key = f"pending_followup_{topic_key}_{pending_suffix}"
-        prompt_intro = (pending.get("assistant_message") or "").strip()
-        prompt_question = (pending.get("question") or "").strip()
         if pending_key not in st.session_state:
             st.session_state[pending_key] = ""
         _, composer_col = st.columns([1.05, 0.95])
-
-        if prompt_intro:
-            with st.chat_message("assistant", avatar="👩‍⚕️"):
-                st.write(prompt_intro)
-        if prompt_question:
-            render_active_question(prompt_question, "Clarifying question")
 
         with composer_col:
             st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
@@ -2757,7 +2768,6 @@ def render_topic_detail(topic_label: str, topic_key: str):
     if next_step:
         # Look up previous answer for this specific question
         prev_answer = last_data.get(next_step["id"]) if last_data else None
-        render_active_question(_step_prompt_text(next_step))
         render_input(topic_key, next_step, prev_answer=prev_answer)
 
 
