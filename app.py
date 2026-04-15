@@ -135,6 +135,12 @@ def _looks_vague_answer(answer: Any) -> bool:
         return True
     if len(words) <= 2 and not any(ch.isdigit() for ch in answer):
         return text in vague_phrases
+    if len(words) >= 1:
+        unique_chars = set(text.replace(" ", ""))
+        if len(unique_chars) <= 2 and len(text.replace(" ", "")) >= 4:
+            return True
+        if re.fullmatch(r"[a-zA-Z]{1,2,}", text):
+            return True
     return False
 
 
@@ -142,10 +148,12 @@ def _fallback_clarifying_question(step: dict) -> str:
     text = step.get("text", "").strip()
     if not text:
         return "Could you tell me a little more about that so I can capture it accurately for your care team?"
-    return (
-        f"I want to make sure I capture this accurately for your team. "
-        f"Could you tell me a little more about that?"
-    )
+    lower = _norm_text(text)
+    if "where" in lower and "pain" in lower:
+        return "Could you tell me where the pain is located?"
+    if "pain" in lower:
+        return "Could you tell me a bit more about the pain you're having right now?"
+    return "Could you tell me a little more about that?"
 
 
 
@@ -1614,6 +1622,7 @@ def get_llm_topic_turn(
         f"- If comparing with the last visit is clearly helpful and accurate, you may briefly mention improvement, worsening, or similarity.\n"
         f"- If the answer is vague or opens an important clinical thread, ask one short follow-up question.\n"
         f"- If the patient's answer is very short, unclear, misspelled, or incomplete, ask a gentle clarifying question in natural language.\n"
+        f"- If the patient's answer is unclear, vague, gibberish, or not clinically usable, do NOT thank them or say you've noted it. Just ask a clarification.\n"
         f"- Do NOT ask a follow-up that simply repeats or paraphrases the original question.\n"
         f"- If the patient already directly answered with a concrete detail like a body location, symptom trigger, or medication, accept it.\n"
         f"- If there is a red flag, stay calm, acknowledge it, and say the team will want to know before the visit.\n"
@@ -2075,6 +2084,8 @@ def _store_followup_prompt(
     question: str,
     assistant_message: str = "",
 ):
+    if _looks_vague_answer(state["data"].get(step["id"], "")):
+        assistant_message = ""
     state["waiting_for_followup"] = True
     state["pending_followup"] = {
         "source_step_id": step["id"],
@@ -2151,6 +2162,8 @@ def handle_answer(topic_key: str, step: dict, answer, source: str = "structured"
                     chat_history=state["chat"],
                     next_step=next_step,
                 )
+            if is_vague and turn.get("assistant_message"):
+                turn["assistant_message"] = ""
             if turn.get("mode") == "follow_up":
                 followup_question = turn["follow_up_question"]
                 if _is_redundant_followup(step["text"], answer, followup_question):
@@ -2215,8 +2228,6 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
     prev = state["data"].get(step["id"])
     # ── Options ─────────────────────────────────────────────────
     if stype == "options":
-        st.markdown("**Choose an option below, or answer in your own words if that fits better:**")
-
         # ── OPTION BUTTONS ──
         cols = st.columns(2 if len(step["opts"]) <= 4 else 1)
         
@@ -2502,13 +2513,11 @@ def render_topic_detail(topic_label: str, topic_key: str):
 
         with st.container(border=False):
             with st.chat_message("assistant", avatar="👩‍⚕️"):
-                if prompt_intro:
-                    st.write(prompt_intro)
-                if prompt_question:
-                    st.markdown(f"**{prompt_question}**")
+                parts = [part for part in [prompt_intro, prompt_question] if part]
+                st.write("\n\n".join(parts))
 
         st.text_area(
-            "Your response:",
+            "Reply",
             key=pending_key,
             placeholder="Type or speak your answer here...",
             height=90,
@@ -2531,7 +2540,10 @@ def render_topic_detail(topic_label: str, topic_key: str):
 
         with st.container(border=False):
             with st.chat_message("assistant", avatar="👩‍⚕️"):
-                st.write(next_step["text"])
+                question_text = next_step["text"]
+                if next_step.get("type") == "options":
+                    question_text += " (Choose an option below, or answer in your own words if that fits better.)"
+                st.write(question_text)
             render_input(topic_key, next_step, prev_answer=prev_answer)
 
 
