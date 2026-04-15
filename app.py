@@ -653,6 +653,108 @@ div[data-baseweb="select"] > div {
     box-shadow: var(--shadow);
 }
 
+.overview-card {
+    background:
+        radial-gradient(circle at top right, rgba(15,108,189,0.08), transparent 32%),
+        linear-gradient(180deg, rgba(255,255,255,0.98) 0%, rgba(248,251,254,0.98) 100%);
+    border: 1px solid #d6e4f0;
+    border-radius: 28px;
+    padding: 28px 30px;
+    max-width: 960px;
+    margin: 24px auto 18px auto;
+    box-shadow: var(--shadow);
+}
+
+.overview-table {
+    margin-top: 18px;
+    border: 1px solid #d7e4ee;
+    border-radius: 22px;
+    overflow: hidden;
+    background: #ffffff;
+    box-shadow: 0 8px 20px rgba(23, 50, 74, 0.04);
+}
+
+.overview-table-header,
+.overview-table-row {
+    display: grid;
+    grid-template-columns: 220px 1fr;
+}
+
+.overview-table-header {
+    background: #f5f9fd;
+    border-bottom: 1px solid #d7e4ee;
+}
+
+.overview-table-row {
+    border-bottom: 1px solid #edf3f7;
+}
+
+.overview-table-row:last-child {
+    border-bottom: none;
+}
+
+.overview-th,
+.overview-td {
+    padding: 16px 18px;
+}
+
+.overview-th {
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #6a8198;
+}
+
+.overview-topic-name {
+    font-size: 13px;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: #16324b;
+}
+
+.overview-summary-main {
+    font-size: 14px;
+    line-height: 1.55;
+    color: #16324b;
+    font-weight: 700;
+    margin-bottom: 8px;
+}
+
+.overview-summary-details {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+@media (max-width: 768px) {
+    .overview-table-header,
+    .overview-table-row {
+        grid-template-columns: 1fr;
+    }
+
+    .overview-th,
+    .overview-td {
+        padding: 14px 15px;
+    }
+
+    .overview-topic-name {
+        margin-bottom: 2px;
+    }
+}
+
+.overview-note {
+    margin-top: 16px;
+    font-size: 13px;
+    line-height: 1.65;
+    color: #5f7287;
+    background: #f7fbfe;
+    border: 1px solid #dbe7f0;
+    border-radius: 16px;
+    padding: 12px 14px;
+}
+
 .subtle-note {
     background: #f7fbfe;
     border: 1px dashed #c6d8e7;
@@ -3204,10 +3306,89 @@ def screen_login():
                     st.session_state.has_prev_checkin = False
 
                 st.session_state.selected_topic = TOPIC_KEYS[0] if TOPIC_KEYS else None
-                st.session_state.app_stage      = "main"
+                st.session_state.app_stage      = "overview"
                 st.rerun()
             else:
                 st.warning("Please enter your name to continue.")
+
+
+def screen_overview():
+    has_prev = st.session_state.get("has_prev_checkin", False)
+    last_ck  = st.session_state.get("last_checkin", {})
+    patient  = st.session_state.get("patient_name", "")
+
+    st.markdown(
+        '<div class="overview-card">'
+        '<div style="font-size:12px;font-weight:800;letter-spacing:0.08em;text-transform:uppercase;color:#6b7b92;margin-bottom:8px;">'
+        'Last visit overview'
+        '</div>'
+        f'<div style="font-size:30px;font-weight:800;letter-spacing:-0.04em;color:#10233d;">'
+        f'{_html.escape(patient) if patient else "Your"} previous check-in summary'
+        '</div>'
+        '<div style="font-size:15px;line-height:1.75;color:#56667d;margin-top:10px;">'
+        'Before you start this visit\'s symptom check-in, here is a quick summary of what was recorded last time.'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    if has_prev:
+        rows = []
+        for label, key in TOPICS:
+            prev_data = last_ck.get(key, {})
+            if not prev_data:
+                continue
+            topic_name = label.split(" ", 1)[1] if " " in label else label
+            summary = _natural_summary(key, prev_data) or "Information was recorded for this topic."
+            detail_html = _checkin_summary_html(key, prev_data) or ""
+            rows.append(
+                '<div class="overview-table-row">'
+                f'<div class="overview-td"><div class="overview-topic-name">{_html.escape(topic_name)}</div></div>'
+                '<div class="overview-td">'
+                f'<div class="overview-summary-main">{_html.escape(summary)}</div>'
+                f'<div class="overview-summary-details">{detail_html}</div>'
+                '</div>'
+                '</div>'
+            )
+
+        if rows:
+            st.markdown(
+                '<div class="overview-table">'
+                '<div class="overview-table-header">'
+                '<div class="overview-th">Topic</div>'
+                '<div class="overview-th">Last Visit Summary</div>'
+                '</div>'
+                f'{"".join(rows)}'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+            st.markdown(
+                '<div class="overview-note">'
+                'These details are from your last visit. You can change, update, or add anything as you go through today\'s topics.'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                '<div class="overview-note">'
+                'A prior visit was found, but there were no summary details available to show here. You can continue to today\'s topics.'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+    else:
+        st.markdown(
+            '<div class="overview-note">'
+            'No previous visit summary was found for you. You can start today\'s symptom check-in now.'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    _, col, _ = st.columns([1, 2, 1])
+    with col:
+        if st.button("Continue to Topics →", type="primary", use_container_width=True):
+            st.session_state.app_stage = "main"
+            st.rerun()
 
 
 def screen_main():
@@ -3297,7 +3478,11 @@ stage = st.session_state.get("app_stage", "login")
 
 if stage == "login":
     screen_login()
+elif stage == "overview":
+    screen_overview()
 elif stage == "main":
     screen_main()
 elif stage == "report":
     screen_report()
+else:
+    screen_login()
