@@ -797,36 +797,36 @@ div[data-baseweb="select"] > div {
 .composer-shell [data-testid="stAudioInput"] {
     background: transparent;
     border: none;
-    border-radius: 999px;
+    border-radius: 16px;
     min-height: 46px;
-    width: 60px;
-    min-width: 60px;
-    max-width: 60px;
+    width: 100%;
+    min-width: 100%;
+    max-width: 100%;
     display: flex;
     align-items: center;
     justify-content: center;
     padding: 0;
-    margin: 0 auto;
+    margin: 6px 0 0 0;
     box-shadow: none !important;
 }
 
 .composer-shell [data-testid="stAudioInput"] > div {
-    width: 60px;
-    min-width: 60px;
+    width: 100%;
+    min-width: 100%;
     display: flex;
     justify-content: center;
     align-items: center;
     padding: 0 !important;
-    margin: 0 auto !important;
+    margin: 0 !important;
 }
 
 .composer-shell [data-testid="stAudioInput"] button {
-    border-radius: 999px !important;
-    width: 60px !important;
+    border-radius: 16px !important;
+    width: 100% !important;
     height: 46px !important;
-    min-width: 60px !important;
+    min-width: 100% !important;
     padding: 0 !important;
-    margin: 0 auto !important;
+    margin: 0 !important;
     border: 1px solid #d7e4ee !important;
     background: linear-gradient(180deg, #ffffff 0%, #f5f9fd 100%) !important;
     box-shadow: 0 8px 18px rgba(23, 50, 74, 0.08) !important;
@@ -2727,8 +2727,7 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
                     label_visibility="collapsed",
                 )
 
-            _, col_voice = st.columns([6.0, 0.65])
-            with col_voice:
+            with st.container():
                 voice_text = voice_widget(f"{topic_key}_{sid}_opt", label="Mic")
 
             if selected_option != "Select an option..." and st.session_state.get(f"{dropdown_key}_submitted") != selected_option:
@@ -2783,8 +2782,7 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
                     key=dropdown_key,
                     label_visibility="collapsed",
                 )
-            _, col_voice = st.columns([6.0, 0.65])
-            with col_voice:
+            with st.container():
                 voice_text = voice_widget(f"{topic_key}_{sid}_multi", label="Mic")
 
             if selected_option != "Select an option..." and st.session_state.get(f"{dropdown_key}_submitted") != selected_option:
@@ -2827,8 +2825,7 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
                     label_visibility="collapsed",
                     placeholder=f"Enter a number ({int(step['min_v'])}-{int(step['max_v'])})"
                 )
-            _, col_voice = st.columns([6.0, 0.65])
-            with col_voice:
+            with st.container():
                 voice_text = voice_widget(f"{topic_key}_{sid}_num", label="Mic")
 
             candidate = user_text or voice_text or ""
@@ -2867,8 +2864,7 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
                     key=widget_key,
                     label_visibility="collapsed",
                 )
-            _, col_voice = st.columns([6.0, 0.65])
-            with col_voice:
+            with st.container():
                 voice_text = voice_widget(f"{topic_key}_{sid}", label="Mic")
             if voice_text and voice_text != st.session_state.get(f"{widget_key}_voice_sync"):
                 st.session_state[widget_key] = voice_text
@@ -2921,8 +2917,7 @@ def render_freeform_chat():
     user_input = st.chat_input("Type here, or use the voice button below…",
                                 key="freeform_chat_input")
 
-    _, col_voice = st.columns([6.0, 0.65])
-    with col_voice:
+    with st.container():
         vt = voice_widget("freeform")
         if vt and not user_input:
             user_input = vt
@@ -3043,8 +3038,7 @@ def render_topic_detail(topic_label: str, topic_key: str):
                     placeholder="Type or speak your answer here...",
                     label_visibility="collapsed",
                 )
-            _, col_voice = st.columns([6.0, 0.65])
-            with col_voice:
+            with st.container():
                 pending_voice = voice_widget(f"pending_{topic_key}_{pending_suffix}", label="Mic")
             if pending_voice and pending_voice != st.session_state.get(f"{pending_key}_voice_sync"):
                 st.session_state[pending_key] = pending_voice
