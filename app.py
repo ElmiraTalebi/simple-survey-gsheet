@@ -661,15 +661,27 @@ div[data-baseweb="select"] > div {
 
 .composer-shell [data-testid="stAudioInput"] {
     border-radius: 14px;
-    min-height: 44px;
+    min-height: 40px;
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 2px 6px 0 6px;
+    padding: 0 4px;
+    max-width: 64px;
+    margin-left: auto;
 }
 
 .composer-shell [data-testid="stAudioInput"] button {
     border-radius: 12px !important;
+}
+
+.send-btn button {
+    min-width: 44px !important;
+    width: 44px !important;
+    height: 44px !important;
+    padding: 0 !important;
+    border-radius: 999px !important;
+    font-size: 18px !important;
+    line-height: 1 !important;
 }
 
 [data-testid="stProgressBar"] > div {
@@ -2440,7 +2452,7 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
             previous_dropdown = prev_answer if prev_answer in step["opts"] else "Select an option..."
             if dropdown_key not in st.session_state:
                 st.session_state[dropdown_key] = previous_dropdown
-            col_text, col_select, col_voice = st.columns([4.2, 1.8, 1.0])
+            col_text, col_send, col_select, col_voice = st.columns([4.0, 0.65, 1.9, 0.75])
 
             with col_text:
                 user_text = st.text_input(
@@ -2449,6 +2461,11 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
                     label_visibility="collapsed",
                     placeholder="Type a reply..."
                 )
+
+            with col_send:
+                st.markdown('<div class="send-btn">', unsafe_allow_html=True)
+                send_clicked = st.button("➤", key=f"send_{topic_key}_{sid}", use_container_width=True)
+                st.markdown('</div>', unsafe_allow_html=True)
 
             with col_select:
                 selected_option = st.selectbox(
@@ -2467,7 +2484,7 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
 
             submitted_key = f"text_{topic_key}_{sid}_submitted"
 
-            if user_text and st.session_state.get(submitted_key) != user_text:
+            if user_text and (send_clicked or st.session_state.get(submitted_key) != user_text):
                 st.session_state[submitted_key] = user_text
                 interpreted = interpret_user_input_with_options(step, user_text)
                 handle_answer(topic_key, step, interpreted, source="typed")
@@ -2544,7 +2561,7 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
 
         with composer_col:
             st.markdown('<div class="composer-shell"><div class="composer-title">Your reply</div>', unsafe_allow_html=True)
-            col_text, col_voice = st.columns([3.8, 1.2])
+            col_text, col_send, col_voice = st.columns([4.4, 0.65, 0.75])
             with col_text:
                 st.text_area(
                     "Reply",
@@ -2553,10 +2570,14 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
                     height=110,
                     label_visibility="collapsed",
                 )
+            with col_send:
+                st.markdown('<div class="send-btn">', unsafe_allow_html=True)
+                send_clicked = st.button("➤", key=f"ft_send_{topic_key}_{sid}", use_container_width=True)
+                st.markdown('</div>', unsafe_allow_html=True)
             with col_voice:
                 voice_widget(f"{topic_key}_{sid}", label="Mic")
 
-            if st.button("Send ✓", key=f"ft_submit_{topic_key}_{sid}"):
+            if send_clicked:
                 text = st.session_state.get(widget_key, "").strip()
                 if text:
                     handle_answer(topic_key, step, text, source="free_text")
@@ -2727,7 +2748,7 @@ def render_topic_detail(topic_label: str, topic_key: str):
 
         with composer_col:
             st.markdown('<div class="composer-shell"><div class="composer-title">Your reply</div>', unsafe_allow_html=True)
-            col_text, col_voice = st.columns([3.8, 1.2])
+            col_text, col_send, col_voice = st.columns([4.4, 0.65, 0.75])
             with col_text:
                 st.text_area(
                     "Reply",
@@ -2736,13 +2757,17 @@ def render_topic_detail(topic_label: str, topic_key: str):
                     height=100,
                     label_visibility="collapsed",
                 )
+            with col_send:
+                st.markdown('<div class="send-btn">', unsafe_allow_html=True)
+                send_clicked = st.button("➤", key=f"pending_send_{topic_key}", use_container_width=True)
+                st.markdown('</div>', unsafe_allow_html=True)
             with col_voice:
                 pending_voice = voice_widget(f"pending_{topic_key}_{pending_suffix}", label="Mic")
                 if pending_voice and pending_voice != st.session_state.get(f"{pending_key}_voice_sync"):
                     st.session_state[pending_key] = pending_voice
                     st.session_state[f"{pending_key}_voice_sync"] = pending_voice
 
-            if st.button("Send ✓", key=f"pending_submit_{topic_key}"):
+            if send_clicked:
                 reply = st.session_state.get(pending_key, "").strip()
                 if reply:
                     handle_pending_followup(topic_key, reply, source="followup")
