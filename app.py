@@ -352,32 +352,17 @@ def interpret_user_input_with_options(step, user_input):
     generic_options = {"other", "somewhere else"}
     allowed_options = [opt for opt in options if _norm_text(opt) not in generic_options]
 
-    prompt = f"""
-You are helping match a patient's answer to one of the listed options.
-
-Question:
-"{step['text']}"
-
-Options:
-{allowed_options}
-
-Patient answer:
-"{user_input}"
-
-Instructions:
-- If the patient's answer clearly matches one listed option, return that option exactly.
-- If the patient's answer clearly implies one listed option, return that option exactly.
-- If the patient's answer is a synonym, common short form, common phrasing, or a very close misspelling of one listed option, return that option exactly.
-- For yes/no questions:
-  - return "Yes" if the patient clearly describes having the symptom, problem, or experience being asked about.
-  - return "No" if the patient clearly describes not having it.
-- If an option such as "Multiple issues" fits better than any single option, return that exact option.
-- Do not change the answer to "Other" or "Somewhere else" unless the patient clearly says "other" or "somewhere else".
-- If there is no clear match, return the patient's original answer exactly.
-- Do not guess.
-
-Return one line only.
-    """
+    prompt = (
+        f"Match the patient's answer to one of the listed options.\n\n"
+        f"Question: \"{step['text']}\"\n"
+        f"Options: {allowed_options}\n"
+        f"Patient answer: \"{user_input}\"\n\n"
+        f"- Return the exact option if the answer clearly matches or implies it (including synonyms, short forms, or close misspellings).\n"
+        f"- For yes/no questions: return \"Yes\" if they describe having the symptom, \"No\" if not.\n"
+        f"- Do not select \"Other\" or \"Somewhere else\" unless the patient explicitly says so.\n"
+        f"- If no clear match, return the patient's original answer exactly.\n"
+        f"Return one line only."
+    )
 
     try:
         r = openai_client.chat.completions.create(
@@ -2261,44 +2246,22 @@ def get_llm_topic_turn(
 
     prompt = (
         f"{_SYSTEM_CONTEXT}\n\n"
-        f"You are responding inside a symptom check-in chatbot for a patient with head and neck cancer between visits. "
-        f"Your job is to sound like a careful, warm oncology nurse. Be clear, brief, and useful.\n\n"
-        f"CURRENT TOPIC: {topic_label}\n"
-        f"QUESTION ASKED: {step['text']}\n"
-        f"PATIENT RESPONSE: {answer}\n\n"
-        f"LAST VISIT ANSWER TO THIS SAME QUESTION: {prev_same or 'None recorded'}\n"
-        f"LAST VISIT TOPIC SUMMARY: {prev_topic_summary or 'None recorded'}\n"
-        f"RECENT TOPIC CHAT:\n{history_str}\n\n"
-        f"CURRENT STRUCTURED DATA:\n{json.dumps(current_data, indent=2)}\n\n"
-        f"NEXT STRUCTURED QUESTION IF YOU DECIDE TO CONTINUE: {next_q or 'No further structured question'}\n\n"
-        f"FOLLOW-UP QUESTIONS ALREADY ASKED IN THIS THREAD: {followup_count}\n\n"
-        f"RED FLAGS TO WATCH FOR:\n{_RED_FLAGS}\n\n"
-        f"YOUR TASK:\n"
-        f"Choose the single best next move.\n"
-        f"- Patients do not want to spend a long time answering. Save time.\n"
-        f"- Your default choice should be: no follow-up question.\n"
-        f"- Ask a follow-up only when the patient's answer is not yet useful enough on its own or when one short clarification would clearly help the care team.\n"
-        f"- If the patient's answer is already usable on its own, choose mode='continue' and do not ask any follow-up question.\n"
-        f"- Let the patient's answer guide when to stop. If the information is already useful enough, stop asking follow-up questions and continue.\n"
-        f"- Only continue a follow-up thread if each new question is clearly necessary, tightly related to the patient's exact words, and worth the patient's time.\n"
-        f"- If the answer is vague, unclear, very short, misspelled, or not usable, ask one gentle clarifying question.\n"
-        f"- If the answer is concrete, keep your response brief and natural.\n"
-        f"- If comparing with the last visit is clearly helpful and accurate, you may briefly mention that.\n"
-        f"- If there is a red flag, stay calm, mention it briefly, and say the care team will want to know before the visit.\n"
-        f"- Do not ask a random question.\n"
-        f"- Do not ask a question that repeats the original question in different words.\n"
-        f"- Keep the follow-up tightly connected to the patient's exact words.\n"
-        f"- If the patient typed something that clearly matches a listed option or a close synonym of it, treat it as that structured option so the normal predefined follow-up questions can happen.\n"
-        f"- For pain location answers such as jaw, ear, neck, face, or shoulder: accept the location. If a clarification helps, ask it. Stop as soon as the answer is useful enough.\n"
-        f"- Do not diagnose. Do not prescribe. Do not hallucinate details.\n"
-        f"- Use simple words.\n\n"
-        f"Return JSON only in this exact shape:\n"
-        f'{{"mode":"continue"|"follow_up","assistant_message":"...","follow_up_question":"..."}}\n\n'
-        f"Rules for the JSON:\n"
-        f"- assistant_message can be empty only if a follow-up question alone is best.\n"
-        f"- follow_up_question must be empty unless mode is follow_up.\n"
-        f"- assistant_message should be 0 to 2 short sentences.\n"
-        f"- follow_up_question must be one short, precise question.\n"
+        f"Topic: {topic_label}\n"
+        f"Question asked: {step['text']}\n"
+        f"Patient answer: {answer}\n"
+        f"Last visit answer to this question: {prev_same or 'None'}\n"
+        f"Follow-up questions already asked: {followup_count}\n"
+        f"Next structured question: {next_q or 'None'}\n"
+        f"Recent conversation:\n{history_str}\n\n"
+        f"Red flags: {_RED_FLAGS}\n\n"
+        f"Decide the best next move:\n"
+        f"- Default is mode=\"continue\" — only ask a follow-up if the answer is vague, unclear, or missing a key clinical detail.\n"
+        f"- If asking a follow-up, make it short and directly tied to what the patient said.\n"
+        f"- Do not repeat the original question or ask about something already answered.\n"
+        f"- If a red flag is present, briefly mention it in assistant_message.\n"
+        f"- Keep assistant_message to 1-2 short sentences (or empty).\n\n"
+        f"Return JSON only:\n"
+        f'{{"mode":"continue"|"follow_up","assistant_message":"...","follow_up_question":"..."}}\n'
     )
 
     parsed = _extract_json_object(_call_openai(prompt, max_tokens=220, temp=0.45))
@@ -2366,44 +2329,28 @@ def generate_report(name: str, all_data: dict) -> str:
 
     prompt = (
         f"{_SYSTEM_CONTEXT}\n\n"
-        f"You are now generating a structured pre-visit clinical summary for a provider "
-        f"(oncologist, radiation oncologist, or NP). This report will be reviewed BEFORE "
-        f"the patient's appointment and must be concise, clinically precise, and "
-        f"provider-ready. Providers will skim this in under 2 minutes.\n\n"
-        f"=== PATIENT: {name} ===\n"
-        f"=== DATE: {today} ===\n\n"
-        f"=== PATIENT-REPORTED DATA ===\n"
-        f"{data_json}\n\n"
-        f"=== RED FLAGS TO SCREEN FOR ===\n"
-        f"{_RED_FLAGS}\n\n"
-        f"=== REPORT FORMAT INSTRUCTIONS ===\n"
-        f"Use the EXACT structure below. Use bullet points within each section.\n"
-        f"Convert patient-language answers into accurate clinical language where appropriate "
-        f"(e.g., 'sore in my mouth' -> 'oral mucositis', 'can't swallow' -> 'dysphagia').\n"
-        f"Include the patient's own words in quotes only when clinically meaningful.\n"
-        f"If a topic was not completed or has no data, omit it entirely -- do not write N/A.\n\n"
+        f"Generate a concise pre-visit clinical summary for a provider to review before the appointment.\n\n"
+        f"Patient: {name} | Date: {today}\n\n"
+        f"Patient-reported data:\n{data_json}\n\n"
+        f"Red flags to screen for:\n{_RED_FLAGS}\n\n"
+        f"Instructions:\n"
+        f"- Use clinical language (e.g., 'oral mucositis', 'dysphagia') but quote the patient when it adds meaning.\n"
+        f"- Omit any topic with no data.\n\n"
+        f"Use this exact structure:\n"
         f"---\n"
         f"CHATREPORT -- PRE-VISIT CLINICAL SUMMARY\n"
         f"Patient: {name}  |  Date: {today}\n"
         f"{'=' * 56}\n\n"
         f"CLINICAL OVERVIEW\n"
-        f"[2-3 sentence high-level summary of the patient's current status, most prominent "
-        f"issues, and any notable changes. Written for a clinician who has 10 seconds to "
-        f"orient before walking into the room.]\n\n"
+        f"[2-3 sentence summary of the patient's current status and most prominent issues.]\n\n"
         f"FLAGS FOR PROVIDER ATTENTION\n"
-        f"[List ONLY items matching the red flag criteria above, each as a brief bullet. "
-        f"If none, write: No urgent flags identified.]\n\n"
+        f"[Bullets for any red flags identified. If none: No urgent flags identified.]\n\n"
         f"SYMPTOM DETAILS BY DOMAIN\n"
-        f"[One subsection per completed topic. Use the topic name as a bold header. "
-        f"Bullets should include: symptom presence/severity, patient-reported management "
-        f"strategies, medications mentioned, and functional impact where reported.]\n\n"
+        f"[One bold-header subsection per completed topic. Bullets covering severity, medications, and functional impact.]\n\n"
         f"SUGGESTED DISCUSSION POINTS\n"
-        f"[2-4 bullets: items the provider may want to address or follow up on based on "
-        f"the data -- e.g., medication adjustment, referral, patient education need, "
-        f"unresolved concern. Do not repeat red flags already listed above.]\n"
+        f"[2-4 bullets for the provider to follow up on. Do not repeat red flags.]\n"
         f"---\n\n"
-        f"Write only the completed report. Do not include these instructions in your output. "
-        f"Do not add AI disclaimers or notes about report generation."
+        f"Write only the completed report. No disclaimers or meta-notes."
     )
 
     return _call_openai(prompt, max_tokens=2000, temp=0.2) or \
@@ -2809,22 +2756,14 @@ def _freeform_llm_response(messages: list) -> str:
 
     system = (
         f"{_SYSTEM_CONTEXT}\n\n"
-        "You are now in an open conversation with the patient. They may raise anything not "
-        "covered by the structured check-in — a new symptom, a question about their treatment, "
-        "a concern about a medication, or just something they want their provider to know.\n\n"
-        f"CURRENT STRUCTURED CHECK-IN DATA:\n{json.dumps(structured_context, indent=2)}\n\n"
-        f"MOST RECENT PRIOR CHECK-IN DATA:\n{json.dumps(prior_context, indent=2)}\n\n"
-        "Guidelines:\n"
-        "- Listen carefully and respond with warmth and clinical awareness.\n"
-        "- If helpful, briefly notice whether this sounds better, worse, or different than last visit.\n"
-        "- If they mention a symptom that sounds urgent (e.g., chest pain, breathing difficulty, "
-        "  high fever, blood, suicidal thoughts), acknowledge it calmly and tell them it will be "
-        "  flagged for their care team.\n"
-        "- Do NOT diagnose or prescribe. You are gathering information, not treating.\n"
-        "- Be conversational and natural, not stiff or repetitive.\n"
-        "- Keep responses short — 2-4 sentences maximum.\n"
-        "- If the patient seems to be done, gently close: 'Is there anything else you'd like "
-        "  to share with your team before your visit?'"
+        "The patient may now share anything not covered in the structured check-in.\n\n"
+        f"Current check-in data:\n{json.dumps(structured_context, indent=2)}\n\n"
+        f"Prior visit data:\n{json.dumps(prior_context, indent=2)}\n\n"
+        "- Respond warmly in 2-4 sentences.\n"
+        "- If an urgent symptom is mentioned (chest pain, high fever, breathing difficulty, suicidal thoughts), "
+        "stay calm and say the care team will be notified.\n"
+        "- Do not diagnose or prescribe.\n"
+        "- If the patient seems done, ask: 'Is there anything else you'd like to share before your visit?'"
     )
 
     api_messages = [{"role": "system", "content": system}]
