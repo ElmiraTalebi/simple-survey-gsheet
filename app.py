@@ -1714,7 +1714,7 @@ def match_to_option(step: dict, user_input: str) -> str:
     """
     if not openai_client:
         return user_input
-    options = [o for o in step.get("opts", []) if o.lower() not in {"other", "somewhere else"}]
+    options = step.get("opts", [])
     if not options:
         return user_input
     prompt = (
@@ -2029,12 +2029,19 @@ def handle_answer(topic_key: str, step: dict, answer, display_override: Optional
     # Role 2: called whenever the answer is a free-text string that was NOT matched
     # to a predefined option — covers both free_text questions and unmatched typed
     # answers on option questions.
+    # When display_override is set (e.g. patient typed "fingers", saved as "Somewhere else"),
+    # use the actual typed text for Role 2 so it can ask a meaningful clinical follow-up.
     # next_step is computed first so Role 2 knows what the flowchart will ask next
     # and can avoid asking a redundant follow-up.
     next_step = get_next_step(topic_key, state["data"])
-    is_unmatched_text = isinstance(answer, str) and answer not in step.get("opts", [])
+    role2_text = (
+        display_override
+        if display_override and display_override not in step.get("opts", [])
+        else answer
+    )
+    is_unmatched_text = isinstance(role2_text, str) and role2_text not in step.get("opts", [])
     if is_unmatched_text and openai_client:
-        turn = get_followup(topic_key, step, answer, state["chat"], next_step=next_step)
+        turn = get_followup(topic_key, step, role2_text, state["chat"], next_step=next_step)
         if turn.get("mode") == "follow_up":
             state["waiting_for_followup"] = True
             state["pending_followup"] = {
