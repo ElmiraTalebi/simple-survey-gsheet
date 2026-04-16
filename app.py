@@ -2669,7 +2669,9 @@ def _patient_overview_summary(topic_key: str, data: dict) -> str:
             return "You said you had been feeling down."
         if v("support_adequate") == "No":
             return "You said you needed more support between visits."
-        return "You shared how you were feeling emotionally."
+        if v("anxiety_impact") == "Yes":
+            return "You said worry or anxiety was affecting daily life."
+        return ""
 
     if topic_key == "other":
         parts = []
@@ -2685,7 +2687,7 @@ def _patient_overview_summary(topic_key: str, data: dict) -> str:
             return "You did not report other major symptoms."
         return f"You mentioned {', '.join(parts[:2])}."
 
-    return "You shared an update in this area."
+    return ""
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -3563,6 +3565,8 @@ def screen_overview():
                 continue
             topic_name = label.split(" ", 1)[1] if " " in label else label
             summary = _patient_overview_summary(key, prev_data)
+            if not summary:
+                continue
             rows.append(
                 "<tr>"
                 f'<td><div class="overview-topic-name">{_html.escape(topic_name)}</div></td>'
