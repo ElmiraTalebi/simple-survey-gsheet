@@ -321,40 +321,6 @@ div[data-baseweb="select"] > div {
     box-shadow: var(--shadow);
 }
 
-.assistant-chip {
-    display: none;
-}
-.assistant-chip .avatar {
-    width: 46px;
-    height: 46px;
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: linear-gradient(135deg, #d5ecfb, #edf8ff);
-    font-size: 22px;
-}
-.assistant-chip .name {
-    font-family: 'Manrope', sans-serif;
-    font-size: 14px;
-    font-weight: 800;
-    color: #113553;
-    margin-bottom: 2px;
-}
-.assistant-chip .role {
-    font-size: 12px;
-    color: #678196;
-}
-
-.memory-banner {
-    background: linear-gradient(135deg, #edf7ff 0%, #f9fcff 100%);
-    border: 1px solid #cadeef;
-    border-radius: 18px;
-    padding: 12px 14px;
-    color: #23486f;
-    font-size: 13px;
-    margin-bottom: 12px;
-}
 
 .report-box {
     background: rgba(255,255,255,0.94);
@@ -532,47 +498,6 @@ div[data-baseweb="select"] > div {
     box-shadow: none;
 }
 
-.section-kicker {
-    display: none;
-    align-items: center;
-    gap: 8px;
-    border-radius: 999px;
-    padding: 6px 12px;
-    background: #edf7ff;
-    border: 1px solid #cfe2f2;
-    color: #0f5d93;
-    font-size: 11px;
-    font-weight: 800;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    margin-bottom: 10px;
-}
-
-.active-question {
-    background: transparent;
-    border: none;
-    border-radius: 0;
-    padding: 0;
-    margin: 0 0 10px 0;
-    box-shadow: none;
-}
-
-.active-question .label {
-    font-size: 11px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: #7d92a7;
-    margin-bottom: 6px;
-}
-
-.active-question .text {
-    font-family: 'Manrope', sans-serif;
-    font-size: 18px;
-    line-height: 1.4;
-    font-weight: 700;
-    color: #153652;
-}
 
 .reply-shell {
     background: transparent;
@@ -721,24 +646,6 @@ div[data-baseweb="select"] > div {
 """, unsafe_allow_html=True)
 
 
-def render_memory_banner(message: str):
-    st.markdown(f'<div class="memory-banner">📋 {message}</div>', unsafe_allow_html=True)
-
-
-def render_section_kicker(text: str):
-    st.markdown(f'<div class="section-kicker">{_html.escape(text)}</div>', unsafe_allow_html=True)
-
-
-def render_active_question(question: str, label: str = "Current question"):
-    st.markdown(
-        '<div class="active-question">'
-        f'<div class="label">{_html.escape(label)}</div>'
-        f'<div class="text">{_html.escape(question)}</div>'
-        '</div>',
-        unsafe_allow_html=True,
-    )
-
-
 def _step_prompt_text(step: dict) -> str:
     question_text = step["text"]
     if step.get("type") == "options":
@@ -796,6 +703,21 @@ _sheet = None
 _sheet_error: Optional[str] = None
 
 
+# Sheet column order: timestamp, name, one column per topic, freeform notes, data_json (hidden, for reloading)
+_SHEET_TOPIC_HEADERS = [label.split(" ", 1)[1] if " " in label else label for label, _ in [
+    ("🩹 Pain & Medications",   "pain"),
+    ("🍽️  Nutrition & Fluids",   "nutrition"),
+    ("👄 Oral Symptoms",         "oral"),
+    ("🤢 GI Symptoms",           "gi"),
+    ("😴 Fatigue & Sleep",       "fatigue"),
+    ("🚶 Activity Level",        "activity"),
+    ("🧠 Mood",                  "mood"),
+    ("💊 Other Symptoms",        "other"),
+]]
+_SHEET_HEADERS = ["timestamp", "name"] + _SHEET_TOPIC_HEADERS + ["Freeform Notes", "data_json"]
+_DATA_JSON_COL  = len(_SHEET_HEADERS) - 1   # 0-based index of the data_json column
+
+
 def _init_sheets():
     global _sheet, _sheet_error
     if _sheet is not None or _sheet_error is not None:
@@ -809,17 +731,48 @@ def _init_sheets():
         try:
             ws = book.worksheet("ChatReport")
         except Exception:
-            ws = book.add_worksheet(title="ChatReport", rows=2000, cols=5)
-            ws.append_row(["timestamp", "name", "all_data_json", "report"])
+            ws = book.add_worksheet(title="ChatReport", rows=2000, cols=len(_SHEET_HEADERS))
+            ws.append_row(_SHEET_HEADERS)
         _sheet = ws
     except Exception as e:
         _sheet_error = str(e)
 
 
-def save_to_sheet(name: str, all_data: dict, report: str = "") -> bool:
+def format_topic_data(topic_key: str, data: dict) -> str:
+    """
+    Convert a topic's collected answers into a readable multi-line string
+    for the Google Sheets column. Pure code — no LLM.
+    Each answered question becomes one line: "Question label: Answer"
+    """
+    if not data:
+        return ""
+    lines = []
+    for step in FLOWS.get(topic_key, []):
+        answer = data.get(step["id"])
+        if answer is None:
+            continue
+        # Format list answers as comma-separated
+        val = ", ".join(str(v) for v in answer) if isinstance(answer, list) else str(answer)
+        # Use question text as label, trimmed to 55 chars
+        label = step["text"].rstrip("?").strip()
+        if len(label) > 55:
+            label = label[:52] + "..."
+        lines.append(f"{label}: {val}")
+        # Include any follow-up answer captured by LLM Role 2
+        followup = data.get(f"{step['id']}_followup")
+        if followup:
+            lines.append(f"  Follow-up: {followup}")
+        # Include free-text "other" detail if present
+        other_detail = data.get(f"{step['id']}_other_detail")
+        if other_detail:
+            lines.append(f"  Detail: {other_detail}")
+    return "\n".join(lines)
+
+
+def save_to_sheet(name: str, all_data: dict) -> bool:
     """
     Append one row to the Google Sheet.
-    Columns: timestamp | name | all_data_json | report
+    Columns: timestamp | name | <one per topic> | freeform notes | data_json
     Returns True on success, False on failure.
     """
     _init_sheets()
@@ -827,12 +780,15 @@ def save_to_sheet(name: str, all_data: dict, report: str = "") -> bool:
         st.error(f"Could not connect to Google Sheets: {_sheet_error}")
         return False
     try:
-        _sheet.append_row([
-            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            name,
-            json.dumps(all_data, ensure_ascii=False),
-            report,
-        ])
+        topic_keys = ["pain", "nutrition", "oral", "gi", "fatigue", "activity", "mood", "other"]
+        topic_cols = [format_topic_data(key, all_data.get(key, {})) for key in topic_keys]
+        freeform   = "\n".join(all_data.get("freeform_notes", []))
+        row = (
+            [datetime.now().strftime("%Y-%m-%d %H:%M:%S"), name]
+            + topic_cols
+            + [freeform, json.dumps(all_data, ensure_ascii=False)]
+        )
+        _sheet.append_row(row)
         return True
     except Exception as e:
         st.error(f"Failed to save to Google Sheets: {e}")
@@ -1663,18 +1619,6 @@ FLOWS = {
     "other":     FLOW_OTHER,
 }
 
-QUESTION_TYPE_BY_ID = {
-    step["id"]: step.get("type", "options")
-    for flow in FLOWS.values()
-    for step in flow
-}
-
-STEP_BY_ID = {
-    step["id"]: step
-    for flow in FLOWS.values()
-    for step in flow
-}
-
 
 # ══════════════════════════════════════════════════════════════════
 # FLOW ENGINE
@@ -1823,61 +1767,6 @@ def get_followup(topic_key: str, step: dict, answer: str, history: list) -> dict
     return parsed
 
 
-# ── LLM Role 3: Generate the clinical pre-visit report ────────────
-def generate_report(name: str, all_data: dict) -> str:
-    """
-    Turn all collected patient data into a structured clinical summary
-    for the provider to review before the appointment.
-    """
-    topic_summaries = {
-        label: all_data[key]
-        for label, key in TOPICS
-        if all_data.get(key)
-    }
-    if not openai_client:
-        lines = [
-            "CHATREPORT — PRE-VISIT SUMMARY",
-            f"Patient: {name}",
-            f"Date: {datetime.now().strftime('%B %d, %Y')}",
-            "=" * 56, "",
-        ]
-        for label, data in topic_summaries.items():
-            lines.append(f"[ {label.upper()} ]")
-            for k, v in data.items():
-                val = ", ".join(v) if isinstance(v, list) else str(v)
-                lines.append(f"  - {k.replace('_', ' ').title()}: {val}")
-            lines.append("")
-        return "\n".join(lines)
-
-    today = datetime.now().strftime("%B %d, %Y")
-    prompt = (
-        f"{_SYSTEM_CONTEXT}\n\n"
-        f"Generate a concise pre-visit clinical summary for a provider to review before the appointment.\n\n"
-        f"Patient: {name} | Date: {today}\n\n"
-        f"Patient-reported data:\n{json.dumps(topic_summaries, indent=2)}\n\n"
-        f"Red flags to screen for:\n{_RED_FLAGS}\n\n"
-        f"Instructions:\n"
-        f"- Use clinical language (e.g., 'oral mucositis', 'dysphagia') but quote the patient when it adds meaning.\n"
-        f"- Omit any topic with no data.\n\n"
-        f"Use this exact structure:\n"
-        f"---\n"
-        f"CHATREPORT — PRE-VISIT CLINICAL SUMMARY\n"
-        f"Patient: {name}  |  Date: {today}\n"
-        f"{'=' * 56}\n\n"
-        f"CLINICAL OVERVIEW\n"
-        f"[2-3 sentence summary of the patient's current status and most prominent issues.]\n\n"
-        f"FLAGS FOR PROVIDER ATTENTION\n"
-        f"[Bullets for any red flags identified. If none: No urgent flags identified.]\n\n"
-        f"SYMPTOM DETAILS BY DOMAIN\n"
-        f"[One bold-header subsection per completed topic. Bullets covering severity, medications, and functional impact.]\n\n"
-        f"SUGGESTED DISCUSSION POINTS\n"
-        f"[2-4 bullets for the provider to follow up on. Do not repeat red flags.]\n"
-        f"---\n\n"
-        f"Write only the completed report. No disclaimers or meta-notes."
-    )
-    return _call_openai(prompt, max_tokens=2000, temp=0.2) or "Report generation failed."
-
-
 # ── Freeform chat response ────────────────────────────────────────
 def _freeform_llm_response(messages: list) -> str:
     """Respond to open-ended patient messages in the 'Anything else?' section."""
@@ -1947,6 +1836,7 @@ _init_state()
 def load_last_checkin(name: str) -> dict:
     """
     Fetch the most recent saved check-in for this patient from Google Sheets.
+    Reads the data_json column (last column) which stores the full structured data.
     Returns a dict keyed by topic_key -> {q_id: answer}, or {} if none found.
     """
     _init_sheets()
@@ -1956,12 +1846,10 @@ def load_last_checkin(name: str) -> dict:
         rows = _sheet.get_all_values()
         last_row = None
         for row in rows[1:]:
-            if len(row) >= 3 and row[1].strip().lower() == name.strip().lower():
-                last_row = row          # keep iterating — last match wins
-        if last_row:
-            raw = json.loads(last_row[2])
-            # raw is {topic_key: {q_id: answer}}
-            return raw
+            if len(row) >= 2 and row[1].strip().lower() == name.strip().lower():
+                last_row = row
+        if last_row and len(last_row) > _DATA_JSON_COL:
+            return json.loads(last_row[_DATA_JSON_COL])
     except Exception:
         pass
     return {}
@@ -1970,111 +1858,6 @@ def load_last_checkin(name: str) -> dict:
 # ══════════════════════════════════════════════════════════════════
 # TOPIC SUMMARY FORMATTER  (rule-based, no LLM)
 # ══════════════════════════════════════════════════════════════════
-
-# Key fields to surface per topic — (field_id, short_label)
-_SUMMARY_FIELDS = {
-    "pain": [
-        ("has_pain",            "Pain today"),
-        ("pain_location",       "Location"),
-        ("throat_severity",     "Throat severity"),
-        ("tongue_severity",     "Tongue severity"),
-        ("pain_medications",    "Medications"),
-        ("taking_as_prescribed","Adherence"),
-    ],
-    "nutrition": [
-        ("eating_ability",        "Eating"),
-        ("weight",                "Weight (lbs)"),
-        ("swallowing_difficulty", "Swallowing"),
-        ("feeding_tube",          "Feeding tube"),
-        ("iv_fluids",             "IV fluids"),
-        ("taste_changes",         "Taste changes"),
-    ],
-    "oral": [
-        ("mouth_sores",    "Mouth sores"),
-        ("dry_mouth",      "Dry mouth"),
-        ("mucus_issues",   "Mucus"),
-        ("oral_rinse_use", "Oral rinse"),
-    ],
-    "gi": [
-        ("nausea_vomiting", "Nausea/vomiting/diarrhea"),
-        ("constipation",    "Constipation"),
-    ],
-    "fatigue": [
-        ("fatigue",           "Fatigue"),
-        ("sleep_quality",     "Sleep"),
-        ("medication_drowsy", "Medication drowsiness"),
-    ],
-    "activity": [
-        ("activity_level",           "Activity level"),
-        ("activity_limiting_factor", "Limiting factor"),
-    ],
-    "mood": [
-        ("feeling_down",      "Feeling down"),
-        ("support_adequate",  "Support"),
-        ("anxiety_impact",    "Anxiety impact"),
-    ],
-    "other": [
-        ("breathing_issues",  "Breathing"),
-        ("hearing_changes",   "Hearing"),
-        ("dizziness",         "Dizziness"),
-        ("skin_issues",       "Skin"),
-        ("voice_hoarseness",  "Voice"),
-        ("fever_chills",      "Fever/chills"),
-    ],
-}
-
-
-def _checkin_summary_html(topic_key: str, data: dict) -> str:
-    """
-    Build a chip-grid HTML block showing key facts from the previous check-in.
-    Each field becomes a small pill: Label on top, value below.
-    Returns an HTML string, or "" if no data to show.
-    """
-    fields = _SUMMARY_FIELDS.get(topic_key, [])
-    chips  = []
-
-    for field_id, label in fields:
-        val = data.get(field_id)
-        if val is None:
-            continue
-        field_type = QUESTION_TYPE_BY_ID.get(field_id, "options")
-        if isinstance(val, list):
-            if field_id == "pain_medications" and "Other" in val and data.get("pain_medications_other_detail"):
-                val = [
-                    data["pain_medications_other_detail"] if item == "Other" else item
-                    for item in val
-                ]
-            val_str = ", ".join(str(v) for v in val)
-        else:
-            val_str = str(val)
-        val_str = val_str.strip()
-        if not val_str:
-            continue
-        if len(val_str) > 35:
-            val_str = val_str[:32] + "…"
-
-        is_option_value = field_type in {"options", "multi_select"}
-        chip_bg = "#fff7ed" if is_option_value else "#f4f8ff"
-        chip_border = "#fdba74" if is_option_value else "#d0e0f8"
-        label_color = "#9a6a1a" if is_option_value else "#8fa8c8"
-        value_color = "#c2410c" if is_option_value else "#1e3a5f"
-
-        chips.append(
-            f'<div style="display:inline-flex;flex-direction:column;'
-            f'background:{chip_bg};border:1px solid {chip_border};'
-            f'border-radius:10px;padding:5px 13px 6px 13px;'
-            f'min-width:70px;max-width:200px;">'            f'<span style="font-size:10px;color:{label_color};font-weight:600;'
-            f'text-transform:uppercase;letter-spacing:0.4px;'
-            f'margin-bottom:2px;">{_html.escape(label)}</span>'            f'<span style="font-size:13px;color:{value_color};font-weight:700;'
-            f'line-height:1.3;">{_html.escape(val_str)}</span>'            f'</div>'
-        )
-
-    if not chips:
-        return ""
-
-    return (
-        '<div style="display:flex;flex-wrap:wrap;gap:8px;padding:4px 0 6px 0;">'        + "".join(chips)        + '</div>'
-    )
 
 
 # ── Sidebar summary: natural-language sentence per topic ─────────
@@ -2489,11 +2272,10 @@ def render_topic_detail(topic_label: str, topic_key: str):
     # ── Previous check-in summary card ────────────────────────────
     if has_prev:
         if last_data:
-            chips_html = _checkin_summary_html(topic_key, last_data)
-            if chips_html:
+            prev_text = format_topic_data(topic_key, last_data)
+            if prev_text:
                 with st.expander("Last visit summary", expanded=False):
-                    st.caption("These answers are from your last visit. You can change any of them for this visit.")
-                    st.markdown(chips_html, unsafe_allow_html=True)
+                    st.text(prev_text)
         else:
             st.caption("No information from your last visit was recorded for this section.")
 
@@ -2647,16 +2429,11 @@ def render_sidebar():
                          type="primary", key="sidebar_submit"):
                 all_data = {k: st.session_state.topic_states[k]["data"]
                             for _, k in TOPICS}
+                ff_msgs = [m for m in st.session_state.freeform_chat if m["role"] == "user"]
                 if ff_msgs:
-                    all_data["freeform_notes"] = [
-                        m["content"] for m in st.session_state.freeform_chat
-                        if m["role"] == "user"
-                    ]
-                with st.spinner("Generating report…"):
-                    report = generate_report(st.session_state.patient_name, all_data)
-                st.session_state.report = report
+                    all_data["freeform_notes"] = [m["content"] for m in ff_msgs]
                 with st.spinner("Saving…"):
-                    save_to_sheet(st.session_state.patient_name, all_data, report)
+                    save_to_sheet(st.session_state.patient_name, all_data)
                 st.session_state.report_saved = True
                 st.session_state.app_stage = "report"
                 st.rerun()
@@ -2811,61 +2588,42 @@ def screen_main():
 def screen_report():
     render_sidebar()
 
-    st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.markdown("### 📄 Clinical Check-In Report")
+    name = st.session_state.patient_name
+    date = datetime.now().strftime("%B %d, %Y")
+
     st.markdown(
-        f"**Patient:** {st.session_state.patient_name} &nbsp;|&nbsp; "
-        f"**Date:** {datetime.now().strftime('%B %d, %Y')}"
-    )
-    st.markdown(
-        '<div style="font-size:13px;color:#627287;line-height:1.7;">'
-        'This report is formatted for quick clinical review before the appointment.'
-        '</div>',
+        f'<div class="card">'
+        f'<div style="font-size:12px;font-weight:800;letter-spacing:0.08em;text-transform:uppercase;color:#6b7b92;margin-bottom:8px;">Check-in complete</div>'
+        f'<div style="font-size:28px;font-weight:800;letter-spacing:-0.03em;color:#10233d;">✅ Saved to Google Sheets</div>'
+        f'<div style="font-size:14px;color:#56667d;margin-top:8px;">Patient: <strong>{_html.escape(name)}</strong> &nbsp;|&nbsp; Date: {date}</div>'
+        f'</div>',
         unsafe_allow_html=True,
     )
-    st.markdown('</div>', unsafe_allow_html=True)
 
+    # Show a per-topic summary table built entirely by code
     all_data = {key: st.session_state.topic_states[key]["data"] for _, key in TOPICS}
-    ff_msgs  = [m for m in st.session_state.freeform_chat if m["role"] == "user"]
+    ff_msgs  = [m["content"] for m in st.session_state.freeform_chat if m["role"] == "user"]
+
+    for label, key in TOPICS:
+        data = all_data.get(key, {})
+        if not data:
+            continue
+        topic_name = label.split(" ", 1)[1] if " " in label else label
+        formatted  = format_topic_data(key, data)
+        if not formatted:
+            continue
+        with st.expander(f"**{topic_name}**", expanded=False):
+            st.text(formatted)
+
     if ff_msgs:
-        all_data["freeform_notes"] = [m["content"] for m in ff_msgs]
-
-    if not st.session_state.report:
-        with st.spinner("Generating clinical report…"):
-            st.session_state.report = generate_report(
-                st.session_state.patient_name, all_data
-            )
-
-    st.markdown('<div class="report-box">', unsafe_allow_html=True)
-    st.markdown(st.session_state.report)
-    st.markdown('</div>', unsafe_allow_html=True)
+        with st.expander("**Freeform Notes**", expanded=False):
+            for msg in ff_msgs:
+                st.markdown(f"- {msg}")
 
     st.markdown("---")
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-        if st.button("⬅️ Back to Check-In"):
-            st.session_state.app_stage = "main"
-            st.rerun()
-
-    with col2:
-        saved     = st.session_state.get("report_saved", False)
-        btn_label = "✅ Saved" if saved else "💾 Save to Google Sheets"
-        if st.button(btn_label, type="primary", disabled=saved):
-            with st.spinner("Saving…"):
-                _init_sheets()
-                save_to_sheet(
-                    st.session_state.patient_name,
-                    all_data,
-                    st.session_state.report,
-                )
-            st.session_state.report_saved = True
-            st.success("Saved successfully!")
-            st.rerun()
-
-    with col3:
-        if st.button("📋 Copy to Clipboard (manual)"):
-            st.info("Select the report text above and copy (Ctrl+C / Cmd+C).")
+    if st.button("⬅️ Back to Check-In"):
+        st.session_state.app_stage = "main"
+        st.rerun()
 
 
 # ══════════════════════════════════════════════════════════════════
