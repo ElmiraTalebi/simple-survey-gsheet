@@ -51,8 +51,16 @@ def _norm_text(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).strip()
 
 
+def _question_meaning_text(text: str) -> str:
+    text = (text or "").strip()
+    if not text:
+        return ""
+    text = re.sub(r"\([^)]*\)", "", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
 def _semantic_tokens(text: str) -> set[str]:
-    normalized = _norm_text(text)
+    normalized = _norm_text(_question_meaning_text(text))
     if not normalized:
         return set()
 
@@ -114,8 +122,8 @@ def _is_redundant_followup(original_question: str, answer: str, followup_questio
 
 
 def _is_semantically_redundant_question(text_a: str, text_b: str) -> bool:
-    a = _norm_text(text_a)
-    b = _norm_text(text_b)
+    a = _norm_text(_question_meaning_text(text_a))
+    b = _norm_text(_question_meaning_text(text_b))
     if not a or not b:
         return False
     if a == b or a in b or b in a:
@@ -1151,6 +1159,13 @@ def _append_assistant_message(state: dict, text: str):
     if state["chat"] and state["chat"][-1]["role"] == "assistant" and state["chat"][-1]["content"].strip() == text:
         return
     state["chat"].append({"role": "assistant", "content": text})
+
+
+def _last_assistant_message(state: dict) -> str:
+    for msg in reversed(state.get("chat", [])):
+        if msg.get("role") == "assistant":
+            return str(msg.get("content", "")).strip()
+    return ""
 
 
 def render_chat_bubble(role: str, content: str):
@@ -3450,9 +3465,6 @@ def render_topic_detail(topic_label: str, topic_key: str):
         state["status"] = "in_progress"
         intro = TOPIC_INTROS.get(topic_key, "Let's go through this section together.")
         state["chat"] = [{"role": "assistant", "content": intro}]
-        first_step = get_next_step(topic_key, state["data"])
-        if first_step:
-            _append_assistant_message(state, _step_prompt_text(first_step))
 
     # ── Header with progress bar ─────────────────────────────────
     answered, applicable = get_topic_progress(topic_key, state["data"])
@@ -3529,7 +3541,10 @@ def render_topic_detail(topic_label: str, topic_key: str):
     if next_step:
         # Look up previous answer for this specific question
         prev_answer = last_data.get(next_step["id"]) if last_data else None
-        _append_assistant_message(state, _step_prompt_text(next_step))
+        next_prompt = _step_prompt_text(next_step)
+        last_assistant = _last_assistant_message(state)
+        if not (last_assistant and _is_semantically_redundant_question(last_assistant, next_prompt)):
+            _append_assistant_message(state, next_prompt)
         render_input(topic_key, next_step, prev_answer=prev_answer)
 
 
