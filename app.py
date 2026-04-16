@@ -1751,12 +1751,16 @@ def get_followup(topic_key: str, step: dict, answer: str, history: list) -> dict
         f"Patient answer: {answer}\n"
         f"Recent conversation:\n{recent_history}\n\n"
         f"Red flags to watch for:\n{_RED_FLAGS}\n\n"
-        f"Decide the best next move:\n"
-        f"- Default is mode=\"continue\" — only ask a follow-up if the answer is vague, unclear, "
-        f"or missing a key clinical detail.\n"
-        f"- If asking a follow-up, keep it short and directly related to what the patient said.\n"
+        f"The patient typed a free-text answer. Decide the best next move:\n"
+        f"1. \"continue\" — the answer is clear enough; move on to the next question.\n"
+        f"2. \"assistant_message\" only — the answer is fine but a brief supportive or "
+        f"acknowledging message would help (e.g. comparing to last visit, noting something positive).\n"
+        f"3. \"follow_up\" — the answer is vague, unclear, or missing a key clinical detail "
+        f"that one short question would resolve. Max 1 follow-up.\n\n"
+        f"Rules:\n"
+        f"- Default to \"continue\". Only ask a follow-up if it clearly adds clinical value.\n"
         f"- If a red flag is present, mention it briefly in assistant_message.\n"
-        f"- Keep assistant_message to 1-2 short sentences (or empty).\n\n"
+        f"- assistant_message should be 1-2 short sentences or empty.\n\n"
         f"Return JSON only:\n"
         f'{{"mode":"continue"|"follow_up","assistant_message":"...","follow_up_question":"..."}}'
     )
@@ -1994,8 +1998,10 @@ def _patient_overview_summary(topic_key, data): return _topic_summary(topic_key,
 
 def handle_answer(topic_key: str, step: dict, answer, display_override: Optional[str] = None):
     """
-    Save the patient's answer, ask one LLM follow-up question if needed,
-    then advance to the next structured question.
+    Save the patient's answer, then:
+    - If the answer is a matched structured option (from dropdown or Role 1): advance directly.
+    - If the answer is an unmatched free-text string (from a free_text question, or typed
+      on an option question with no match): call Role 2 to decide the next move.
     """
     state = st.session_state.topic_states[topic_key]
     display = display_override if display_override is not None else (
@@ -2005,10 +2011,11 @@ def handle_answer(topic_key: str, step: dict, answer, display_override: Optional
     state["data"][step["id"]] = answer
     state["status"] = "in_progress"
 
-    # Ask LLM if a follow-up is needed.
-    # Only for free_text questions — options/multi_select answers are already structured
-    # and the next structured question handles any needed clarification.
-    if step.get("type") == "free_text" and isinstance(answer, str) and openai_client:
+    # Role 2: called whenever the answer is a free-text string that was NOT matched
+    # to a predefined option — covers both free_text questions and unmatched typed
+    # answers on option questions.
+    is_unmatched_text = isinstance(answer, str) and answer not in step.get("opts", [])
+    if is_unmatched_text and openai_client:
         turn = get_followup(topic_key, step, answer, state["chat"])
         if turn.get("mode") == "follow_up":
             state["waiting_for_followup"] = True
@@ -2027,7 +2034,7 @@ def handle_answer(topic_key: str, step: dict, answer, display_override: Optional
     next_step = get_next_step(topic_key, state["data"])
     if topic_is_complete(topic_key, state["data"]):
         state["status"] = "completed"
-        state["chat"].append({"role": "assistant", "content": "\u2705 Thank you — I have everything I need for this topic."})
+        state["chat"].append({"role": "assistant", "content": "✅ Thank you — I have everything I need for this topic."})
     elif next_step:
         _append_assistant_message(state, _step_prompt_text(next_step))
     st.rerun()
@@ -2092,28 +2099,21 @@ def render_input(topic_key: str, step: dict):
                 st.session_state[f"txt_{topic_key}_{sid}_done"] = raw
                 matched = match_to_option(step, raw)
                 if matched in step.get("opts", []):
-                    handle_answer(topic_key, step, matched)
-                else:
-                    # Patient typed a specific answer that doesn't match any named option.
-                    # If "Somewhere else" or "Other" exists, use it and save the typed text as detail.
-                    fallback = next(
-                        (o for o in step.get("opts", []) if o.lower() in {"somewhere else", "other"}),
-                        None
-                    )
-                    if fallback:
-                        state["data"][f"{sid}_other_detail"] = raw
-                        # The patient already answered the next question too —
-                        # pre-fill it so the flow engine skips it.
-                        next_step = get_next_step(topic_key, {**state["data"], step["id"]: fallback})
-                        if next_step and next_step.get("type") == "free_text":
-                            state["data"][next_step["id"]] = raw
-                        handle_answer(topic_key, step, fallback, display_override=raw)
+                    # Role 1 matched to a structured option.
+                    # Special case: "Somewhere else" / "Other" means the patient already
+                    # answered the next free-text question with their typed text — pre-fill it.
+                    if matched.lower() in {"somewhere else", "other"}:
+                        temp_data = {**state["data"], sid: matched}
+                        next_st = get_next_step(topic_key, temp_data)
+                        if next_st and next_st.get("type") == "free_text":
+                            state["data"][next_st["id"]] = raw
+                        handle_answer(topic_key, step, matched, display_override=raw)
                     else:
-                        state["chat"].append({"role": "user", "content": raw})
-                        opts_str = ", ".join(f'"{o}"' for o in step["opts"])
-                        state["chat"].append({"role": "assistant",
-                                              "content": f"Could you choose one of: {opts_str}?"})
-                        st.rerun()
+                        handle_answer(topic_key, step, matched)
+                else:
+                    # Role 1 found no match — pass raw text to handle_answer.
+                    # Role 2 inside handle_answer will decide the next move.
+                    handle_answer(topic_key, step, raw)
             st.markdown('</div>', unsafe_allow_html=True)
 
     # ── Multi-select: dropdown + free-text typed/voice ───────────
@@ -2150,10 +2150,9 @@ def render_input(topic_key: str, step: dict):
                     state["data"][f"{sid}_other_detail"] = raw
                     handle_answer(topic_key, step, ["Other"], display_override=raw)
                 else:
-                    state["chat"].append({"role": "user", "content": raw})
-                    state["chat"].append({"role": "assistant",
-                                          "content": "I didn't catch that. Could you type one option at a time?"})
-                    st.rerun()
+                    # Nothing matched at all — pass raw text to handle_answer.
+                    # Role 2 will decide the next move.
+                    handle_answer(topic_key, step, raw)
             st.markdown('</div>', unsafe_allow_html=True)
 
     # ── Number: text input with range validation ─────────────────
