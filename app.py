@@ -2221,8 +2221,10 @@ def handle_answer(topic_key: str, step: dict, answer, display_override: Optional
     state["data"][step["id"]] = answer
     state["status"] = "in_progress"
 
-    # Ask LLM if a follow-up is needed (free-text answers only, max 1 follow-up per question)
-    if isinstance(answer, str) and openai_client:
+    # Ask LLM if a follow-up is needed.
+    # Only for free_text questions — options/multi_select answers are already structured
+    # and the next structured question handles any needed clarification.
+    if step.get("type") == "free_text" and isinstance(answer, str) and openai_client:
         turn = get_followup(topic_key, step, answer, state["chat"])
         if turn.get("mode") == "follow_up":
             state["waiting_for_followup"] = True
