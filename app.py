@@ -1747,24 +1747,27 @@ def get_followup(topic_key: str, step: dict, answer: str, history: list) -> dict
     prompt = (
         f"{_SYSTEM_CONTEXT}\n\n"
         f"Topic: {topic_label}\n"
-        f"Question: {step['text']}\n"
+        f"Question asked: {step['text']}\n"
         f"Patient answer: {answer}\n"
         f"Recent conversation:\n{recent_history}\n\n"
         f"Red flags to watch for:\n{_RED_FLAGS}\n\n"
-        f"The patient typed a free-text answer. Decide the best next move:\n"
-        f"1. \"continue\" — the answer is clear enough; move on to the next question.\n"
-        f"2. \"assistant_message\" only — the answer is fine but a brief supportive or "
-        f"acknowledging message would help (e.g. comparing to last visit, noting something positive).\n"
-        f"3. \"follow_up\" — the answer is vague, unclear, or missing a key clinical detail "
-        f"that one short question would resolve. Max 1 follow-up.\n\n"
-        f"Rules:\n"
-        f"- Default to \"continue\". Only ask a follow-up if it clearly adds clinical value.\n"
-        f"- If a red flag is present, mention it briefly in assistant_message.\n"
-        f"- assistant_message should be 1-2 short sentences or empty.\n\n"
-        f"Return JSON only:\n"
+        f"Decide the best next move. Choose mode=\"follow_up\" for either of these two goals:\n\n"
+        f"Goal 1 — Clarify a vague answer:\n"
+        f"  Ask if the answer is unclear, too short, or doesn't give useful clinical information.\n"
+        f"  Example: patient says 'a lot' to a frequency question → ask 'Roughly how many times a day?'\n\n"
+        f"Goal 2 — Gather one more useful clinical detail:\n"
+        f"  Ask one short follow-up that the structured flow doesn't cover but would clearly\n"
+        f"  help the care team — based on what the patient just said.\n"
+        f"  Example: patient says 'I take oxycodone' → ask 'Is it helping control the pain?'\n"
+        f"  Example: patient says 'I feel anxious' → ask 'Is the anxiety affecting your sleep or eating?'\n\n"
+        f"Choose mode=\"continue\" only when:\n"
+        f"  - The answer is already clear and complete.\n"
+        f"  - A follow-up would feel repetitive or unnecessary.\n\n"
+        f"assistant_message: optional 1-2 sentence warm acknowledgment or red flag note. Can accompany either mode.\n\n"
+        f"Return JSON only — mode must be exactly \"continue\" or \"follow_up\":\n"
         f'{{"mode":"continue"|"follow_up","assistant_message":"...","follow_up_question":"..."}}'
     )
-    parsed = _extract_json_object(_call_openai(prompt, max_tokens=200, temp=0.4))
+    parsed = _extract_json_object(_call_openai(prompt, max_tokens=200, temp=0.6))
     if parsed.get("mode") not in {"continue", "follow_up"}:
         return {}
     if parsed.get("mode") == "follow_up" and not parsed.get("follow_up_question"):
