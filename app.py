@@ -295,7 +295,12 @@ Patient answer:
 
 Instructions:
 - If the patient's answer clearly matches one listed option, return that option exactly.
+- If the patient's answer clearly implies one listed option, return that option exactly.
 - If the patient's answer is a synonym, common short form, common phrasing, or a very close misspelling of one listed option, return that option exactly.
+- For yes/no questions:
+  - return "Yes" if the patient clearly describes having the symptom, problem, or experience being asked about.
+  - return "No" if the patient clearly describes not having it.
+- If an option such as "Multiple issues" fits better than any single option, return that exact option.
 - Do not change the answer to "Other" or "Somewhere else" unless the patient clearly says "other" or "somewhere else".
 - If there is no clear match, return the patient's original answer exactly.
 - Do not guess.
@@ -2833,6 +2838,9 @@ def handle_pending_followup(topic_key: str, answer: str, source: str = "typed"):
             if interpreted in source_step.get("opts", []):
                 handle_answer(topic_key, source_step, interpreted, source=source)
                 return
+            if retry_text and not _looks_vague_answer(retry_text):
+                handle_answer(topic_key, source_step, retry_text, source="free_text")
+                return
             _request_retry_for_step(topic_key, source_step, retry_text, source=source)
             return
 
@@ -2847,7 +2855,7 @@ def handle_pending_followup(topic_key: str, answer: str, source: str = "typed"):
                     topic_key,
                     source_step,
                     ["Other"],
-                    source=source,
+                    source="free_text",
                     display_override=retry_text,
                 )
                 return
@@ -3061,6 +3069,9 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
                 if interpreted in step.get("opts", []):
                     handle_answer(topic_key, step, interpreted, source="typed")
                 else:
+                    if not _looks_vague_answer(user_text):
+                        handle_answer(topic_key, step, user_text, source="free_text")
+                        return
                     _request_retry_for_step(topic_key, step, user_text, source="typed")
                     return
 
@@ -3071,6 +3082,9 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
                 if interpreted in step.get("opts", []):
                     handle_answer(topic_key, step, interpreted, source="voice")
                 else:
+                    if not _looks_vague_answer(voice_text):
+                        handle_answer(topic_key, step, voice_text, source="free_text")
+                        return
                     _request_retry_for_step(topic_key, step, voice_text, source="voice")
                     return
             st.markdown('</div>', unsafe_allow_html=True)
@@ -3114,6 +3128,16 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
                 if parsed:
                     handle_answer(topic_key, step, parsed, source="typed")
                 else:
+                    if "Other" in step.get("opts", []) and not _looks_vague_answer(user_text):
+                        state["data"][f"{sid}_other_detail"] = user_text
+                        handle_answer(
+                            topic_key,
+                            step,
+                            ["Other"],
+                            source="free_text",
+                            display_override=user_text,
+                        )
+                        return
                     _request_retry_for_step(topic_key, step, user_text, source="typed")
                     return
 
@@ -3124,6 +3148,16 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
                 if parsed:
                     handle_answer(topic_key, step, parsed, source="voice")
                 else:
+                    if "Other" in step.get("opts", []) and not _looks_vague_answer(voice_text):
+                        state["data"][f"{sid}_other_detail"] = voice_text
+                        handle_answer(
+                            topic_key,
+                            step,
+                            ["Other"],
+                            source="free_text",
+                            display_override=voice_text,
+                        )
+                        return
                     _request_retry_for_step(topic_key, step, voice_text, source="voice")
                     return
             st.markdown('</div>', unsafe_allow_html=True)
