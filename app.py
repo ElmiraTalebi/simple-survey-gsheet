@@ -1685,13 +1685,18 @@ _RED_FLAGS = (
 )
 
 
-def _call_openai(prompt: str, max_tokens: int = 120, temp: float = 0.4) -> str:
+def _call_openai(prompt: str, max_tokens: int = 120, temp: float = 0.4,
+                 system: str = "") -> str:
     if not openai_client:
         return ""
     try:
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
         r = openai_client.chat.completions.create(
             model="gpt-4.1-mini",
-            messages=[{"role": "user", "content": prompt}],
+            messages=messages,
             max_tokens=max_tokens,
             temperature=temp,
         )
@@ -1703,8 +1708,8 @@ def _call_openai(prompt: str, max_tokens: int = 120, temp: float = 0.4) -> str:
 # ── LLM Role 1: Map free-text input to a predefined option ───────
 def match_to_option(step: dict, user_input: str) -> str:
     """
-    If the patient typed a free-text answer to a structured question,
-    map it to the closest predefined option using the LLM.
+    LLM Role 1 — Option Matching.
+    Map a patient's free-text answer to the closest predefined option.
     Returns the matched option, or the original input if no match is found.
     """
     if not openai_client:
@@ -1720,54 +1725,61 @@ def match_to_option(step: dict, user_input: str) -> str:
         f"- Return the exact option if the answer clearly matches or implies it.\n"
         f"- For yes/no questions: return \"Yes\" if they describe the symptom, \"No\" if not.\n"
         f"- If the answer is a specific value that doesn't match any named option but "
-        f"\"Other\" or \"Somewhere else\" is in the options list, return that option.\n"
+        f"\"Other\" or \"Somewhere else\" is in the full options list, return that option.\n"
         f"- If no match at all, return the patient's answer exactly.\n"
         f"Return one line only."
     )
-    result = _call_openai(prompt, max_tokens=40, temp=0)
+    result = _call_openai(prompt, max_tokens=40, temp=0, system=_SYSTEM_CONTEXT)
     return result if result in step.get("opts", []) else user_input
 
 
 # ── LLM Role 2: Decide if a follow-up question is needed ─────────
-def get_followup(topic_key: str, step: dict, answer: str, history: list) -> dict:
+def get_followup(topic_key: str, step: dict, answer: str,
+                 history: list, next_step: Optional[dict] = None) -> dict:
     """
-    After a patient's free-text answer, decide whether to ask one clarifying
-    follow-up question or move on to the next structured question.
-    Returns {"mode": "continue"|"follow_up", "assistant_message": "...", "follow_up_question": "..."}
+    LLM Role 2 — Follow-up Decision.
+    After a patient's free-text answer, decide the next move:
+    continue, send a supportive message, or ask one follow-up question.
+    next_step is the next structured question in the flowchart (if any),
+    passed so the LLM doesn't ask something the flow will already cover.
     """
     if not openai_client or not answer.strip():
         return {}
 
     topic_label = _TOPIC_LABELS_LLM.get(topic_key, topic_key)
-    recent_history = "\n".join(
+    # Pass the full topic chat so the LLM can see everything the patient
+    # has already said in this topic — not just the last 4 messages.
+    full_history = "\n".join(
         f"{'Nurse' if m['role'] == 'assistant' else 'Patient'}: {m['content']}"
-        for m in history[-4:]
+        for m in history
     ) or "(start of topic)"
+    next_q = f'"{next_step["text"]}"' if next_step else "None — this is the last question in the topic."
 
     prompt = (
-        f"{_SYSTEM_CONTEXT}\n\n"
         f"Topic: {topic_label}\n"
         f"Question asked: {step['text']}\n"
         f"Patient answer: {answer}\n"
-        f"Recent conversation:\n{recent_history}\n\n"
+        f"Full topic conversation so far:\n{full_history}\n\n"
+        f"Next structured question in the flowchart: {next_q}\n"
         f"Red flags to watch for:\n{_RED_FLAGS}\n\n"
         f"Decide the best next move. Choose mode=\"follow_up\" for either of these two goals:\n\n"
         f"Goal 1 — Clarify a vague answer:\n"
         f"  Ask if the answer is unclear, too short, or doesn't give useful clinical information.\n"
         f"  Example: patient says 'a lot' to a frequency question → ask 'Roughly how many times a day?'\n\n"
         f"Goal 2 — Gather one more useful clinical detail:\n"
-        f"  Ask one short follow-up that the structured flow doesn't cover but would clearly\n"
-        f"  help the care team — based on what the patient just said.\n"
+        f"  Ask one short follow-up that would clearly help the care team, based on what the patient said.\n"
         f"  Example: patient says 'I take oxycodone' → ask 'Is it helping control the pain?'\n"
-        f"  Example: patient says 'I feel anxious' → ask 'Is the anxiety affecting your sleep or eating?'\n\n"
-        f"Choose mode=\"continue\" only when:\n"
+        f"  Example: patient says 'I feel very anxious' → ask 'Is the anxiety affecting your sleep or eating?'\n\n"
+        f"Choose mode=\"continue\" when:\n"
         f"  - The answer is already clear and complete.\n"
-        f"  - A follow-up would feel repetitive or unnecessary.\n\n"
+        f"  - The follow-up you'd ask is already covered by the next structured question shown above.\n\n"
         f"assistant_message: optional 1-2 sentence warm acknowledgment or red flag note. Can accompany either mode.\n\n"
         f"Return JSON only — mode must be exactly \"continue\" or \"follow_up\":\n"
         f'{{"mode":"continue"|"follow_up","assistant_message":"...","follow_up_question":"..."}}'
     )
-    parsed = _extract_json_object(_call_openai(prompt, max_tokens=200, temp=0.6))
+    parsed = _extract_json_object(
+        _call_openai(prompt, max_tokens=200, temp=0.4, system=_SYSTEM_CONTEXT)
+    )
     if parsed.get("mode") not in {"continue", "follow_up"}:
         return {}
     if parsed.get("mode") == "follow_up" and not parsed.get("follow_up_question"):
@@ -2017,9 +2029,12 @@ def handle_answer(topic_key: str, step: dict, answer, display_override: Optional
     # Role 2: called whenever the answer is a free-text string that was NOT matched
     # to a predefined option — covers both free_text questions and unmatched typed
     # answers on option questions.
+    # next_step is computed first so Role 2 knows what the flowchart will ask next
+    # and can avoid asking a redundant follow-up.
+    next_step = get_next_step(topic_key, state["data"])
     is_unmatched_text = isinstance(answer, str) and answer not in step.get("opts", [])
     if is_unmatched_text and openai_client:
-        turn = get_followup(topic_key, step, answer, state["chat"])
+        turn = get_followup(topic_key, step, answer, state["chat"], next_step=next_step)
         if turn.get("mode") == "follow_up":
             state["waiting_for_followup"] = True
             state["pending_followup"] = {
@@ -2034,7 +2049,6 @@ def handle_answer(topic_key: str, step: dict, answer, display_override: Optional
             state["chat"].append({"role": "assistant", "content": turn["assistant_message"]})
 
     # Advance to next question or mark topic complete
-    next_step = get_next_step(topic_key, state["data"])
     if topic_is_complete(topic_key, state["data"]):
         state["status"] = "completed"
         state["chat"].append({"role": "assistant", "content": "✅ Thank you — I have everything I need for this topic."})
