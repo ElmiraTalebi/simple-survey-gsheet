@@ -209,12 +209,68 @@ def _build_retry_prompt(step: dict, user_input: str) -> str:
     return "I didn’t find a clear match there. Could you please say it again or choose the closest option?"
 
 
+_OPTION_SYNONYMS = {
+    "yes": {"yeah", "yep", "y", "sure", "of course", "definitely", "correct"},
+    "no": {"nope", "nah", "n", "not really"},
+    "throat": {"my throat", "in my throat", "throte"},
+    "tongue": {"my tongue", "on my tongue", "tong"},
+    "all the time": {"constant", "constantly", "always"},
+    "only when swallowing": {"when i swallow", "swallowing only"},
+    "only when eating": {"when i eat", "eating only"},
+}
+
+
+def _match_structured_option_locally(step: dict, user_input: str) -> str:
+    text = (user_input or "").strip()
+    normalized = _norm_text(text)
+    if not normalized:
+        return text
+
+    options = step.get("opts", [])
+    if not options:
+        return text
+
+    normalized_to_option = {_norm_text(opt): opt for opt in options}
+    if normalized in normalized_to_option:
+        return normalized_to_option[normalized]
+
+    for opt in options:
+        opt_norm = _norm_text(opt)
+        synonym_set = _OPTION_SYNONYMS.get(opt_norm, set())
+        if normalized in synonym_set:
+            return opt
+
+    generic_options = {"other", "somewhere else"}
+    candidate_norms = [
+        opt_norm for opt_norm in normalized_to_option
+        if opt_norm not in generic_options
+    ]
+    close = get_close_matches(normalized, candidate_norms, n=1, cutoff=0.82)
+    if close:
+        return normalized_to_option[close[0]]
+
+    return text
+
+
+def _pain_location_followup_allowed(answer: str) -> bool:
+    answer_words = set(_norm_text(answer).split())
+    useful_location_terms = {
+        "jaw", "ear", "ears", "neck", "face", "mouth", "cheek", "shoulder",
+        "lip", "lips", "gum", "gums", "head", "chin", "temple",
+    }
+    return bool(answer_words & useful_location_terms)
+
+
 
 
 
 
 
 def interpret_user_input_with_options(step, user_input):
+    local_match = _match_structured_option_locally(step, user_input)
+    if local_match in step.get("opts", []):
+        return local_match
+
     if not openai_client:
         return user_input
 
@@ -239,6 +295,7 @@ Patient answer:
 
 Instructions:
 - If the patient's answer clearly matches one listed option, return that option exactly.
+- If the patient's answer is a synonym, common short form, common phrasing, or a very close misspelling of one listed option, return that option exactly.
 - Do not change the answer to "Other" or "Somewhere else" unless the patient clearly says "other" or "somewhere else".
 - If there is no clear match, return the patient's original answer exactly.
 - Do not guess.
@@ -2087,6 +2144,7 @@ def get_llm_topic_turn(
     last_topic_data: dict,
     chat_history: list,
     next_step: Optional[dict],
+    followup_count: int = 0,
 ) -> dict[str, Any]:
     """
     Decide the most natural next assistant move after a patient's free-text answer.
@@ -2121,14 +2179,16 @@ def get_llm_topic_turn(
         f"RECENT TOPIC CHAT:\n{history_str}\n\n"
         f"CURRENT STRUCTURED DATA:\n{json.dumps(current_data, indent=2)}\n\n"
         f"NEXT STRUCTURED QUESTION IF YOU DECIDE TO CONTINUE: {next_q or 'No further structured question'}\n\n"
+        f"FOLLOW-UP QUESTIONS ALREADY ASKED IN THIS THREAD: {followup_count}\n\n"
         f"RED FLAGS TO WATCH FOR:\n{_RED_FLAGS}\n\n"
         f"YOUR TASK:\n"
         f"Choose the single best next move.\n"
         f"- Patients do not want to spend a long time answering. Save time.\n"
         f"- Your default choice should be: no follow-up question.\n"
-        f"- Ask 0 or 1 follow-up question only. Never ask more than 1 follow-up question here.\n"
         f"- Ask a follow-up only when the patient's answer is not yet useful enough on its own or when one short clarification would clearly help the care team.\n"
         f"- If the patient's answer is already usable on its own, choose mode='continue' and do not ask any follow-up question.\n"
+        f"- Let the patient's answer guide when to stop. If the information is already useful enough, stop asking follow-up questions and continue.\n"
+        f"- Only continue a follow-up thread if each new question is clearly necessary, tightly related to the patient's exact words, and worth the patient's time.\n"
         f"- If the answer is vague, unclear, very short, misspelled, or not usable, ask one gentle clarifying question.\n"
         f"- If the answer is concrete, keep your response brief and natural.\n"
         f"- If comparing with the last visit is clearly helpful and accurate, you may briefly mention that.\n"
@@ -2136,7 +2196,8 @@ def get_llm_topic_turn(
         f"- Do not ask a random question.\n"
         f"- Do not ask a question that repeats the original question in different words.\n"
         f"- Keep the follow-up tightly connected to the patient's exact words.\n"
-        f"- Especially for pain location answers such as jaw, ear, neck, face, or shoulder: accept the location and only ask a follow-up if one short, highly relevant clarification is truly needed.\n"
+        f"- If the patient typed something that clearly matches a listed option or a close synonym of it, treat it as that structured option so the normal predefined follow-up questions can happen.\n"
+        f"- For pain location answers such as jaw, ear, neck, face, or shoulder: accept the location. If a clarification helps, ask it. Stop as soon as the answer is useful enough.\n"
         f"- Do not diagnose. Do not prescribe. Do not hallucinate details.\n"
         f"- Use simple words.\n\n"
         f"Return JSON only in this exact shape:\n"
@@ -2613,6 +2674,8 @@ def _store_followup_prompt(
     assistant_message: str = "",
     retry_current_step: bool = False,
     allow_other_detail: bool = False,
+    followup_count: int = 0,
+    continue_followup_thread: bool = False,
 ):
     if _looks_vague_answer(state["data"].get(step["id"], "")):
         assistant_message = ""
@@ -2620,10 +2683,12 @@ def _store_followup_prompt(
     state["pending_followup"] = {
         "source_step_id": step["id"],
         "question": question,
-        "answer_key": f"{step['id']}_llm_followup",
+        "answer_key": f"{step['id']}_llm_followup_{followup_count + 1}",
         "assistant_message": assistant_message.strip(),
         "retry_current_step": retry_current_step,
         "allow_other_detail": allow_other_detail,
+        "followup_count": followup_count,
+        "continue_followup_thread": continue_followup_thread,
     }
     combined_prompt = "\n\n".join([part for part in [assistant_message.strip(), question.strip()] if part])
     _append_assistant_message(state, combined_prompt)
@@ -2693,6 +2758,14 @@ def handle_pending_followup(topic_key: str, answer: str, source: str = "typed"):
 
     state["chat"].append({"role": "user", "content": answer})
     state["data"][answer_key] = answer
+    source_step_id = pending.get("source_step_id")
+    if source_step_id:
+        followups_key = f"{source_step_id}_llm_followups"
+        existing = state["data"].get(followups_key, [])
+        if not isinstance(existing, list):
+            existing = [str(existing)]
+        existing.append(answer)
+        state["data"][followups_key] = existing
     state["waiting_for_followup"] = False
     state.pop("pending_followup", None)
 
@@ -2706,6 +2779,43 @@ def handle_pending_followup(topic_key: str, answer: str, source: str = "typed"):
 
     next_step = get_next_step(topic_key, state["data"])
     state["status"] = "in_progress"
+
+    source_step = STEP_BY_ID.get(source_step_id) if source_step_id else None
+    followup_count = int(pending.get("followup_count", 0)) + 1
+    if (
+        pending.get("continue_followup_thread")
+        and source_step
+        and openai_client
+    ):
+        llm_step = {"id": source_step["id"], "text": pending.get("question", source_step["text"])}
+        with st.spinner("Thinking…"):
+            turn = get_llm_topic_turn(
+                topic_key=topic_key,
+                step=llm_step,
+                answer=answer,
+                current_data=state["data"],
+                last_topic_data=last_topic_data,
+                chat_history=state["chat"],
+                next_step=next_step,
+                followup_count=followup_count,
+            )
+        followup_question = turn.get("follow_up_question", "").strip()
+        if (
+            turn.get("mode") == "follow_up"
+            and followup_question
+            and not _is_redundant_followup(llm_step["text"], answer, followup_question)
+        ):
+            _store_followup_prompt(
+                topic_key,
+                state,
+                source_step,
+                followup_question,
+                turn.get("assistant_message", ""),
+                followup_count=followup_count,
+                continue_followup_thread=True,
+            )
+            st.rerun()
+            return
 
     if topic_is_complete(topic_key, state["data"]):
         state["status"] = "completed"
@@ -2759,6 +2869,8 @@ def handle_answer(topic_key: str, step: dict, answer, source: str = "structured"
                         step,
                         followup_question,
                         turn.get("assistant_message", ""),
+                        followup_count=0,
+                        continue_followup_thread=True,
                     )
                     st.rerun()
                     return
@@ -2771,6 +2883,8 @@ def handle_answer(topic_key: str, step: dict, answer, source: str = "structured"
                 state,
                 step,
                 _fallback_clarifying_question(step),
+                followup_count=0,
+                continue_followup_thread=True,
             )
             st.rerun()
             return
