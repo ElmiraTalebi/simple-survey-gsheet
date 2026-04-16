@@ -51,6 +51,45 @@ def _norm_text(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).strip()
 
 
+def _semantic_tokens(text: str) -> set[str]:
+    normalized = _norm_text(text)
+    if not normalized:
+        return set()
+
+    synonym_map = {
+        "meds": "medication",
+        "med": "medication",
+        "medicine": "medication",
+        "medicines": "medication",
+        "medications": "medication",
+        "painkiller": "pain",
+        "painkillers": "pain",
+        "taking": "take",
+        "controlled": "control",
+        "controlling": "control",
+    }
+    stop = {
+        "are", "you", "having", "have", "had", "any", "right", "now", "can",
+        "could", "tell", "me", "about", "before", "please", "noticed", "notice",
+        "your", "the", "do", "did", "is", "it", "feels", "feel", "to", "make",
+        "sure", "stays", "stay", "well", "currently", "there", "today", "if",
+        "so", "and", "of", "for", "this", "that", "my", "a", "an", "in",
+    }
+
+    tokens = set()
+    for word in normalized.split():
+        mapped = synonym_map.get(word, word)
+        if mapped.endswith("ing") and len(mapped) > 5:
+            mapped = mapped[:-3]
+        elif mapped.endswith("ed") and len(mapped) > 4:
+            mapped = mapped[:-2]
+        elif mapped.endswith("s") and len(mapped) > 4:
+            mapped = mapped[:-1]
+        if mapped and mapped not in stop:
+            tokens.add(mapped)
+    return tokens
+
+
 def _is_redundant_followup(original_question: str, answer: str, followup_question: str) -> bool:
     oq = _norm_text(original_question)
     aq = _norm_text(answer)
@@ -82,18 +121,42 @@ def _is_semantically_redundant_question(text_a: str, text_b: str) -> bool:
     if a == b or a in b or b in a:
         return True
 
-    stop = {
-        "are", "you", "having", "have", "had", "any", "right", "now", "can",
-        "could", "tell", "me", "about", "before", "please", "noticed", "notice",
-        "your", "the", "do", "did", "is", "it", "feels", "feel",
-    }
-    a_words = {w for w in a.split() if w not in stop}
-    b_words = {w for w in b.split() if w not in stop}
+    a_words = _semantic_tokens(text_a)
+    b_words = _semantic_tokens(text_b)
     if not a_words or not b_words:
         return False
     overlap = len(a_words & b_words)
     smallest = min(len(a_words), len(b_words))
-    return overlap >= 2 and overlap >= smallest - 1
+    if overlap >= 2 and overlap >= smallest - 1:
+        return True
+
+    union = len(a_words | b_words)
+    return union > 0 and overlap / union >= 0.6
+
+
+def _trim_assistant_message_before_next_question(message: str, next_text: str) -> str:
+    message = (message or "").strip()
+    next_text = (next_text or "").strip()
+    if not message or not next_text:
+        return message
+
+    parts = re.findall(r"[^.!?]+[.!?]?", message)
+    if not parts:
+        if _is_semantically_redundant_question(message, next_text):
+            return ""
+        return message
+
+    kept_parts = []
+    for part in parts:
+        cleaned = part.strip()
+        if not cleaned:
+            continue
+        if _is_semantically_redundant_question(cleaned, next_text):
+            continue
+        kept_parts.append(cleaned)
+
+    trimmed = " ".join(kept_parts).strip()
+    return trimmed or ""
 
 
 def _coerce_structured_answer(topic_key: str, step: dict, answer: Any, current_data: dict) -> Any:
@@ -2776,8 +2839,8 @@ def _append_next_question(
 ):
     message = assistant_message.strip()
     next_text = _step_prompt_text(next_step) if next_step else ""
-    if message and next_text and _is_semantically_redundant_question(message, next_text):
-        message = ""
+    if message and next_text:
+        message = _trim_assistant_message_before_next_question(message, next_text)
     if message:
         _append_assistant_message(state, message)
     if next_text:
