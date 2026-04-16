@@ -743,7 +743,7 @@ div[data-baseweb="select"] > div {
 }
 
 .overview-table col.summary-col {
-    width: 250px;
+    width: auto;
 }
 
 .overview-table th,
@@ -782,12 +782,6 @@ div[data-baseweb="select"] > div {
     color: #16324b;
     font-weight: 700;
     margin-bottom: 8px;
-}
-
-.overview-summary-details {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
 }
 
 @media (max-width: 768px) {
@@ -2592,6 +2586,108 @@ def _natural_summary(topic_key: str, data: dict) -> str:
     return ""
 
 
+def _patient_overview_summary(topic_key: str, data: dict) -> str:
+    def v(field):
+        val = data.get(field)
+        if isinstance(val, list):
+            return val if val else None
+        return val if val is not None else None
+
+    if topic_key == "pain":
+        if v("has_pain") == "No":
+            return "You said you were not having pain."
+        loc = (v("pain_location") or "pain").lower()
+        sev = v("throat_severity") or v("tongue_severity")
+        if sev is not None:
+            return f"You reported {loc} pain, around {sev}/10 at its worst."
+        return f"You reported pain in the {loc} area."
+
+    if topic_key == "nutrition":
+        eating = v("eating_ability") or ""
+        weight = v("weight")
+        if "normally" in eating:
+            return "You said eating was going okay."
+        if "less" in eating:
+            return "You said you were eating less than usual."
+        if "Struggling" in eating:
+            return "You said eating and drinking were hard."
+        if "tube" in eating.lower():
+            return "You said you were using tube feeds for nutrition."
+        if weight:
+            return f"Your weight was recorded as {weight} pounds."
+        return "You shared an update about eating, drinking, or weight."
+
+    if topic_key == "oral":
+        parts = []
+        if v("mouth_sores") == "Yes":
+            parts.append("mouth sores or white patches")
+        if v("dry_mouth") == "Yes":
+            parts.append("dry mouth")
+        if v("mucus_issues") == "Yes":
+            parts.append("sticky mucus")
+        if not parts:
+            return "You did not report major mouth or throat symptoms."
+        return f"You mentioned {', '.join(parts[:2])}."
+
+    if topic_key == "gi":
+        nv = v("nausea_vomiting") or []
+        parts = []
+        for label in ["Nausea", "Vomiting", "Diarrhea"]:
+            if label in nv:
+                parts.append(label.lower())
+        if v("constipation") == "Yes":
+            parts.append("constipation")
+        if not parts:
+            return "You did not report major stomach or bowel symptoms."
+        return f"You mentioned {', '.join(parts[:2])}."
+
+    if topic_key == "fatigue":
+        fatigue = v("fatigue")
+        sleep = v("sleep_quality")
+        if fatigue == "Yes" and sleep == "No":
+            return "You said you were feeling tired and not sleeping well."
+        if fatigue == "Yes":
+            return "You said you were more tired or weak than usual."
+        if sleep == "No":
+            return "You said sleep was difficult."
+        return "You did not report major fatigue or sleep concerns."
+
+    if topic_key == "activity":
+        level = v("activity_level") or ""
+        if "normally" in level:
+            return "You said you were doing your usual daily activities."
+        if "less" in level:
+            return "You said you were doing less than usual."
+        if "Struggling" in level:
+            return "You said daily tasks were hard to do."
+        return "You shared an update about daily activity."
+
+    if topic_key == "mood":
+        if v("feeling_down") == "Yes" and v("support_adequate") == "No":
+            return "You said your mood was low and support felt limited."
+        if v("feeling_down") == "Yes":
+            return "You said you had been feeling down."
+        if v("support_adequate") == "No":
+            return "You said you needed more support between visits."
+        return "You shared how you were feeling emotionally."
+
+    if topic_key == "other":
+        parts = []
+        if v("breathing_issues") == "Yes":
+            parts.append("breathing trouble")
+        if v("hearing_changes") == "Yes":
+            parts.append("hearing changes")
+        if v("dizziness") == "Yes":
+            parts.append("dizziness")
+        if v("skin_issues") == "Yes":
+            parts.append("skin changes")
+        if not parts:
+            return "You did not report other major symptoms."
+        return f"You mentioned {', '.join(parts[:2])}."
+
+    return "You shared an update in this area."
+
+
 # ══════════════════════════════════════════════════════════════════
 # FREE-FORM CHAT LLM
 # ══════════════════════════════════════════════════════════════════
@@ -3243,6 +3339,15 @@ def render_topic_detail(topic_label: str, topic_key: str):
     # ── Current question ─────────────────────────────────────────
     if state.get("waiting_for_followup"):
         pending = state.get("pending_followup") or {}
+        if pending.get("retry_current_step"):
+            source_step = STEP_BY_ID.get(pending.get("source_step_id"))
+            if source_step:
+                state["waiting_for_followup"] = False
+                state.pop("pending_followup", None)
+                prev_answer = last_data.get(source_step["id"]) if last_data else None
+                render_input(topic_key, source_step, prev_answer=prev_answer)
+                return
+
         pending_suffix = pending.get("answer_key", "pending")
         pending_key = f"pending_followup_{topic_key}_{pending_suffix}"
         pending_submit_key = f"{pending_key}_submitted"
@@ -3457,13 +3562,11 @@ def screen_overview():
             if not prev_data:
                 continue
             topic_name = label.split(" ", 1)[1] if " " in label else label
-            summary = _natural_summary(key, prev_data) or "Information was recorded for this topic."
-            detail_html = _checkin_summary_html(key, prev_data) or '<span style="color:#7a8ea4;">No extra details recorded</span>'
+            summary = _patient_overview_summary(key, prev_data)
             rows.append(
                 "<tr>"
                 f'<td><div class="overview-topic-name">{_html.escape(topic_name)}</div></td>'
                 f'<td><div class="overview-summary-main">{_html.escape(summary)}</div></td>'
-                f'<td><div class="overview-summary-details">{detail_html}</div></td>'
                 "</tr>"
             )
 
@@ -3474,9 +3577,8 @@ def screen_overview():
                 '<colgroup>'
                 '<col class="topic-col">'
                 '<col class="summary-col">'
-                '<col>'
                 '</colgroup>'
-                '<thead><tr><th>Topic</th><th>Main Summary</th><th>Details From Last Visit</th></tr></thead>'
+                '<thead><tr><th>Topic</th><th>Last Visit Summary</th></tr></thead>'
                 f'<tbody>{"".join(rows)}</tbody>'
                 '</table>'
                 '</div>',
@@ -3484,7 +3586,7 @@ def screen_overview():
             )
             st.markdown(
                 '<div class="overview-note">'
-                'These details are from your last visit. You can change, update, or add anything as you go through today\'s topics.'
+                'This is a short summary from your last visit. You can update anything as you go through today\'s topics.'
                 '</div>',
                 unsafe_allow_html=True,
             )
