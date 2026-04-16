@@ -1719,8 +1719,9 @@ def match_to_option(step: dict, user_input: str) -> str:
         f"Patient answer: \"{user_input}\"\n\n"
         f"- Return the exact option if the answer clearly matches or implies it.\n"
         f"- For yes/no questions: return \"Yes\" if they describe the symptom, \"No\" if not.\n"
-        f"- Do not select \"Other\" or \"Somewhere else\" unless the patient says so explicitly.\n"
-        f"- If no clear match, return the patient's answer exactly.\n"
+        f"- If the answer is a specific value that doesn't match any named option but "
+        f"\"Other\" or \"Somewhere else\" is in the options list, return that option.\n"
+        f"- If no match at all, return the patient's answer exactly.\n"
         f"Return one line only."
     )
     result = _call_openai(prompt, max_tokens=40, temp=0)
@@ -2093,11 +2094,26 @@ def render_input(topic_key: str, step: dict):
                 if matched in step.get("opts", []):
                     handle_answer(topic_key, step, matched)
                 else:
-                    state["chat"].append({"role": "user", "content": raw})
-                    opts_str = ", ".join(f'"{o}"' for o in step["opts"])
-                    state["chat"].append({"role": "assistant",
-                                          "content": f"Could you choose one of: {opts_str}?"})
-                    st.rerun()
+                    # Patient typed a specific answer that doesn't match any named option.
+                    # If "Somewhere else" or "Other" exists, use it and save the typed text as detail.
+                    fallback = next(
+                        (o for o in step.get("opts", []) if o.lower() in {"somewhere else", "other"}),
+                        None
+                    )
+                    if fallback:
+                        state["data"][f"{sid}_other_detail"] = raw
+                        # The patient already answered the next question too —
+                        # pre-fill it so the flow engine skips it.
+                        next_step = get_next_step(topic_key, {**state["data"], step["id"]: fallback})
+                        if next_step and next_step.get("type") == "free_text":
+                            state["data"][next_step["id"]] = raw
+                        handle_answer(topic_key, step, fallback, display_override=raw)
+                    else:
+                        state["chat"].append({"role": "user", "content": raw})
+                        opts_str = ", ".join(f'"{o}"' for o in step["opts"])
+                        state["chat"].append({"role": "assistant",
+                                              "content": f"Could you choose one of: {opts_str}?"})
+                        st.rerun()
             st.markdown('</div>', unsafe_allow_html=True)
 
     # ── Multi-select: dropdown + free-text typed/voice ───────────
