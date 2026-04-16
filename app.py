@@ -3475,6 +3475,13 @@ def render_topic_detail(topic_label: str, topic_key: str):
         if applicable > 0:
             st.caption(f"{answered}/{applicable} answered")
 
+    next_step = get_next_step(topic_key, state["data"])
+    if not state.get("waiting_for_followup") and next_step:
+        next_prompt = _step_prompt_text(next_step)
+        last_assistant = _last_assistant_message(state)
+        if not (last_assistant and _is_semantically_redundant_question(last_assistant, next_prompt)):
+            _append_assistant_message(state, next_prompt)
+
     # ── Chat history ─────────────────────────────────────────────
     if state["chat"]:
         with st.container(border=False):
@@ -3537,14 +3544,9 @@ def render_topic_detail(topic_label: str, topic_key: str):
 
             st.markdown('</div>', unsafe_allow_html=True)
         return
-    next_step = get_next_step(topic_key, state["data"])
     if next_step:
         # Look up previous answer for this specific question
         prev_answer = last_data.get(next_step["id"]) if last_data else None
-        next_prompt = _step_prompt_text(next_step)
-        last_assistant = _last_assistant_message(state)
-        if not (last_assistant and _is_semantically_redundant_question(last_assistant, next_prompt)):
-            _append_assistant_message(state, next_prompt)
         render_input(topic_key, next_step, prev_answer=prev_answer)
 
 
