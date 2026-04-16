@@ -226,23 +226,24 @@ def interpret_user_input_with_options(step, user_input):
     allowed_options = [opt for opt in options if _norm_text(opt) not in generic_options]
 
     prompt = f"""
-    You are a clinical assistant.
-    
-    QUESTION:
-    "{step['text']}"
-    
-    OPTIONS:
-    {allowed_options}
-    
-    PATIENT RESPONSE:
-    "{user_input}"
-    
-    TASK:
-    - If the response clearly matches ONE non-generic option → return that option EXACTLY
-    - Do NOT map a typed answer to "Other" or "Somewhere else" unless the patient literally says "other" or "somewhere else"
-    - Otherwise return the original response
-    
-    ONLY return one line.
+You are helping match a patient's answer to one of the listed options.
+
+Question:
+"{step['text']}"
+
+Options:
+{allowed_options}
+
+Patient answer:
+"{user_input}"
+
+Instructions:
+- If the patient's answer clearly matches one listed option, return that option exactly.
+- Do not change the answer to "Other" or "Somewhere else" unless the patient clearly says "other" or "somewhere else".
+- If there is no clear match, return the patient's original answer exactly.
+- Do not guess.
+
+Return one line only.
     """
 
     try:
@@ -1260,25 +1261,6 @@ FLOW_PAIN = [
        type="free_text", placeholder="e.g., near my jaw and ear…",
        when=lambda d: d.get("pain_location") == "Somewhere else"),
 
-    _q("ear_pain", "Do you have ear pain or hearing changes?",
-       opts=["Yes", "No"],
-       when=lambda d: d.get("pain_location") == "Somewhere else"),
-
-    _q("jaw_swelling", "Do you feel any swelling near your jaw?",
-       opts=["Yes", "No"],
-       when=lambda d: d.get("pain_location") == "Somewhere else"),
-
-    _q("pain_with_chewing",
-       "Does the pain worsen when chewing or opening your mouth?",
-       opts=["Yes", "No"],
-       when=lambda d: d.get("pain_location") == "Somewhere else"),
-
-    _q("pain_start",                        # ← added (Main 3, Somewhere else branch)
-       "When did this pain start?",
-       type="free_text",
-       placeholder="e.g., about a week ago, since I started radiation…",
-       when=lambda d: d.get("pain_location") == "Somewhere else"),
-
     # Main 12 — Medications
     _q("pain_medications",
        "Which medications are you currently taking for pain?",
@@ -2129,9 +2111,8 @@ def get_llm_topic_turn(
 
     prompt = (
         f"{_SYSTEM_CONTEXT}\n\n"
-        f"You are responding inside a symptom-check chatbot for a patient receiving treatment "
-        f"for head and neck cancer between visits. Your job is to sound like a thoughtful, "
-        f"warm oncology nurse, not a form bot.\n\n"
+        f"You are responding inside a symptom check-in chatbot for a patient with head and neck cancer between visits. "
+        f"Your job is to sound like a careful, warm oncology nurse. Be clear, brief, and useful.\n\n"
         f"CURRENT TOPIC: {topic_label}\n"
         f"QUESTION ASKED: {step['text']}\n"
         f"PATIENT RESPONSE: {answer}\n\n"
@@ -2142,25 +2123,29 @@ def get_llm_topic_turn(
         f"NEXT STRUCTURED QUESTION IF YOU DECIDE TO CONTINUE: {next_q or 'No further structured question'}\n\n"
         f"RED FLAGS TO WATCH FOR:\n{_RED_FLAGS}\n\n"
         f"YOUR TASK:\n"
-        f"Choose the single best next conversational move.\n"
-        f"- If the patient gave enough detail, write a brief natural response that sounds human and specific.\n"
-        f"- If comparing with the last visit is clearly helpful and accurate, you may briefly mention improvement, worsening, or similarity.\n"
-        f"- If the answer is vague or opens an important clinical thread, ask one short follow-up question.\n"
-        f"- If the patient's answer is very short, unclear, misspelled, or incomplete, ask a gentle clarifying question in natural language.\n"
-        f"- If the patient's answer is unclear, vague, gibberish, or not clinically usable, do NOT thank them or say you've noted it. Just ask a clarification.\n"
-        f"- Do NOT ask a follow-up that simply repeats or paraphrases the original question.\n"
-        f"- If the patient already directly answered with a concrete detail like a body location, symptom trigger, or medication, accept it.\n"
-        f"- If there is a red flag, stay calm, acknowledge it, and say the team will want to know before the visit.\n"
-        f"- Avoid generic repetition. Do not always react the same way.\n"
-        f"- Do not diagnose, prescribe, or give unsafe reassurance.\n"
-        f"- Keep wording plain and supportive.\n\n"
+        f"Choose the single best next move.\n"
+        f"- Patients do not want to spend a long time answering. Save time.\n"
+        f"- Your default choice should be: no follow-up question.\n"
+        f"- Ask 0 or 1 follow-up question only. Never ask more than 1 follow-up question here.\n"
+        f"- Ask a follow-up only when the patient's answer is not yet useful enough on its own or when one short clarification would clearly help the care team.\n"
+        f"- If the patient's answer is already usable on its own, choose mode='continue' and do not ask any follow-up question.\n"
+        f"- If the answer is vague, unclear, very short, misspelled, or not usable, ask one gentle clarifying question.\n"
+        f"- If the answer is concrete, keep your response brief and natural.\n"
+        f"- If comparing with the last visit is clearly helpful and accurate, you may briefly mention that.\n"
+        f"- If there is a red flag, stay calm, mention it briefly, and say the care team will want to know before the visit.\n"
+        f"- Do not ask a random question.\n"
+        f"- Do not ask a question that repeats the original question in different words.\n"
+        f"- Keep the follow-up tightly connected to the patient's exact words.\n"
+        f"- Especially for pain location answers such as jaw, ear, neck, face, or shoulder: accept the location and only ask a follow-up if one short, highly relevant clarification is truly needed.\n"
+        f"- Do not diagnose. Do not prescribe. Do not hallucinate details.\n"
+        f"- Use simple words.\n\n"
         f"Return JSON only in this exact shape:\n"
         f'{{"mode":"continue"|"follow_up","assistant_message":"...","follow_up_question":"..."}}\n\n'
         f"Rules for the JSON:\n"
         f"- assistant_message can be empty only if a follow-up question alone is best.\n"
         f"- follow_up_question must be empty unless mode is follow_up.\n"
-        f"- Keep assistant_message to 1-2 short sentences.\n"
-        f"- Keep follow_up_question to one concise question.\n"
+        f"- assistant_message should be 0 to 2 short sentences.\n"
+        f"- follow_up_question must be one short, precise question.\n"
     )
 
     parsed = _extract_json_object(_call_openai(prompt, max_tokens=220, temp=0.45))
