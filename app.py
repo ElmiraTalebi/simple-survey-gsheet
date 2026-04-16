@@ -326,27 +326,42 @@ Return one line only.
         return user_input
 
 
-def parse_multi_select_typed_input(step: dict, user_input: str):
+def _parse_multi_select_typed_input_details(step: dict, user_input: str) -> tuple[list[str], list[str]]:
     if not user_input.strip():
-        return []
+        return [], []
 
     lowered_map = {opt.lower(): opt for opt in step.get("opts", [])}
     parts = [p.strip() for p in re.split(r",|/|;|\n", user_input) if p.strip()]
     resolved = []
+    unmatched = []
     for part in parts:
         match = lowered_map.get(part.lower())
         if match:
             resolved.append(match)
-        else:
-            interpreted = interpret_user_input_with_options(step, part)
-            if interpreted in step.get("opts", []):
-                resolved.append(interpreted)
+            continue
+
+        interpreted = interpret_user_input_with_options(step, part)
+        if interpreted in step.get("opts", []):
+            resolved.append(interpreted)
+            continue
+
+        if not _looks_vague_answer(part):
+            unmatched.append(part)
 
     deduped = []
     for item in resolved:
         if item not in deduped:
             deduped.append(item)
-    return deduped
+
+    if unmatched and "Other" in step.get("opts", []) and "Other" not in deduped:
+        deduped.append("Other")
+
+    return deduped, unmatched
+
+
+def parse_multi_select_typed_input(step: dict, user_input: str):
+    resolved, _ = _parse_multi_select_typed_input_details(step, user_input)
+    return resolved
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -2813,6 +2828,44 @@ def _request_retry_for_step(topic_key: str, step: dict, raw_input: str, source: 
     st.rerun()
 
 
+def _request_resolution_for_option_step(topic_key: str, step: dict, raw_input: str, source: str = "typed"):
+    state = st.session_state.topic_states[topic_key]
+    text = (raw_input or "").strip()
+    if text:
+        state["chat"].append({"role": "user", "content": text})
+
+    assistant_message = ""
+    question = _build_retry_prompt(step, text)
+
+    if openai_client and text and not _looks_vague_answer(text):
+        last_topic_data = st.session_state.last_checkin.get(topic_key, {})
+        with st.spinner("Thinking…"):
+            turn = get_llm_topic_turn(
+                topic_key=topic_key,
+                step=step,
+                answer=text,
+                current_data=state["data"],
+                last_topic_data=last_topic_data,
+                chat_history=state["chat"],
+                next_step=None,
+            )
+        llm_question = turn.get("follow_up_question", "").strip()
+        if turn.get("mode") == "follow_up" and llm_question:
+            assistant_message = turn.get("assistant_message", "").strip()
+            question = llm_question
+
+    _store_followup_prompt(
+        topic_key,
+        state,
+        step,
+        question,
+        assistant_message=assistant_message,
+        retry_current_step=True,
+        allow_other_detail=("Other" in step.get("opts", [])),
+    )
+    st.rerun()
+
+
 def handle_pending_followup(topic_key: str, answer: str, source: str = "typed"):
     state = st.session_state.topic_states[topic_key]
     pending = state.get("pending_followup") or {}
@@ -2838,15 +2891,14 @@ def handle_pending_followup(topic_key: str, answer: str, source: str = "typed"):
             if interpreted in source_step.get("opts", []):
                 handle_answer(topic_key, source_step, interpreted, source=source)
                 return
-            if retry_text and not _looks_vague_answer(retry_text):
-                handle_answer(topic_key, source_step, retry_text, source="free_text")
-                return
-            _request_retry_for_step(topic_key, source_step, retry_text, source=source)
+            _request_resolution_for_option_step(topic_key, source_step, retry_text, source=source)
             return
 
         if source_step["type"] == "multi_select":
-            parsed = parse_multi_select_typed_input(source_step, retry_text)
+            parsed, unmatched = _parse_multi_select_typed_input_details(source_step, retry_text)
             if parsed:
+                if unmatched:
+                    state["data"][f"{source_step['id']}_other_detail"] = ", ".join(unmatched)
                 handle_answer(topic_key, source_step, parsed, source=source)
                 return
             if pending.get("allow_other_detail") and retry_text and not _looks_vague_answer(retry_text):
@@ -3069,10 +3121,7 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
                 if interpreted in step.get("opts", []):
                     handle_answer(topic_key, step, interpreted, source="typed")
                 else:
-                    if not _looks_vague_answer(user_text):
-                        handle_answer(topic_key, step, user_text, source="free_text")
-                        return
-                    _request_retry_for_step(topic_key, step, user_text, source="typed")
+                    _request_resolution_for_option_step(topic_key, step, user_text, source="typed")
                     return
 
             voice_submitted_key = f"voice_{topic_key}_{sid}_submitted"
@@ -3082,10 +3131,7 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
                 if interpreted in step.get("opts", []):
                     handle_answer(topic_key, step, interpreted, source="voice")
                 else:
-                    if not _looks_vague_answer(voice_text):
-                        handle_answer(topic_key, step, voice_text, source="free_text")
-                        return
-                    _request_retry_for_step(topic_key, step, voice_text, source="voice")
+                    _request_resolution_for_option_step(topic_key, step, voice_text, source="voice")
                     return
             st.markdown('</div>', unsafe_allow_html=True)
                 
@@ -3124,8 +3170,10 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
 
             if user_text and st.session_state.get(submit_key) != user_text:
                 st.session_state[submit_key] = user_text
-                parsed = parse_multi_select_typed_input(step, user_text)
+                parsed, unmatched = _parse_multi_select_typed_input_details(step, user_text)
                 if parsed:
+                    if unmatched:
+                        state["data"][f"{sid}_other_detail"] = ", ".join(unmatched)
                     handle_answer(topic_key, step, parsed, source="typed")
                 else:
                     if "Other" in step.get("opts", []) and not _looks_vague_answer(user_text):
@@ -3144,8 +3192,10 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
             voice_submit_key = f"voice_{topic_key}_{sid}_submitted"
             if voice_text and st.session_state.get(voice_submit_key) != voice_text:
                 st.session_state[voice_submit_key] = voice_text
-                parsed = parse_multi_select_typed_input(step, voice_text)
+                parsed, unmatched = _parse_multi_select_typed_input_details(step, voice_text)
                 if parsed:
+                    if unmatched:
+                        state["data"][f"{sid}_other_detail"] = ", ".join(unmatched)
                     handle_answer(topic_key, step, parsed, source="voice")
                 else:
                     if "Other" in step.get("opts", []) and not _looks_vague_answer(voice_text):
