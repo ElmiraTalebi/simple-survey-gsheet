@@ -2140,28 +2140,6 @@ def run_mock_session() -> None:
     st.session_state["doctor_report"] = session.get("doctor_report")
 
 
-def render_sidebar() -> None:
-    """Render sidebar metadata and developer controls."""
-    if not ensure_session_state():
-        return
-    session = st.session_state["session"]
-    context = session.get("patient_context") or {}
-    patient_name = (
-        context.get("patient_profile", {}).get("preferred_name")
-        or session.get("patient_record", {}).get("demographics", {}).get("preferred_name", "Unknown")
-    )
-    urgency_tier = session["urgency_state"]["current_tier"]
-    with st.sidebar:
-        st.markdown(f"### {patient_name}")
-        st.write(f"Session date: {session['session_date']}")
-        st.write(f"Questions answered: {len(session['questions_answered'])} of 10")
-        st.write(f"Current urgency tier: {urgency_tier}")
-        st.write(f"Active signals: {len(session['urgency_state']['all_active_signals'])}")
-        if st.checkbox("Developer: Run mock session"):
-            run_mock_session()
-            st.rerun()
-
-
 def render_status_indicator() -> None:
     """Render the top-right urgency tier indicator."""
     if not ensure_session_state():
@@ -2282,7 +2260,6 @@ def main() -> None:
     inject_css()
     if not ensure_session_state():
         return
-    render_sidebar()
     render_status_indicator()
     render_messages()
     render_input_area()
