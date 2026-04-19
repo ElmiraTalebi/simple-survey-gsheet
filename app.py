@@ -1,41 +1,24 @@
-"""
-ChatReport — Multi-agent clinical chatbot for head & neck cancer symptom reporting.
-
-Architecture:
-  1. Symptom Extraction Agent  – identifies symptoms from patient messages
-  2. Clinical Importance Agent – assesses urgency & whether follow-up is warranted
-  3. Follow-up Agent           – selects the next question from the knowledge base
-  4. Patient Experience Agent  – monitors fatigue / engagement level
-  5. Orchestrator              – combines signals, decides what to do next
-  6. Report Generator Agent    – converts collected data into a structured report
-
-Run with:
-    streamlit run app.py
-"""
-
-import difflib
 import json
 import os
 import re
+from copy import deepcopy
+from datetime import datetime
+from typing import Any
 
 import streamlit as st
 from openai import OpenAI
 
-# ─────────────────────────────────────────────────────────────────────────────
-# CONFIG
-# ─────────────────────────────────────────────────────────────────────────────
-st.set_page_config(page_title="ChatReport", page_icon="🏥", layout="centered")
-
-# The test harness replaces this with FakeOpenAIClient() via namespace injection.
-openai_client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY", ""))
-
-MODEL = "gpt-4o"
-TEMP = 0
+try:
+    import gspread
+    from google.oauth2.service_account import Credentials
+except Exception:
+    gspread = None
+    Credentials = None
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# KNOWLEDGE BASE
-# ─────────────────────────────────────────────────────────────────────────────
+st.set_page_config(page_title="ChatReport", page_icon="🩺", layout="centered")
+
+
 KNOWLEDGE_BASE = {
     "general": {
         "main": [
@@ -62,8 +45,7 @@ KNOWLEDGE_BASE = {
         ],
         "required_fields": ["location", "severity", "timing"],
     },
-    # Key matches the TOPIC_STEPS key "oral" so agent_followup can look it up directly.
-    "oral": {
+    "oral_sores": {
         "priority": "high",
         "main": [
             {
@@ -106,13 +88,7 @@ KNOWLEDGE_BASE = {
     },
     "dry_mouth": {
         "priority": "medium",
-        "main": [
-            {
-                "id": "M7",
-                "question": "Are you experiencing dryness in your mouth?",
-                "type": "yes_no",
-            }
-        ],
+        "main": [{"id": "M7", "question": "Are you experiencing dryness in your mouth?", "type": "yes_no"}],
         "followups": [
             "Is it worse at night or all day?",
             "Are you using saliva substitutes?",
@@ -121,13 +97,7 @@ KNOWLEDGE_BASE = {
     },
     "swallowing": {
         "priority": "high",
-        "main": [
-            {
-                "id": "M8",
-                "question": "Are you having difficulty swallowing?",
-                "type": "yes_no",
-            }
-        ],
+        "main": [{"id": "M8", "question": "Are you having difficulty swallowing?", "type": "yes_no"}],
         "followups": [
             "Is it painful or mechanical difficulty?",
             "Do you cough or choke when eating?",
@@ -136,13 +106,7 @@ KNOWLEDGE_BASE = {
     },
     "breathing": {
         "priority": "high",
-        "main": [
-            {
-                "id": "M9",
-                "question": "Are you having difficulty breathing?",
-                "type": "yes_no",
-            }
-        ],
+        "main": [{"id": "M9", "question": "Are you having difficulty breathing?", "type": "yes_no"}],
         "followups": ["Is it constant or with activity?", "Are you wheezing?"],
     },
     "mucus": {
@@ -177,28 +141,13 @@ KNOWLEDGE_BASE = {
     },
     "fatigue": {
         "priority": "medium",
-        "main": [
-            {
-                "id": "M13",
-                "question": "Are you feeling more tired or weak than usual?",
-                "type": "yes_no",
-            }
-        ],
+        "main": [{"id": "M13", "question": "Are you feeling more tired or weak than usual?", "type": "yes_no"}],
         "followups": ["Is it general fatigue or specific weakness?", "Is it affecting daily activities?"],
     },
     "sleep": {
         "priority": "medium",
-        "main": [
-            {
-                "id": "M14",
-                "question": "Are you able to sleep through the night?",
-                "type": "yes_no",
-            }
-        ],
-        "followups": [
-            "Are you waking due to pain or dryness?",
-            "Is medication affecting sleep?",
-        ],
+        "main": [{"id": "M14", "question": "Are you able to sleep through the night?", "type": "yes_no"}],
+        "followups": ["Are you waking due to pain or dryness?", "Is medication affecting sleep?"],
     },
     "mood": {
         "priority": "medium",
@@ -208,1566 +157,1075 @@ KNOWLEDGE_BASE = {
 }
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# TOPIC / STEP DEFINITIONS
-# Each topic maps to an ordered list of structured steps.
-# Steps with `depends_on` are only shown when the condition is met.
-# ─────────────────────────────────────────────────────────────────────────────
-TOPIC_STEPS: dict = {
-    "general": [
-        {
-            "id": "overall_score",
-            "type": "scale",
-            "question": "How has your overall feeling been since your last visit? Rate 0–10.",
-        },
-    ],
-    "pain": [
-        {
-            "id": "has_pain",
-            "type": "option",
-            "opts": ["Yes", "No"],
-            "question": "Do you have any pain today?",
-        },
-        {
-            "id": "pain_location",
-            "type": "option",
-            "opts": ["Throat", "Tongue", "Jaw", "Ear", "Neck", "Face", "Shoulder", "Other"],
-            "question": "Where exactly is the pain?",
-            "depends_on": {"has_pain": "Yes"},
-        },
-        {
-            "id": "pain_type",
-            "type": "option",
-            "opts": ["Constant", "Only when swallowing", "Only when eating", "Comes and goes"],
-            "question": "Is the pain constant or only when swallowing or eating?",
-            "depends_on": {"has_pain": "Yes"},
-        },
-        {
-            "id": "pain_severity",
-            "type": "scale",
-            "question": "On a scale of 0–10, how bad is the pain?",
-            "depends_on": {"has_pain": "Yes"},
-        },
-        {
-            "id": "pain_medications",
-            "type": "multi",
-            "opts": [
-                "Oxycodone", "Hydrocodone", "Acetaminophen",
-                "Ibuprofen", "Morphine", "Gabapentin",
-                "Prednisone", "Other",
-            ],
-            "question": "What pain medications are you currently taking?",
-            "depends_on": {"has_pain": "Yes"},
-        },
-        {
-            "id": "pain_meds_helping",
-            "type": "option",
-            "opts": ["Yes, helping well", "Somewhat", "Not really", "Not taking any"],
-            "question": "Are your pain medications helping?",
-            "depends_on": {"has_pain": "Yes"},
-        },
-        {
-            "id": "pain_spread",
-            "type": "option",
-            "opts": ["Stays in one spot", "Spreads to other areas"],
-            "question": "Does the pain spread or stay in one spot?",
-            "depends_on": {"has_pain": "Yes"},
-        },
-    ],
-    "oral": [
-        {
-            "id": "has_oral_sores",
-            "type": "option",
-            "opts": ["Yes", "No"],
-            "question": "Do you have any mouth sores or ulcers right now?",
-        },
-        {
-            "id": "oral_sore_new",
-            "type": "option",
-            "opts": ["New", "Pre-existing"],
-            "question": "Is this sore new or from before?",
-            "depends_on": {"has_oral_sores": "Yes"},
-        },
-        {
-            "id": "oral_sore_location",
-            "type": "free_text",
-            "question": "Where is the sore located?",
-            "depends_on": {"has_oral_sores": "Yes"},
-        },
-        {
-            "id": "oral_pain",
-            "type": "option",
-            "opts": ["Yes", "No"],
-            "question": "Is the sore painful?",
-            "depends_on": {"has_oral_sores": "Yes"},
-        },
-        {
-            "id": "oral_eating_affected",
-            "type": "option",
-            "opts": ["Yes", "No", "Somewhat"],
-            "question": "Is it affecting eating or drinking?",
-            "depends_on": {"has_oral_sores": "Yes"},
-        },
-        {
-            "id": "oral_rinse_use",
-            "type": "option",
-            "opts": ["Yes", "No"],
-            "question": "Are you using any mouth rinse or medication?",
-            "depends_on": {"has_oral_sores": "Yes"},
-        },
-        {
-            "id": "oral_rinse_type",
-            "type": "free_text",
-            "question": "What type of rinse or medication are you using?",
-            "depends_on": {"oral_rinse_use": "Yes"},
-        },
-    ],
-    "nutrition": [
-        {
-            "id": "nutrition_eating",
-            "type": "option",
-            "opts": ["Eating normally", "Eating soft foods only", "Liquids only", "Not eating"],
-            "question": "How has your eating been? Are you able to eat and drink enough?",
-        },
-        {
-            "id": "nutrition_fluids",
-            "type": "option",
-            "opts": ["Yes, enough", "Not quite enough", "No, struggling"],
-            "question": "Are you drinking enough fluids?",
-        },
-        {
-            "id": "nutrition_barriers",
-            "type": "multi",
-            "opts": ["Pain", "Nausea", "Dry mouth", "Swallowing difficulty", "No appetite", "Other"],
-            "question": "What is making it difficult to eat or drink?",
-        },
-        {
-            "id": "nutrition_shakes",
-            "type": "scale",
-            "question": "How many nutritional shakes are you having per day?",
-        },
-    ],
-    "weight": [
-        {
-            "id": "weight_current",
-            "type": "free_text",
-            "question": "What has your weight been recently?",
-        },
-        {
-            "id": "weight_energy",
-            "type": "option",
-            "opts": ["Yes", "No", "Somewhat"],
-            "question": "Is any weight change affecting your energy?",
-        },
-    ],
-    "dry_mouth": [
-        {
-            "id": "has_dry_mouth",
-            "type": "option",
-            "opts": ["Yes", "No"],
-            "question": "Are you experiencing dryness in your mouth?",
-        },
-        {
-            "id": "dry_mouth_timing",
-            "type": "option",
-            "opts": ["Worse at night", "All day", "Only when talking"],
-            "question": "Is the dryness worse at night or all day?",
-            "depends_on": {"has_dry_mouth": "Yes"},
-        },
-        {
-            "id": "dry_mouth_substitutes",
-            "type": "option",
-            "opts": ["Yes", "No"],
-            "question": "Are you using saliva substitutes?",
-            "depends_on": {"has_dry_mouth": "Yes"},
-        },
-        {
-            "id": "dry_mouth_impact",
-            "type": "multi",
-            "opts": ["Eating", "Talking", "Sleeping", "None of the above"],
-            "question": "Is the dryness affecting eating, talking, or sleeping?",
-            "depends_on": {"has_dry_mouth": "Yes"},
-        },
-    ],
-    "swallowing": [
-        {
-            "id": "has_swallowing_difficulty",
-            "type": "option",
-            "opts": ["Yes", "No"],
-            "question": "Are you having difficulty swallowing?",
-        },
-        {
-            "id": "swallowing_type",
-            "type": "option",
-            "opts": ["Painful", "Mechanical difficulty", "Both"],
-            "question": "Is it painful or mechanical difficulty?",
-            "depends_on": {"has_swallowing_difficulty": "Yes"},
-        },
-        {
-            "id": "swallowing_choking",
-            "type": "option",
-            "opts": ["Yes", "No", "Sometimes"],
-            "question": "Do you cough or choke when eating?",
-            "depends_on": {"has_swallowing_difficulty": "Yes"},
-        },
-        {
-            "id": "swallowing_liquids",
-            "type": "option",
-            "opts": ["Yes", "No", "With difficulty"],
-            "question": "Can you still swallow liquids?",
-            "depends_on": {"has_swallowing_difficulty": "Yes"},
-        },
-    ],
-    "breathing": [
-        {
-            "id": "has_breathing_difficulty",
-            "type": "option",
-            "opts": ["Yes", "No"],
-            "question": "Are you having difficulty breathing?",
-        },
-        {
-            "id": "breathing_timing",
-            "type": "option",
-            "opts": ["Constant", "Only with activity", "At night"],
-            "question": "Is the breathing difficulty constant or with activity?",
-            "depends_on": {"has_breathing_difficulty": "Yes"},
-        },
-        {
-            "id": "breathing_wheezing",
-            "type": "option",
-            "opts": ["Yes", "No"],
-            "question": "Are you wheezing?",
-            "depends_on": {"has_breathing_difficulty": "Yes"},
-        },
-    ],
-    "mucus": [
-        {
-            "id": "has_mucus",
-            "type": "option",
-            "opts": ["Yes", "No"],
-            "question": "Are you having problems with mucus or secretions?",
-        },
-        {
-            "id": "mucus_consistency",
-            "type": "option",
-            "opts": ["Thick", "Watery", "Mixed"],
-            "question": "Is it thick or watery?",
-            "depends_on": {"has_mucus": "Yes"},
-        },
-        {
-            "id": "mucus_impact",
-            "type": "multi",
-            "opts": ["Swallowing", "Sleep", "Neither"],
-            "question": "Is it affecting swallowing or sleep?",
-            "depends_on": {"has_mucus": "Yes"},
-        },
-        {
-            "id": "mucus_treatment",
-            "type": "option",
-            "opts": ["Yes", "No"],
-            "question": "Are you using any treatments for the mucus?",
-            "depends_on": {"has_mucus": "Yes"},
-        },
-    ],
-    "gi": [
-        {
-            "id": "gi_symptoms",
-            "type": "multi",
-            "opts": ["Nausea", "Vomiting", "Blood when coughing", "None"],
-            "question": "Have you had nausea, vomiting, or blood when coughing?",
-        },
-    ],
-    "medications": [
-        {
-            "id": "medications_list",
-            "type": "multi",
-            "opts": [
-                "Oxycodone", "Hydrocodone", "Acetaminophen",
-                "Ibuprofen", "Morphine", "Gabapentin",
-                "Antibiotics", "Antiemetics", "Steroids",
-                "Antifungals", "Supplements", "Other",
-            ],
-            "question": "What medications are you taking?",
-        },
-        {
-            "id": "medications_dosage",
-            "type": "free_text",
-            "question": "How often and at what dose are you taking them?",
-        },
-        {
-            "id": "medications_drowsy",
-            "type": "option",
-            "opts": ["Yes", "No", "Somewhat"],
-            "question": "Are any of them making you drowsy?",
-        },
-    ],
-    "fatigue": [
-        {
-            "id": "has_fatigue",
-            "type": "option",
-            "opts": ["Yes", "No"],
-            "question": "Are you feeling more tired or weak than usual?",
-        },
-        {
-            "id": "fatigue_type",
-            "type": "option",
-            "opts": ["General fatigue", "Specific weakness", "Both"],
-            "question": "Is it general fatigue or specific weakness?",
-            "depends_on": {"has_fatigue": "Yes"},
-        },
-        {
-            "id": "fatigue_daily_impact",
-            "type": "option",
-            "opts": ["Yes", "No", "Somewhat"],
-            "question": "Is the fatigue affecting your daily activities?",
-            "depends_on": {"has_fatigue": "Yes"},
-        },
-    ],
-    "sleep": [
-        {
-            "id": "sleep_quality",
-            "type": "option",
-            "opts": ["Yes, sleeping well", "No, waking up often", "Sleeping but not rested"],
-            "question": "Are you able to sleep through the night?",
-        },
-        {
-            "id": "sleep_disruption",
-            "type": "multi",
-            "opts": ["Pain", "Dry mouth", "Anxiety", "Medications", "Other"],
-            "question": "What is waking you up — pain, dryness, or something else?",
-            "depends_on": {"sleep_quality": "No, waking up often"},
-        },
-    ],
-    "mood": [
-        {
-            "id": "mood_overall",
-            "type": "option",
-            "opts": ["Good", "Okay", "Anxious", "Depressed", "Overwhelmed"],
-            "question": "How are you feeling emotionally?",
-        },
-        {
-            "id": "mood_anxiety_impact",
-            "type": "option",
-            "opts": ["Yes", "No", "Somewhat"],
-            "question": "Is anxiety affecting your daily activities?",
-            "depends_on": {"mood_overall": "Anxious"},
-        },
-        {
-            "id": "mood_support",
-            "type": "option",
-            "opts": ["Yes, good support", "Some support", "No, feeling alone"],
-            "question": "Do you have support from family or friends?",
-        },
-    ],
-}
-
-# Flat lookup used by the orchestrator and stress tests
-STEP_BY_ID: dict = {}
-for _steps in TOPIC_STEPS.values():
-    for _step in _steps:
-        STEP_BY_ID[_step["id"]] = _step
-
-# Ordered list of (display_name, topic_key) — drives progression through the check-in
-TOPICS: list = [
-    ("Pain", "pain"),
-    ("Oral Sores", "oral"),
-    ("Nutrition", "nutrition"),
-    ("Weight", "weight"),
-    ("Dry Mouth", "dry_mouth"),
-    ("Swallowing", "swallowing"),
-    ("Breathing", "breathing"),
-    ("Mucus", "mucus"),
-    ("GI", "gi"),
-    ("Medications", "medications"),
-    ("Fatigue", "fatigue"),
-    ("Sleep", "sleep"),
-    ("Mood", "mood"),
-    ("General", "general"),
+TOPIC_ORDER = [
+    "pain",
+    "oral_sores",
+    "nutrition",
+    "weight",
+    "dry_mouth",
+    "swallowing",
+    "breathing",
+    "mucus",
+    "gi",
+    "medications",
+    "fatigue",
+    "sleep",
+    "mood",
+    "general",
 ]
 
-# Short intro sent to the patient before the first question of each topic
-TOPIC_INTROS: dict = {
-    "pain": "Let's start with any pain you may be experiencing.",
-    "oral": "Next, let's talk about your mouth — any sores or ulcers.",
-    "nutrition": "I have some questions about your eating and nutrition.",
-    "weight": "Let's check on your weight.",
-    "dry_mouth": "I'd like to ask about dryness in your mouth.",
-    "swallowing": "Let's talk about swallowing.",
-    "breathing": "I'd like to check in on your breathing.",
-    "mucus": "Let's talk about any mucus or secretions.",
-    "gi": "I have a few questions about nausea, vomiting, or coughing up blood.",
-    "medications": "Let's go over your medications.",
-    "fatigue": "I'd like to ask about your energy levels.",
-    "sleep": "Let's talk about how you've been sleeping.",
-    "mood": "I want to check in on how you're feeling emotionally.",
-    "general": "Finally, let's do an overall check-in on how you've been feeling.",
+
+DEFAULT_MODEL = "gpt-4.1-mini"
+TOPIC_LABELS = {
+    "pain": "Pain",
+    "oral_sores": "Oral Sores",
+    "nutrition": "Nutrition",
+    "weight": "Weight",
+    "dry_mouth": "Dry Mouth",
+    "swallowing": "Swallowing",
+    "breathing": "Breathing",
+    "mucus": "Mucus / Secretions",
+    "gi": "GI Symptoms",
+    "medications": "Medications",
+    "fatigue": "Fatigue",
+    "sleep": "Sleep",
+    "mood": "Mood",
+    "general": "General Well-Being",
+}
+SECTION_ORDER = [
+    ("pain_medications", "Pain & Medications"),
+    ("nutrition_fluids", "Nutrition & Fluids"),
+    ("oral_symptoms", "Oral Symptoms"),
+    ("gi_symptoms", "GI Symptoms"),
+    ("fatigue_sleep", "Fatigue & Sleep"),
+    ("swallow_breathe", "Swallowing & Breathing"),
+    ("mood_support", "Mood"),
+    ("general_wellbeing", "General Well-Being"),
+]
+SECTION_TOPICS = {
+    "pain_medications": ["pain", "medications"],
+    "nutrition_fluids": ["nutrition", "weight"],
+    "oral_symptoms": ["oral_sores", "dry_mouth", "mucus"],
+    "gi_symptoms": ["gi"],
+    "fatigue_sleep": ["fatigue", "sleep"],
+    "swallow_breathe": ["swallowing", "breathing"],
+    "mood_support": ["mood"],
+    "general_wellbeing": ["general"],
+}
+SECTION_INTROS = {
+    "pain_medications": "Let's focus on pain symptoms and the medications you are using for relief.",
+    "nutrition_fluids": "Let's go through eating, drinking, and weight changes.",
+    "oral_symptoms": "This section covers mouth sores, dryness, and mucus or secretion concerns.",
+    "gi_symptoms": "Let's review nausea, vomiting, or blood when coughing.",
+    "fatigue_sleep": "This section focuses on energy level, weakness, and sleep.",
+    "swallow_breathe": "Let's review swallowing and breathing symptoms.",
+    "mood_support": "This section covers emotional well-being and support.",
+    "general_wellbeing": "Let's finish with your overall well-being since the last visit.",
 }
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# UTILITY HELPERS
-# ─────────────────────────────────────────────────────────────────────────────
-
-# Answers too short or generic to mean anything useful
-VAGUE_ANSWERS: set = {
-    "hi", "ok", "okay", "idk", "not sure", "unsure",
-    "hmm", "hmmm", "gggg", "asdf", "what", "huh",
-    "yeah whatever", "i guess", "no idea",
-}
-
-# Stop words excluded from semantic-overlap calculations
-_STOP: set = {
-    "the", "and", "for", "are", "you", "can", "tell", "me",
-    "any", "now", "how", "has", "been", "your", "have", "what",
-    "with", "this", "that", "there", "when", "where", "just",
-    "some", "also", "from", "but", "not", "all", "its", "was",
-}
+_sheet = None
+_sheet_error: str | None = None
 
 
-def _looks_vague_answer(text: str) -> bool:
-    """Return True when the patient's reply is too vague to record as a clinical answer."""
-    stripped = text.strip().lower()
-    return stripped in VAGUE_ANSWERS or len(stripped) <= 2
+def extract_json(text: str, fallback: Any) -> Any:
+    if not text:
+        return fallback
 
 
-def _last_assistant_message(state: dict) -> str:
-    """Return the most-recent assistant message from a topic state's chat list."""
-    for msg in reversed(state.get("chat", [])):
-        if msg.get("role") == "assistant":
-            return msg.get("content", "")
-    return ""
+def topic_label(topic: str) -> str:
+    return TOPIC_LABELS.get(topic, topic.replace("_", " ").title())
 
 
-def _step_prompt_text(step: dict) -> str:
-    """Return the question text for a step (used in redundancy checks)."""
-    return step.get("question", "")
+def section_label(section_key: str) -> str:
+    for key, label in SECTION_ORDER:
+        if key == section_key:
+            return label
+    return section_key.replace("_", " ").title()
 
 
-def _word_tokens(text: str) -> set:
-    """Extract meaningful word tokens (≥ 3 chars, not stop words) from text."""
-    words = re.findall(r"\b[a-z]{3,}\b", text.lower())
-    return {w for w in words if w not in _STOP}
+def section_for_topic(topic: str) -> str:
+    for section_key, topics in SECTION_TOPICS.items():
+        if topic in topics:
+            return section_key
+    return SECTION_ORDER[0][0]
+    cleaned = text.strip()
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        pass
+
+    match = re.search(r"\{.*\}|\[.*\]", cleaned, re.DOTALL)
+    if not match:
+        return fallback
+    try:
+        return json.loads(match.group(0))
+    except json.JSONDecodeError:
+        return fallback
 
 
-def _is_semantically_redundant_question(last_msg: str, next_prompt: str) -> bool:
-    """
-    Return True when *last_msg* is essentially asking the same thing as *next_prompt*,
-    so the next question need not be appended to the chat again.
-    Uses keyword-overlap ratio (threshold 0.6).
-    """
-    if not last_msg or not next_prompt:
-        return False
-    tokens_last = _word_tokens(last_msg)
-    tokens_next = _word_tokens(next_prompt)
-    if not tokens_next:
-        return False
-    overlap = tokens_last & tokens_next
-    return (len(overlap) / len(tokens_next)) >= 0.6
+def get_openai_client() -> OpenAI | None:
+    api_key = (
+        st.session_state.get("api_key_input")
+        or st.secrets.get("OPENAI_API_KEY", None)
+        or os.getenv("OPENAI_API_KEY")
+    )
+    if not api_key:
+        return None
+    return OpenAI(api_key=api_key)
 
 
-def _trim_assistant_message_before_next_question(msg: str, next_q: str) -> str:
-    """
-    If *msg* ends with a sentence that paraphrases the upcoming *next_q*,
-    strip that sentence and everything after it.
-    Returns only the non-redundant portion of *msg*.
-    """
-    sentences = re.split(r"(?<=[.!?])\s+", msg.strip())
-    tokens_next = _word_tokens(next_q)
-    if not tokens_next:
-        return msg
-    keep: list = []
-    for sent in sentences:
-        tokens_sent = _word_tokens(sent)
-        if not tokens_sent:
-            keep.append(sent)
-            continue
-        overlap = tokens_sent & tokens_next
-        if (len(overlap) / len(tokens_next)) >= 0.4:
-            break  # this sentence duplicates the upcoming question — stop
-        keep.append(sent)
-    result = " ".join(keep).strip()
-    return result if result else msg
+def call_json_agent(system_prompt: str, user_payload: dict[str, Any], fallback: dict[str, Any]) -> dict[str, Any]:
+    client = get_openai_client()
+    if client is None:
+        return fallback
+
+    try:
+        response = client.responses.create(
+            model=st.session_state.get("model_name", DEFAULT_MODEL),
+            temperature=0,
+            input=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": json.dumps(user_payload, ensure_ascii=True)},
+            ],
+        )
+        parsed = extract_json(response.output_text, fallback)
+        return parsed if isinstance(parsed, dict) else fallback
+    except Exception as exc:
+        print(f"[agent-error] {exc}")
+        return fallback
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# STEP NAVIGATION
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _deps_met(step: dict, data: dict) -> bool:
-    """Return True if all depends_on conditions for a step are satisfied by *data*."""
-    for field, required_val in step.get("depends_on", {}).items():
-        if data.get(field) != required_val:
-            return False
-    return True
+def normalize_presence(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if text in {"yes", "present", "positive", "true"}:
+        return "yes"
+    if text in {"no", "absent", "negative", "false"}:
+        return "no"
+    return "unknown"
 
 
-def get_next_step(topic_key: str, data: dict):
-    """
-    Return the next unanswered, applicable step for a topic, or None when done.
-    Steps whose depends_on conditions are not met are skipped.
-    """
-    for step in TOPIC_STEPS.get(topic_key, []):
-        if step["id"] in data:
-            continue  # already answered
-        if not _deps_met(step, data):
-            continue  # branch condition not met
-        return step
+def question_type_for_topic(topic: str) -> str:
+    return get_topic_config(topic)["main"][0].get("type", "free_text")
+
+
+def effective_presence(topic_data: dict[str, Any], extracted: dict[str, Any]) -> str:
+    latest = normalize_presence(extracted.get("presence"))
+    if latest != "unknown":
+        return latest
+    stored = normalize_presence(topic_data.get("presence"))
+    return stored
+
+
+def init_session_state() -> None:
+    if "initialized" in st.session_state:
+        return
+
+    st.session_state.initialized = True
+    st.session_state.messages = []
+    st.session_state.current_topic_index = 0
+    st.session_state.current_topic = TOPIC_ORDER[0]
+    st.session_state.selected_section = SECTION_ORDER[0][0]
+    st.session_state.collected_data = {}
+    st.session_state.topic_states = {
+        topic: {
+            "main_asked": False,
+            "main_answered": False,
+            "asked_followups": [],
+            "completed": False,
+            "summary": "",
+            "presence": "unknown",
+            "current_question": "",
+        }
+        for topic in TOPIC_ORDER
+    }
+    st.session_state.section_states = {
+        section_key: {"started": False}
+        for section_key, _ in SECTION_ORDER
+    }
+    st.session_state.current_question = ""
+    st.session_state.final_report = ""
+    st.session_state.finished = False
+    st.session_state.api_key_input = ""
+    st.session_state.model_name = DEFAULT_MODEL
+    st.session_state.previous_visit_history = ""
+    st.session_state.previous_visit_topics = {}
+    st.session_state.patient_name = ""
+    st.session_state.sheet_status = ""
+
+
+def add_message(role: str, content: str, topic: str | None = None) -> None:
+    st.session_state.messages.append(
+        {
+            "role": role,
+            "content": content,
+            "topic": topic,
+            "section": section_for_topic(topic) if topic else None,
+        }
+    )
+
+
+def get_topic_config(topic: str) -> dict[str, Any]:
+    return KNOWLEDGE_BASE[topic]
+
+
+def get_topic_data(topic: str) -> dict[str, Any]:
+    return st.session_state.collected_data.setdefault(topic, {"notes": []})
+
+
+def required_fields_for_topic(topic: str) -> list[str]:
+    config = get_topic_config(topic)
+    fields = list(config.get("required_fields", []))
+    for item in config.get("main", []):
+        for field in item.get("required_fields", []):
+            if field not in fields:
+                fields.append(field)
+    return fields
+
+
+def get_next_unfinished_topic(section_key: str | None = None) -> str | None:
+    topics_to_scan = SECTION_TOPICS.get(section_key, TOPIC_ORDER) if section_key else TOPIC_ORDER
+    for topic in topics_to_scan:
+        if not st.session_state.topic_states[topic]["completed"]:
+            st.session_state.current_topic_index = TOPIC_ORDER.index(topic)
+            st.session_state.current_topic = topic
+            return topic
     return None
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# OPTION / MULTI-SELECT PARSING
-# ─────────────────────────────────────────────────────────────────────────────
+def set_active_topic(topic: str) -> None:
+    st.session_state.current_topic = topic
+    st.session_state.current_topic_index = TOPIC_ORDER.index(topic)
+    st.session_state.selected_section = section_for_topic(topic)
+    st.session_state.current_question = st.session_state.topic_states[topic].get("current_question", "")
 
-def interpret_user_input_with_options(step: dict, text: str) -> str:
-    """
-    Map a free-text patient answer to one of *step*'s opts.
 
-    Strategy (in order):
-      1. Vague/ambiguous answers → return as-is (triggers clarification upstream).
-      2. Exact match (case-insensitive).
-      3. Yes/No heuristics: negation + symptom patterns, symptom words alone,
-         explicit affirmation/negation words.
-      4. Substring and fuzzy (difflib) match against opts.
-      5. LLM fallback — prompt contains the keyword the test harness recognises.
+def get_active_topic_for_section(section_key: str) -> str | None:
+    current_topic = st.session_state.get("current_topic")
+    if current_topic in SECTION_TOPICS.get(section_key, []) and not st.session_state.topic_states[current_topic]["completed"]:
+        return current_topic
+    return get_next_unfinished_topic(section_key)
 
-    Returns a matched option string or the original (stripped) text if no match.
-    """
-    opts: list = step.get("opts", [])
-    stripped = text.strip()
 
-    # ── 1. Vague → caller decides how to handle ──────────────────────────────
-    if _looks_vague_answer(stripped):
-        return stripped
+def has_remaining_topics() -> bool:
+    return any(not st.session_state.topic_states[topic]["completed"] for topic in TOPIC_ORDER)
 
-    lower = stripped.lower()
 
-    # ── 2. Exact match ────────────────────────────────────────────────────────
-    for opt in opts:
-        if opt.lower() == lower:
-            return opt
+def main_question_for(topic: str) -> str:
+    return get_topic_config(topic)["main"][0]["question"]
 
-    # ── 3. Yes/No heuristics ─────────────────────────────────────────────────
-    if set(opts) <= {"Yes", "No"}:
-        # "no pain", "not having any sores", etc. → No
-        NO_SYMP = (
-            r"\b(no|not|none|never|without|don'?t\s+have|don'?t\s+feel)\b"
-            r".{0,30}"
-            r"\b(pain|hurt|sore|ache|burn|nausea|vomit|tired|weak|difficult|dry)\w*\b"
-        )
-        if re.search(NO_SYMP, lower):
-            return "No"
 
-        # Presence of a symptom word without preceding negation → Yes
-        SYMP_ROOT = (
-            r"\b(hurt|pain|sore|ache|burn|throb|bleed|nausea|vomit|tired|weak"
-            r"|difficult|trouble|problem|dry|swollen|swelling|tender|stiff"
-            r"|discomfort|inflamed|blister|wound|bruise)\w*\b"
-        )
-        if re.search(SYMP_ROOT, lower):
-            return "Yes"
-
-        # Intensity / quantity phrases that imply presence → Yes
-        # e.g. "a lot", "quite a bit", "very much", "really bad", "kind of"
-        INTENSITY_YES = (
-            r"\b(a lot|quite a bit|very much|really|pretty bad|kind of|sort of"
-            r"|a little|somewhat|slightly|a bit|quite|extremely|severely"
-            r"|badly|constantly|always|all the time|every day|most days)\b"
-        )
-        if re.search(INTENSITY_YES, lower):
-            return "Yes"
-
-        # Explicit affirmation
-        if re.search(r"\b(yes|yeah|yep|yup|sure|definitely|absolutely|of course|indeed)\b", lower):
-            return "Yes"
-
-        # Explicit negation (standalone or leading)
-        if re.search(r"\b(no|nope|nah|none|not really|not at all|hardly|barely)\b", lower):
-            return "No"
-
-    # ── 4a. Substring match ───────────────────────────────────────────────────
-    for opt in opts:
-        if opt.lower() in lower or lower in opt.lower():
-            return opt
-
-    # ── 4b. Fuzzy match ───────────────────────────────────────────────────────
-    best_opt, best_score = None, 0.0
-    for opt in opts:
-        score = difflib.SequenceMatcher(None, lower, opt.lower()).ratio()
-        if score > best_score:
-            best_score, best_opt = score, opt
-    if best_score > 0.6 and best_opt:
-        return best_opt
-
-    # ── 5. LLM fallback ───────────────────────────────────────────────────────
-    opts_str = ", ".join(opts)
-    question = step.get("question", "")
-    try:
-        resp = openai_client.chat.completions.create(
-            model=MODEL,
-            temperature=TEMP,
-            max_tokens=50,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a clinical intake assistant for head and neck cancer patients. "
-                        "Patients often express themselves in casual, indirect, or colloquial language. "
-                        "Your job is to map what they MEAN to the closest structured answer option.\n\n"
-                        "CRITICAL RULES for Yes/No questions:\n"
-                        "- ANY intensity word ('a lot', 'quite a bit', 'very', 'really', 'a little', "
-                        "'some', 'kind of', 'sort of', 'a bit', 'somewhat') means the symptom IS present → 'Yes'\n"
-                        "- Describing a symptom at all (even mildly) → 'Yes'\n"
-                        "- Negation ('no', 'not', 'none', 'don't have', 'not really') → 'No'\n"
-                        "- For multi-option questions, pick the semantically closest match.\n"
-                        "Return ONLY the exact option text. If truly unmappable, return the patient's original words."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": (
-                        "You are helping match a patient's answer to one of the listed options. "
-                        f"Options: [{opts_str}]\n"
-                        f'Question: "{question}"\n'
-                        f'Patient answer: "{stripped}"\n'
-                        "Return only the single best matching option (exact text), "
-                        "or the patient's original answer if no option fits."
-                    ),
-                },
-            ],
-        )
-        result = resp.choices[0].message.content.strip()
-        # Case-insensitive match so "yes" matches "Yes", "no" matches "No", etc.
-        for opt in opts:
-            if opt.lower() == result.lower():
-                return opt
-        return stripped
-    except Exception:
-        return stripped
-
-
-def _parse_multi_select_typed_input_details(step: dict, text: str) -> tuple:
-    """
-    Parse a comma/and-separated multi-select patient answer.
-
-    Returns a 2-tuple: (matched_opts, unmatched_tokens).
-    Tokens that don't match any known option are collected in *unmatched_tokens*;
-    if 'Other' exists in opts and there are unmatched tokens, 'Other' is appended
-    to *matched_opts*.
-    """
-    opts: list = step.get("opts", [])
-    tokens = re.split(r"[,;]|\band\b", text, flags=re.IGNORECASE)
-    tokens = [t.strip() for t in tokens if t.strip()]
-
-    matched: list = []
-    unmatched: list = []
-    has_other = "Other" in opts
-
-    for token in tokens:
-        found = False
-        for opt in opts:
-            if opt == "Other":
-                continue
-            if opt.lower() == token.lower():
-                if opt not in matched:
-                    matched.append(opt)
-                found = True
-                break
-            score = difflib.SequenceMatcher(None, token.lower(), opt.lower()).ratio()
-            if score > 0.7:
-                if opt not in matched:
-                    matched.append(opt)
-                found = True
-                break
-        if not found:
-            unmatched.append(token)
-
-    # Unknown tokens → "Other" bucket
-    if unmatched and has_other and "Other" not in matched:
-        matched.append("Other")
-
-    return matched, unmatched
-
-
-def parse_multi_select_typed_input(step: dict, text: str) -> list:
-    """Convenience wrapper — returns only the matched opts list."""
-    matched, _ = _parse_multi_select_typed_input_details(step, text)
-    return matched
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# ANSWER HANDLING
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _append_next_question_or_advance(topic_key: str) -> None:
-    """
-    After an answer is recorded, find the next unanswered step and append its
-    question to the chat.  If the topic is finished, mark it done (but do NOT
-    call st.rerun() — the caller is responsible for that).
-    """
-    state = st.session_state.topic_states[topic_key]
-    next_step = get_next_step(topic_key, state["data"])
-    if next_step is None:
-        state["status"] = "done"
-        # _advance_and_greet will handle the rerun itself
-        _advance_and_greet()
-        return
-    question = _step_prompt_text(next_step)
-    last_msg = _last_assistant_message(state)
-    if not _is_semantically_redundant_question(last_msg, question):
-        state["chat"].append({"role": "assistant", "content": question})
-        st.session_state.freeform_chat.append({"role": "assistant", "content": question})
-
-
-def handle_answer(
-    topic_key: str,
-    step: dict,
-    answer,
-    source: str = "typed",
-    extra_text: str = "",
-) -> None:
-    """
-    Record an answer for *step* in the topic's session state.
-
-    For free_text steps, vague answers trigger a clarification request instead
-    of being recorded.  All other step types are recorded immediately.
-    After recording, the next question is immediately appended so the chat
-    never stalls waiting for the user to send another message.
-    """
-    state = st.session_state.topic_states[topic_key]
-    step_id = step["id"]
-    step_type = step.get("type", "free_text")
-
-    # Free-text: reject vague answers and ask for clarification
-    if step_type == "free_text":
-        text_answer = str(answer).strip()
-        if _looks_vague_answer(text_answer):
-            state["waiting_for_followup"] = True
-            state["pending_followup"] = {
-                "source_step_id": step_id,
-                "original_question": step.get("question", ""),
-                "clarification_question": (
-                    "Could you please say a little more so I can record that correctly?"
-                ),
-                "type": "clarify",
-            }
-            state["chat"].append({
-                "role": "assistant",
-                "content": "Could you please say a little more so I can record that correctly?",
-            })
-            st.rerun()
-            return
-
-    # Record the answer
-    state["data"][step_id] = answer
-    print(f"[HANDLE_ANSWER] topic={topic_key} step={step_id} answer={answer!r} source={source}")
-
-    # Brief acknowledgment (LLM-generated, gracefully degrades to a fallback)
-    ack = _generate_acknowledgment(step, answer)
-    state["chat"].append({"role": "assistant", "content": ack})
-    st.session_state.freeform_chat.append({"role": "assistant", "content": ack})
-
-    # ── Immediately append the next question so the chat keeps moving ────────
-    _append_next_question_or_advance(topic_key)
-
-    # Only rerun if _advance_and_greet didn't already do so
-    if state.get("status") != "done":
-        st.rerun()
-
-
-def handle_pending_followup(topic_key: str, text: str, source: str = "followup") -> None:
-    """
-    Process a patient reply that is meant to resolve a pending clarification.
-
-    For option steps the text is re-interpreted against the original step's opts.
-    For free_text steps any non-vague reply is accepted.
-    """
-    state = st.session_state.topic_states[topic_key]
-    if not state.get("waiting_for_followup") or not state.get("pending_followup"):
-        return
-
-    pending = state["pending_followup"]
-    source_step_id = pending.get("source_step_id", "")
-    source_step = STEP_BY_ID.get(source_step_id)
-    if source_step is None:
-        return
-
-    step_type = source_step.get("type", "free_text")
-
-    if step_type == "option":
-        interpreted = interpret_user_input_with_options(source_step, text)
-        if interpreted in source_step.get("opts", []):
-            state["waiting_for_followup"] = False
-            state["pending_followup"] = None
-            state["data"][source_step_id] = interpreted
-            print(f"[PENDING_RESOLVED] {topic_key}.{source_step_id} = {interpreted!r}")
-            state["chat"].append({
-                "role": "assistant",
-                "content": "Thank you, I've made a note of that.",
-            })
-            # Append next question so chat continues
-            _append_next_question_or_advance(topic_key)
-            st.rerun()
-            return
-
-    elif step_type == "free_text":
-        if not _looks_vague_answer(text):
-            state["waiting_for_followup"] = False
-            state["pending_followup"] = None
-            state["data"][source_step_id] = text
-            print(f"[PENDING_RESOLVED] {topic_key}.{source_step_id} = {text!r}")
-            state["chat"].append({
-                "role": "assistant",
-                "content": "Thank you, I've noted that.",
-            })
-            # Append next question so chat continues
-            _append_next_question_or_advance(topic_key)
-            st.rerun()
-            return
-
-    # Still unresolved — ask again
-    state["chat"].append({
-        "role": "assistant",
-        "content": "I'm sorry, I didn't quite catch that. Could you describe it differently?",
-    })
-    st.rerun()
-
-
-def _request_resolution_for_option_step(
-    topic_key: str, step: dict, text: str, source: str
-) -> None:
-    """
-    When a patient's text doesn't match any option, ask the LLM whether to
-    accept/remap it or raise a follow-up clarification question.
-
-    The prompt format is designed so the test harness' fake LLM can intercept it
-    (it checks for the string 'Return JSON only in this exact shape').
-    """
-    state = st.session_state.topic_states[topic_key]
-    question = step.get("question", "")
-
-    opts_str = ", ".join(step.get("opts", []))
-    try:
-        resp = openai_client.chat.completions.create(
-            model=MODEL,
-            temperature=TEMP,
-            max_tokens=200,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a clinical intake assistant for head and neck cancer patients. "
-                        "A patient gave a response that didn't exactly match one of the options. "
-                        "Your job is to decide: can you confidently map this to an option, or is "
-                        "the response genuinely too ambiguous to map?\n\n"
-                        "STRONG PREFERENCE for mode='continue': resolve to an option whenever "
-                        "you can reasonably infer the patient's meaning. Only use mode='follow_up' "
-                        "when the response gives you absolutely no signal.\n\n"
-                        "Examples that MUST use continue:\n"
-                        "- 'a lot', 'very much', 'quite a bit', 'a little', 'some' → Yes (symptom present)\n"
-                        "- 'not really', 'not much', 'barely' → No (symptom absent)\n"
-                        "- 'my jaw' for a location question → Jaw\n"
-                        "- 'advil', 'tylenol', 'ibuprofen' for medication → closest known option or Other\n\n"
-                        "For mode='continue': set assistant_message to the EXACT matching option text.\n"
-                        "For mode='follow_up': write a warm, specific one-sentence clarifying question."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": (
-                        "Return JSON only in this exact shape: "
-                        '{"mode": "continue" or "follow_up", '
-                        '"assistant_message": "exact option text or empty string", '
-                        '"follow_up_question": "clarifying question or empty string"}\n\n'
-                        f'Available options: [{opts_str}]\n'
-                        f'QUESTION ASKED: "{question}"\n'
-                        f'PATIENT RESPONSE: "{text}"'
-                    ),
-                },
-            ],
-        )
-        result = json.loads(resp.choices[0].message.content.strip())
-    except Exception:
-        result = {
-            "mode": "follow_up",
-            "follow_up_question": "Could you tell me a bit more about that?",
-            "assistant_message": "",
-        }
-
-    mode = result.get("mode", "follow_up")
-    print(f"[RESOLUTION] topic={topic_key} step={step['id']} mode={mode}")
-
-    if mode == "continue":
-        candidate = result.get("assistant_message", "")
-        if candidate in step.get("opts", []):
-            handle_answer(topic_key, step, candidate, source)
-        else:
-            # Accept raw text (treated as free-form / Other)
-            handle_answer(topic_key, step, text, source)
-    else:
-        follow_up_q = result.get(
-            "follow_up_question",
-            "Could you tell me a bit more about that?",
-        )
-        state["waiting_for_followup"] = True
-        state["pending_followup"] = {
-            "source_step_id": step["id"],
-            "original_question": question,
-            "follow_up_question": follow_up_q,
-            "type": "resolve_option",
-        }
-        state["chat"].append({"role": "assistant", "content": follow_up_q})
-        st.rerun()
-
-
-def _request_retry_for_step(
-    topic_key: str, step: dict, text: str, source: str
-) -> None:
-    """Ask the patient to try again (unrecoverable parse failure for multi-select)."""
-    state = st.session_state.topic_states[topic_key]
-    opts = step.get("opts", [])
-    if opts:
-        opts_preview = ", ".join(opts[:4])
-        if len(opts) > 4:
-            opts_preview += ", …"
-        msg = (
-            f"I wasn't quite able to match that to one of the options. "
-            f"Could you choose from: {opts_preview}? "
-            f"You can also type multiple if needed."
-        )
-    else:
-        msg = "I didn't quite catch that — could you try rephrasing?"
-    state["chat"].append({"role": "assistant", "content": msg})
-    st.rerun()
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# AGENT 1 — SYMPTOM EXTRACTION
-# ─────────────────────────────────────────────────────────────────────────────
-
-def agent_extract_symptoms(message: str) -> dict:
-    """
-    Extract clinical symptoms from the patient's free-text message.
-    Returns a dict with keys: symptoms (list), context (str), severity_hint (str|None).
-    """
-    try:
-        resp = openai_client.chat.completions.create(
-            model=MODEL,
-            temperature=TEMP,
-            max_tokens=500,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a clinical NLP system specializing in head and neck cancer care. "
-                        "Extract ALL symptoms, complaints, and relevant clinical observations from "
-                        "the patient's message.\n"
-                        "Return JSON only with keys:\n"
-                        "- symptoms: list of strings (specific symptom names, e.g. 'throat pain', "
-                        "'difficulty swallowing', 'dry mouth')\n"
-                        "- context: string (brief clinical context or modifiers, e.g. 'worse at night', "
-                        "'started 3 days ago', 'affecting eating')\n"
-                        "- severity_hint: string or null ('mild', 'moderate', 'severe', or null)\n"
-                        "Be thorough — capture implied symptoms too (e.g. 'a lot' in response to "
-                        "a pain question means pain is present and likely moderate-to-severe)."
-                    ),
-                },
-                {"role": "user", "content": f"Patient message: {message}"},
-            ],
-        )
-        return json.loads(resp.choices[0].message.content)
-    except Exception:
-        return {"symptoms": [], "context": message, "severity_hint": None}
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# AGENT 2 — CLINICAL IMPORTANCE
-# ─────────────────────────────────────────────────────────────────────────────
-
-def agent_clinical_importance(symptoms: dict) -> dict:
-    """
-    Assess the clinical importance of extracted symptoms.
-    Returns a dict with keys: importance_level (low/medium/high),
-    follow_up_needed (bool), reasoning (str).
-    """
-    try:
-        resp = openai_client.chat.completions.create(
-            model=MODEL,
-            temperature=TEMP,
-            max_tokens=300,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are an oncology clinical nurse specialist reviewing symptom reports "
-                        "from head and neck cancer patients (commonly post-radiation or post-surgical).\n"
-                        "Assess the clinical urgency of the reported symptoms.\n"
-                        "Return JSON only with keys:\n"
-                        "- importance_level: 'low', 'medium', or 'high'\n"
-                        "  (high = pain ≥7/10, bleeding, breathing difficulty, inability to swallow, "
-                        "significant weight loss, signs of infection; medium = moderate pain, oral sores "
-                        "affecting eating, nausea; low = mild/managed symptoms)\n"
-                        "- follow_up_needed: true/false\n"
-                        "- reasoning: one concise sentence explaining the assessment"
-                    ),
-                },
-                {"role": "user", "content": f"Symptoms: {json.dumps(symptoms)}"},
-            ],
-        )
-        return json.loads(resp.choices[0].message.content)
-    except Exception:
-        return {"importance_level": "medium", "follow_up_needed": True, "reasoning": ""}
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# AGENT 3 — FOLLOW-UP QUESTION SELECTOR
-# ─────────────────────────────────────────────────────────────────────────────
-
-def agent_followup(topic_key: str, missing_fields: list) -> str:
-    """
-    Select the most relevant follow-up question for the current topic from
-    the knowledge base, preferring questions that target *missing_fields*.
-
-    Tracks which followups have already been sent (stored in session state)
-    so the same question is never repeated.  Uses LLM to pick the most
-    clinically relevant question when multiple candidates remain.
-    """
-    kb_entry = KNOWLEDGE_BASE.get(topic_key, {})
-    followups: list = kb_entry.get("followups", [])
-    if not followups:
-        return "Could you tell me a bit more about that?"
-
-    # Track which KB followups have already been used for this topic
-    used_key = f"_kb_followups_used_{topic_key}"
-    try:
-        used: list = st.session_state.get(used_key, [])
-    except Exception:
-        used = []
-
-    candidates = [q for q in followups if q not in used]
-    if not candidates:
-        return "Could you tell me a bit more about that?"
-
-    # If there are missing_fields, try to pick the most relevant candidate via LLM
-    selected = candidates[0]
-    if missing_fields and len(candidates) > 1:
-        try:
-            prompt = (
-                f"Missing clinical fields: {missing_fields}\n"
-                f"Candidate follow-up questions:\n"
-                + "\n".join(f"{i+1}. {q}" for i, q in enumerate(candidates))
-                + "\nReturn ONLY the number of the most relevant question."
-            )
-            resp = openai_client.chat.completions.create(
-                model=MODEL,
-                temperature=TEMP,
-                max_tokens=10,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "You are a clinical assistant selecting the most relevant "
-                            "follow-up question based on missing patient data."
-                        ),
-                    },
-                    {"role": "user", "content": prompt},
-                ],
-            )
-            idx_str = resp.choices[0].message.content.strip()
-            idx = int(re.search(r"\d+", idx_str).group()) - 1
-            if 0 <= idx < len(candidates):
-                selected = candidates[idx]
-        except Exception:
-            pass  # fall back to first candidate
-
-    # Mark as used
-    used.append(selected)
-    try:
-        st.session_state[used_key] = used
-    except Exception:
-        pass
-
-    print(f"[FOLLOWUP_AGENT] topic={topic_key} selected={selected!r}")
-    return selected
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# AGENT 4 — PATIENT EXPERIENCE (fatigue monitor)
-# ─────────────────────────────────────────────────────────────────────────────
-
-def agent_patient_experience(chat_history: list) -> str:
-    """
-    Assess patient fatigue / engagement from the recent conversation.
-    Returns 'low', 'medium', or 'high'.
-    """
-    try:
-        resp = openai_client.chat.completions.create(
-            model=MODEL,
-            temperature=TEMP,
-            max_tokens=100,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You monitor patient engagement and fatigue during a clinical chat. "
-                        "Return JSON only with key: fatigue_level (low/medium/high)."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": f"Recent conversation: {json.dumps(chat_history[-6:])}",
-                },
-            ],
-        )
-        return json.loads(resp.choices[0].message.content).get("fatigue_level", "low")
-    except Exception:
-        return "low"
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# AGENT 5 — ORCHESTRATOR
-# ─────────────────────────────────────────────────────────────────────────────
-
-def agent_orchestrator(
-    topic_key: str,
-    step: dict,
+def symptom_extraction_agent(
     patient_message: str,
-    symptoms: dict,
-    importance: dict,
-    fatigue: str,
-) -> dict:
-    """
-    Combine signals from all other agents and decide what to do next:
-      - 'ask_next'   → there is another step to ask in this topic
-      - 'topic_done' → the topic is complete, advance to the next one
+    topic: str,
+    question: str,
+    topic_data: dict[str, Any],
+) -> dict[str, Any]:
+    config = get_topic_config(topic)
+    fallback = {
+        "topic": topic,
+        "presence": "unknown",
+        "details": {},
+        "summary": patient_message,
+    }
+    system_prompt = f"""
+You are the Symptom Extraction Agent inside ChatReport, a clinical intake assistant for head and neck cancer symptom reporting.
+Your job is to read the patient's latest reply and convert only the information relevant to the CURRENT TOPIC into structured JSON.
 
-    When patient fatigue is high, low-priority topics may be skipped
-    to reduce burden.  High clinical importance overrides this.
-    """
-    state = st.session_state.topic_states[topic_key]
-    importance_level = importance.get("importance_level", "medium")
+CURRENT TOPIC: {topic}
 
-    # High fatigue + low importance + no required fields left → skip to done
-    if fatigue == "high" and importance_level == "low":
-        kb_priority = KNOWLEDGE_BASE.get(topic_key, {}).get("priority", "medium")
-        if kb_priority == "low":
-            print(
-                f"[ORCHESTRATOR] High fatigue + low-priority topic={topic_key} — "
-                "advancing to next topic to reduce patient burden."
-            )
-            return {"action": "topic_done"}
+Return JSON only. No prose, no markdown, no code fences.
+Use exactly this schema:
+{{
+  "topic": "{topic}",
+  "presence": "yes" | "no" | "unknown",
+  "details": {{
+    "field_name": "short extracted value"
+  }},
+  "summary": "1 short clinical summary sentence"
+}}
 
-    next_step = get_next_step(topic_key, state["data"])
-    if next_step:
-        print(f"[ORCHESTRATOR] topic={topic_key} next_step={next_step['id']} fatigue={fatigue}")
-        return {"action": "ask_next", "next_step": next_step}
+Extraction guidance:
+- Focus only on the current topic, even if the patient mentions other symptoms.
+- Use the current question, topic configuration, and existing topic data as context.
+- Capture explicit facts only. Do not guess, infer, or fill missing values.
+- If the patient denies the symptom, set "presence" to "no".
+- If the patient confirms the symptom, set "presence" to "yes".
+- If the answer is ambiguous, incomplete, or not clearly related, set "presence" to "unknown".
+- Put clinically useful details into "details" using concise field names such as "location", "severity", "timing", "duration", "impact", "medication_help", "intake_level", "barriers", "weight", "emotional_state", or similar when supported by the patient message.
+- Preserve numbers exactly when given, especially 0-10 ratings, counts, doses, and weights.
+- If the patient gives multiple details in one answer, capture all of them.
+- The "summary" should be brief, factual, and suitable for a clinician.
 
-    print(f"[ORCHESTRATOR] topic={topic_key} → topic_done")
-    return {"action": "topic_done"}
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# AGENT 6 — REPORT GENERATOR
-# ─────────────────────────────────────────────────────────────────────────────
-
-def agent_generate_report(all_data: dict, patient_name: str) -> str:
-    """
-    Convert the full set of collected symptom data into a structured clinical
-    report formatted for a head and neck cancer care team.
-    """
-    try:
-        resp = openai_client.chat.completions.create(
-            model=MODEL,
-            temperature=TEMP,
-            max_tokens=2000,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a clinical documentation specialist for a head and neck cancer "
-                        "care team. Generate a concise, professional symptom check-in report.\n\n"
-                        "Format guidelines:\n"
-                        "- Open with a one-line patient summary and check-in date.\n"
-                        "- Group findings by symptom area using ## headers.\n"
-                        "- Only include sections where data was collected (skip empty topics).\n"
-                        "- Use plain clinical language — no jargon, no speculation.\n"
-                        "- Flag high-priority items (pain ≥7, swallowing difficulty, weight loss, "
-                        "breathing issues, blood) with a ⚠️ marker.\n"
-                        "- End with a 'Key Actions' section listing any items that need follow-up.\n"
-                        "- Be concise: clinicians are busy. Bullet points preferred over prose."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": (
-                        f"Patient name: {patient_name}\n\n"
-                        f"Symptom check-in data:\n{json.dumps(all_data, indent=2)}"
-                    ),
-                },
-            ],
-        )
-        return resp.choices[0].message.content
-    except Exception:
-        # Graceful fallback — format the raw data ourselves
-        lines = [f"# Clinical Check-in Report\n**Patient:** {patient_name}\n"]
-        for topic, data in all_data.items():
-            if data:
-                label = topic.replace("_", " ").title()
-                lines.append(f"## {label}")
-                for k, v in data.items():
-                    lines.append(f"- **{k.replace('_', ' ').title()}**: {v}")
-                lines.append("")
-        return "\n".join(lines)
+Important:
+- Do not output null values, placeholders, explanations, or extra keys beyond the schema.
+- If no concrete detail is provided, leave "details" as an empty object.
+"""
+    payload = {
+        "topic": topic,
+        "question": question,
+        "topic_config": config,
+        "existing_topic_data": topic_data,
+        "previous_visit_topic_summary": st.session_state.previous_visit_topics.get(topic, ""),
+        "previous_visit_history": st.session_state.get("previous_visit_history", ""),
+        "patient_message": patient_message,
+    }
+    result = call_json_agent(system_prompt, payload, fallback)
+    result["presence"] = normalize_presence(result.get("presence"))
+    if not isinstance(result.get("details"), dict):
+        result["details"] = {}
+    return result
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# ACKNOWLEDGMENT HELPER (lightweight LLM, used inside handle_answer)
-# ─────────────────────────────────────────────────────────────────────────────
+def clinical_importance_agent(topic: str, extracted: dict[str, Any], topic_data: dict[str, Any]) -> dict[str, Any]:
+    config = get_topic_config(topic)
+    fallback = {
+        "importance_level": config.get("priority", "medium"),
+        "follow_up_needed": False,
+        "missing_fields": [],
+        "reason": "Fallback decision",
+    }
+    system_prompt = """
+You are the Clinical Importance Agent for a symptom-reporting workflow in head and neck oncology.
+Your task is to assess how clinically important the CURRENT TOPIC is right now and whether more clarification is needed before moving on.
 
-def _generate_acknowledgment(step: dict, answer) -> str:
-    """
-    Generate a brief, empathetic acknowledgment of the patient's answer.
-    Varies in tone based on what was reported — validates concern for
-    difficult symptoms, stays neutral for routine answers.
-    """
-    answer_str = ", ".join(answer) if isinstance(answer, list) else str(answer)
-    question = step.get("question", "")
-    try:
-        resp = openai_client.chat.completions.create(
-            model=MODEL,
-            temperature=0.5,
-            max_tokens=80,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a compassionate clinical chatbot supporting head and neck cancer "
-                        "patients during a symptom check-in. Write ONE short, warm sentence "
-                        "(10–18 words) acknowledging the patient's answer.\n\n"
-                        "Rules:\n"
-                        "- Pain / difficult symptoms → empathize specifically: "
-                        "'I'm sorry you're dealing with that — I've made a note for your team.'\n"
-                        "- No symptoms / doing well → affirm warmly: "
-                        "'That's good to hear.' or 'Glad things are manageable on that front.'\n"
-                        "- Specific detail (location, med name, severity score) → confirm: "
-                        "'Understood — [echo key detail] has been noted.'\n"
-                        "- NEVER ask a question. NEVER use the phrase 'I've noted that for your "
-                        "care team' — vary your language. NEVER be robotic or generic."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": (
-                        f"Question asked: {question}\n"
-                        f"Patient answered: {answer_str}"
-                    ),
-                },
-            ],
-        )
-        ack = resp.choices[0].message.content.strip()
-        return ack if ack else "Got it, thank you."
-    except Exception:
-        # Vary fallback based on answer type to avoid robotic repetition
-        if str(answer).lower() in ("yes", "no"):
-            return "Got it, thank you."
-        return "I've made a note of that."
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# SESSION STATE
-# ─────────────────────────────────────────────────────────────────────────────
-
-_FRESH_TOPIC_STATE_KEYS = {
-    "data": dict,
-    "chat": list,
-    "status": lambda: "in_progress",
-    "waiting_for_followup": lambda: False,
-    "pending_followup": lambda: None,
+Return JSON only. No prose outside JSON.
+Use exactly this schema:
+{
+  "importance_level": "low" | "medium" | "high" | "urgent",
+  "follow_up_needed": true | false,
+  "missing_fields": ["field1", "field2"],
+  "reason": "short rationale"
 }
 
-_CURRENT_SCHEMA_VERSION = 2  # bump whenever TOPICS list or state shape changes
+Decision framework:
+- Use the topic priority, extracted symptom status, existing topic data, and required fields.
+- If the symptom is absent or clearly denied, importance usually follows the baseline topic priority but follow_up_needed is usually false.
+- If the symptom is present and required clinical fields are still missing, follow_up_needed should usually be true.
+- Escalate to "urgent" only for potentially dangerous airway, breathing, bleeding, severe swallowing, or otherwise alarming information explicitly stated by the patient.
+- If enough information is already present for the current topic, set follow_up_needed to false.
+- missing_fields must contain only fields that are actually missing and clinically useful for the current topic.
+- Do not request missing_fields that are not relevant to the current topic.
+- The reason should be short, specific, and operational, such as "Pain present but severity missing" or "Symptom denied clearly".
+
+Important:
+- Be conservative and factual.
+- Do not invent urgency.
+- Do not recommend treatment or emergency action in this step.
+"""
+    payload = {
+        "topic": topic,
+        "topic_config": config,
+        "extracted": extracted,
+        "topic_data": topic_data,
+        "required_fields": required_fields_for_topic(topic),
+        "previous_visit_topic_summary": st.session_state.previous_visit_topics.get(topic, ""),
+    }
+    result = call_json_agent(system_prompt, payload, fallback)
+    if not isinstance(result.get("missing_fields"), list):
+        result["missing_fields"] = []
+    return result
 
 
-def _fresh_topic_state() -> dict:
-    return {k: factory() for k, factory in _FRESH_TOPIC_STATE_KEYS.items()}
+def follow_up_agent(topic: str, missing_fields: list[str], asked_followups: list[str], topic_data: dict[str, Any]) -> dict[str, Any]:
+    config = get_topic_config(topic)
+    candidate_followups = [q for q in config.get("followups", []) if q not in asked_followups]
+    fallback_question = candidate_followups[0] if candidate_followups else ""
+    fallback = {"question": fallback_question}
+    system_prompt = """
+You are the Follow-up Agent.
+Your task is to choose the SINGLE best next follow-up question for the current topic from the approved knowledge-base questions.
+
+Return JSON only:
+{
+  "question": "one question"
+}
+
+Rules:
+- You must choose exactly one question from candidate_followups, or return an empty string if none is appropriate.
+- Never write a new question. Never paraphrase. Never combine two questions.
+- Prioritize the question most likely to fill a missing required field first.
+- If required fields are already covered, choose the follow-up that best clarifies severity, function, timing, or patient impact.
+- Avoid repeating what appears already answered in topic_data.
+- Avoid choosing a question that is semantically redundant with a previously asked follow-up.
+- If candidate_followups is empty, return an empty string.
+- Output only the JSON object.
+"""
+    payload = {
+        "topic": topic,
+        "missing_fields": missing_fields,
+        "candidate_followups": candidate_followups,
+        "topic_data": topic_data,
+        "previous_visit_topic_summary": st.session_state.previous_visit_topics.get(topic, ""),
+    }
+    result = call_json_agent(system_prompt, payload, fallback)
+    question = result.get("question", "")
+    if question not in candidate_followups:
+        question = fallback_question
+    return {"question": question}
 
 
-def _init_session() -> None:
-    """
-    Initialise all required Streamlit session state keys.
+def patient_experience_agent(history: list[dict[str, str]]) -> dict[str, Any]:
+    fallback = {"fatigue_level": "medium", "engagement_note": "Fallback estimate"}
+    system_prompt = """
+You are the Patient Experience Agent.
+Estimate conversational fatigue from the patient's interaction style, not medical fatigue.
 
-    Also repairs any stale topic states left over from a previous deploy
-    (e.g. missing keys, or topic keys that no longer exist in TOPICS).
-    """
-    # ── schema version guard: wipe state if the schema has been bumped ───────
-    if st.session_state.get("_schema_version") != _CURRENT_SCHEMA_VERSION:
-        st.session_state.clear()
-        st.session_state["_schema_version"] = _CURRENT_SCHEMA_VERSION
+Return JSON only:
+{
+  "fatigue_level": "low" | "medium" | "high",
+  "engagement_note": "short note"
+}
 
-    # ── topic_states: create fresh or repair existing ─────────────────────────
-    expected_keys = {key for _, key in TOPICS}
-    if "topic_states" not in st.session_state:
-        st.session_state.topic_states = {key: _fresh_topic_state() for key in expected_keys}
-    else:
-        existing: dict = st.session_state.topic_states
-        # Add any new topics missing from old state
-        for key in expected_keys:
-            if key not in existing:
-                existing[key] = _fresh_topic_state()
-            else:
-                # Repair missing sub-keys within an existing topic state
-                topic_state = existing[key]
-                for sub_key, factory in _FRESH_TOPIC_STATE_KEYS.items():
-                    if sub_key not in topic_state:
-                        topic_state[sub_key] = factory()
-
-    if "freeform_chat" not in st.session_state:
-        st.session_state.freeform_chat = []
-    if "current_topic_index" not in st.session_state:
-        st.session_state.current_topic_index = 0
-    if "patient_name" not in st.session_state:
-        st.session_state.patient_name = ""
-    if "report_ready" not in st.session_state:
-        st.session_state.report_ready = False
-    if "last_checkin" not in st.session_state:
-        st.session_state.last_checkin = {}
+Interpretation rules:
+- "low": patient is engaged, answering normally, and not showing friction.
+- "medium": answers are shorter, somewhat repetitive, delayed, or the conversation is getting longer.
+- "high": the patient appears frustrated, exhausted by questioning, minimally responsive, or repeatedly gives very brief answers.
+- Consider brevity, repetition, confusion, tone, and total conversation burden.
+- Do not infer physical tiredness or cancer-related fatigue unless it affects conversational burden directly.
+- Keep the engagement_note short and specific, such as "Answers remain detailed" or "Responses are increasingly brief".
+"""
+    payload = {"conversation_history": history[-12:]}
+    return call_json_agent(system_prompt, payload, fallback)
 
 
-def _current_topic_key():
-    idx = st.session_state.current_topic_index
-    if idx >= len(TOPICS):
-        return None
-    return TOPICS[idx][1]
+def topic_missing_fields(topic: str, merged_topic_data: dict[str, Any]) -> list[str]:
+    required_fields = required_fields_for_topic(topic)
+    missing = []
+    for field in required_fields:
+        value = merged_topic_data.get(field)
+        if value in (None, "", [], {}):
+            missing.append(field)
+    return missing
 
 
-def _advance_topic() -> None:
-    st.session_state.current_topic_index += 1
+def orchestrator_agent(
+    topic: str,
+    extracted: dict[str, Any],
+    importance: dict[str, Any],
+    experience: dict[str, Any],
+    topic_state: dict[str, Any],
+    topic_data: dict[str, Any],
+) -> dict[str, Any]:
+    config = get_topic_config(topic)
+    fallback = {"action": "next_topic", "reason": "Fallback orchestration"}
+    system_prompt = """
+You are the Orchestrator Agent for ChatReport.
+You decide whether the chatbot should ask one more follow-up on the current topic, move to the next topic, or finish the interview.
+
+Return JSON only:
+{
+  "action": "ask_followup" | "next_topic" | "finish",
+  "reason": "short rationale"
+}
+
+Decision rules:
+- Choose "ask_followup" when the symptom is present or unclear AND clinically useful information is still missing AND a follow-up question is available.
+- Choose "next_topic" when the topic is adequately covered, clearly denied, or no useful follow-up remains.
+- Choose "finish" only when the interview is complete and no meaningful topics remain.
+- Respect conversation burden: if patient conversational fatigue is high, prefer moving on unless the current topic is high priority and still insufficiently characterized.
+- High-priority active symptoms should usually get at least one clarifying follow-up if important fields are missing.
+- Do not ask repeated or low-yield follow-ups.
+- Use the reason field to explain the operational logic briefly, such as "Pain present and severity missing" or "Symptom denied; proceed".
+"""
+    payload = {
+        "topic": topic,
+        "topic_config": config,
+        "extracted": extracted,
+        "importance": importance,
+        "experience": experience,
+        "topic_state": topic_state,
+        "topic_data": topic_data,
+        "previous_visit_topic_summary": st.session_state.previous_visit_topics.get(topic, ""),
+        "remaining_followups": [
+            q for q in config.get("followups", []) if q not in topic_state.get("asked_followups", [])
+        ],
+    }
+    result = call_json_agent(system_prompt, payload, fallback)
+    action = result.get("action", "next_topic")
+    if action not in {"ask_followup", "next_topic", "finish"}:
+        action = "next_topic"
+    return {"action": action, "reason": result.get("reason", fallback["reason"])}
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# MAIN CHAT PROCESSING
-# ─────────────────────────────────────────────────────────────────────────────
-
-def process_user_message(user_text: str) -> None:
-    """
-    Core chat-loop handler.  For each patient message:
-      1. Run Symptom Extraction Agent
-      2. Run Clinical Importance Agent
-      3. Run Patient Experience Agent
-      4. Handle the answer (or resolve a pending follow-up)
-      5. Orchestrator decides next action
-    """
-    topic_key = _current_topic_key()
-    if topic_key is None:
-        return
-
-    state = st.session_state.topic_states[topic_key]
-    state["chat"].append({"role": "user", "content": user_text})
-    st.session_state.freeform_chat.append({"role": "user", "content": user_text})
-
-    # ── Agents 1 & 2: background symptom analysis ────────────────────────────
-    symptoms = agent_extract_symptoms(user_text)
-    importance = agent_clinical_importance(symptoms)
-    print(f"[EXTRACTION] symptoms={symptoms}")
-    print(f"[IMPORTANCE] {importance}")
-
-    # ── Agent 4: patient experience ──────────────────────────────────────────
-    fatigue = agent_patient_experience(st.session_state.freeform_chat)
-    print(f"[EXPERIENCE] fatigue={fatigue}")
-
-    # ── Resolve pending follow-up first ──────────────────────────────────────
-    if state.get("waiting_for_followup"):
-        handle_pending_followup(topic_key, user_text)
-        return
-
-    # ── Identify current step ────────────────────────────────────────────────
-    next_step = get_next_step(topic_key, state["data"])
-    if next_step is None:
-        state["status"] = "done"
-        _advance_and_greet()
-        return
-
-    step_type = next_step.get("type", "free_text")
-
-    # ── Route to correct parsing path ────────────────────────────────────────
-    if step_type == "option":
-        interpreted = interpret_user_input_with_options(next_step, user_text)
-        if interpreted in next_step.get("opts", []):
-            handle_answer(topic_key, next_step, interpreted)
-        else:
-            _request_resolution_for_option_step(topic_key, next_step, user_text, "typed")
-
-    elif step_type == "multi":
-        parsed, unmatched = _parse_multi_select_typed_input_details(next_step, user_text)
-        if parsed:
-            if unmatched:
-                state["data"][f"{next_step['id']}_other_detail"] = ", ".join(unmatched)
-            handle_answer(topic_key, next_step, parsed)
-        elif "Other" in next_step.get("opts", []) and not _looks_vague_answer(user_text):
-            state["data"][f"{next_step['id']}_other_detail"] = user_text
-            handle_answer(topic_key, next_step, ["Other"], "free_text", user_text)
-        else:
-            _request_retry_for_step(topic_key, next_step, user_text, "typed")
-
-    else:  # free_text, scale, numeric
-        handle_answer(topic_key, next_step, user_text)
-
-    # ── Agent 5: orchestrator — decide whether to advance ────────────────────
-    decision = agent_orchestrator(
-        topic_key, next_step, user_text, symptoms, importance, fatigue
+def report_generator_agent(collected_data: dict[str, Any], history: list[dict[str, str]]) -> str:
+    fallback_report = build_fallback_report(
+        collected_data,
+        st.session_state.get("previous_visit_history", ""),
+        st.session_state.get("previous_visit_topics", {}),
     )
-    if decision["action"] == "topic_done":
-        state["status"] = "done"
-        _advance_and_greet()
+    client = get_openai_client()
+    if client is None:
+        return fallback_report
+
+    system_prompt = """
+You are the Report Generator Agent for ChatReport.
+Transform the collected structured interview data into a concise, clinician-friendly report for head and neck cancer symptom follow-up.
+
+Return JSON only:
+{
+  "report_markdown": "markdown report"
+}
+
+Report requirements:
+- Produce clean markdown.
+- Include a short title and clearly separated sections.
+- Summarize the most important positive symptoms first.
+- Include relevant negatives when the patient clearly denied symptoms.
+- Mention functional impact such as eating, drinking, swallowing, breathing, sleep, energy, and emotional state when available.
+- Include medications and any helpful details about benefit or side effects if available.
+- End with a brief overall clinical summary.
+- Keep the tone factual, concise, and suitable for clinical review.
+
+Do not:
+- Invent data.
+- Add treatment plans, diagnoses, or medical advice.
+- Mention that an AI generated the report.
+"""
+    payload = {
+        "collected_data": collected_data,
+        "conversation_history": history,
+        "previous_visit_history": st.session_state.get("previous_visit_history", ""),
+        "previous_visit_topics": st.session_state.get("previous_visit_topics", {}),
+    }
+    try:
+        response = client.responses.create(
+            model=st.session_state.get("model_name", DEFAULT_MODEL),
+            temperature=0,
+            input=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": json.dumps(payload, ensure_ascii=True)},
+            ],
+        )
+        parsed = extract_json(response.output_text, {"report_markdown": fallback_report})
+        report = parsed.get("report_markdown", fallback_report)
+        return report if isinstance(report, str) and report.strip() else fallback_report
+    except Exception as exc:
+        print(f"[report-error] {exc}")
+        return fallback_report
 
 
-def _advance_and_greet() -> None:
-    """Move to the next topic and send its intro + first question."""
-    _advance_topic()
-    topic_key = _current_topic_key()
+def build_fallback_report(
+    collected_data: dict[str, Any],
+    previous_visit_history: str = "",
+    previous_visit_topics: dict[str, str] | None = None,
+) -> str:
+    previous_visit_topics = previous_visit_topics or {}
+    lines = ["## Structured Clinical Report", ""]
+    if previous_visit_history.strip():
+        lines.extend(
+            [
+                "### Previous Visit History",
+                previous_visit_history.strip(),
+                "",
+            ]
+        )
+    for topic in TOPIC_ORDER:
+        topic_data = collected_data.get(topic, {})
+        previous_summary = previous_visit_topics.get(topic, "").strip()
+        if not topic_data and not previous_summary:
+            continue
+        lines.append(f"### {topic_label(topic)}")
+        if previous_summary:
+            lines.append(f"- **Previous Visit:** {previous_summary}")
+        for key, value in topic_data.items():
+            if value in (None, "", [], {}):
+                continue
+            label = key.replace("_", " ").title()
+            if isinstance(value, list):
+                value = ", ".join(str(item) for item in value)
+            lines.append(f"- **{label}:** {value}")
+        lines.append("")
+    return "\n".join(lines).strip()
 
-    if topic_key is None:
-        st.session_state.report_ready = True
-        st.rerun()
+
+def merge_topic_data(topic: str, extracted: dict[str, Any]) -> dict[str, Any]:
+    topic_data = get_topic_data(topic)
+    details = extracted.get("details", {})
+    if extracted.get("presence") != "unknown":
+        topic_data["presence"] = extracted["presence"]
+    if extracted.get("summary"):
+        topic_data["summary"] = extracted["summary"]
+    for key, value in details.items():
+        if value not in (None, "", [], {}):
+            topic_data[key] = value
+    return topic_data
+
+
+def previous_visit_agent(previous_visit_history: str) -> dict[str, str]:
+    history = previous_visit_history.strip()
+    if not history:
+        return {}
+
+    fallback = {topic: "" for topic in TOPIC_ORDER}
+    client = get_openai_client()
+    if client is None:
+        return fallback
+
+    system_prompt = f"""
+You are a clinical summarization helper.
+Summarize the previous visit history into short topic-specific snippets for this head and neck symptom interview.
+
+Return JSON only with exactly these keys:
+{json.dumps({topic: "" for topic in TOPIC_ORDER}, ensure_ascii=True)}
+
+Rules:
+- Each value should be a short phrase or sentence fragment.
+- Leave a value as an empty string when the previous visit history does not mention that topic.
+- Do not invent data.
+- Use concise clinician-friendly wording.
+"""
+    try:
+        response = client.responses.create(
+            model=st.session_state.get("model_name", DEFAULT_MODEL),
+            temperature=0,
+            input=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": history},
+            ],
+        )
+        parsed = extract_json(response.output_text, fallback)
+        if isinstance(parsed, dict):
+            return {topic: str(parsed.get(topic, "") or "") for topic in TOPIC_ORDER}
+    except Exception as exc:
+        print(f"[previous-visit-error] {exc}")
+    return fallback
+
+
+def refresh_previous_visit_topics() -> None:
+    history = st.session_state.get("previous_visit_history", "").strip()
+    cache_key = "_previous_visit_cache"
+    if not history:
+        st.session_state.previous_visit_topics = {}
+        st.session_state[cache_key] = ""
+        return
+    if st.session_state.get(cache_key) == history:
+        return
+    st.session_state.previous_visit_topics = previous_visit_agent(history)
+    st.session_state[cache_key] = history
+
+
+def _secret(name: str, default: Any = None) -> Any:
+    return st.secrets.get(name, default)
+
+
+def _init_sheets() -> None:
+    global _sheet, _sheet_error
+    if _sheet is not None or _sheet_error is not None:
         return
 
-    # Ensure state exists and is well-formed
-    if topic_key not in st.session_state.topic_states:
-        st.session_state.topic_states[topic_key] = _fresh_topic_state()
-    state = st.session_state.topic_states[topic_key]
-    state.setdefault("data", {})
-    state.setdefault("chat", [])
+    if gspread is None or Credentials is None:
+        _sheet_error = "Google Sheets dependencies are not available."
+        return
 
-    intro = TOPIC_INTROS.get(topic_key, "")
-    first_step = get_next_step(topic_key, state["data"])
+    try:
+        service_account_info = _secret("gcp_service_account")
+        gsheet_id = _secret("gsheet_id")
+        if not service_account_info or not gsheet_id:
+            _sheet_error = "Missing `gcp_service_account` or `gsheet_id` in Streamlit secrets."
+            return
 
-    if first_step:
-        question = _step_prompt_text(first_step)
-        # Avoid appending the question if the intro already says essentially the same thing
-        if _is_semantically_redundant_question(intro, question):
-            greeting = intro
-        else:
-            # Trim any trailing rephrase before appending
-            trimmed_intro = _trim_assistant_message_before_next_question(intro, question)
-            greeting = f"{trimmed_intro} {question}".strip()
-        state["chat"].append({"role": "assistant", "content": greeting})
-        st.session_state.freeform_chat.append({"role": "assistant", "content": greeting})
+        creds = Credentials.from_service_account_info(
+            service_account_info,
+            scopes=["https://www.googleapis.com/auth/spreadsheets"],
+        )
+        book = gspread.authorize(creds).open_by_key(gsheet_id)
+        try:
+            ws = book.worksheet("ChatReport")
+        except Exception:
+            ws = book.add_worksheet(title="ChatReport", rows=2000, cols=6)
+            ws.append_row(["timestamp", "patient_name", "selected_section", "all_data_json", "report", "previous_visit_history"])
+        _sheet = ws
+    except Exception as exc:
+        _sheet_error = str(exc)
+
+
+def save_to_sheet(patient_name: str, selected_section: str, all_data: dict[str, Any], report: str = "") -> bool:
+    _init_sheets()
+    if _sheet is None:
+        st.session_state.sheet_status = f"Could not connect to Google Sheets: {_sheet_error}"
+        return False
+
+    try:
+        _sheet.append_row(
+            [
+                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                patient_name,
+                selected_section,
+                json.dumps(all_data, ensure_ascii=False),
+                report,
+                st.session_state.get("previous_visit_history", ""),
+            ]
+        )
+        st.session_state.sheet_status = "Saved to Google Sheets."
+        return True
+    except Exception as exc:
+        st.session_state.sheet_status = f"Failed to save to Google Sheets: {exc}"
+        return False
+
+
+def topic_status_text(topic: str) -> str:
+    state = st.session_state.topic_states[topic]
+    if state["completed"]:
+        return "Complete"
+    if state["main_asked"]:
+        return "In progress"
+    return "Not started"
+
+
+def render_topic_sections() -> None:
+    st.markdown("### Topic Sections")
+    for topic in TOPIC_ORDER:
+        state = st.session_state.topic_states[topic]
+        current_data = st.session_state.collected_data.get(topic, {})
+        current_summary = current_data.get("summary", state.get("summary", ""))
+        previous_summary = st.session_state.previous_visit_topics.get(topic, "").strip()
+        priority = get_topic_config(topic).get("priority", "routine").title()
+        with st.expander(f"{topic_label(topic)} • {topic_status_text(topic)}", expanded=topic == st.session_state.current_topic):
+            st.caption(f"Priority: {priority}")
+            if previous_summary:
+                st.markdown(f"**Previous visit:** {previous_summary}")
+            else:
+                st.markdown("**Previous visit:** No prior summary recorded for this topic.")
+            if current_summary:
+                st.markdown(f"**Current visit:** {current_summary}")
+            else:
+                st.markdown("**Current visit:** No details captured yet.")
+            required = required_fields_for_topic(topic)
+            if required:
+                present = [field for field in required if current_data.get(field)]
+                missing = [field for field in required if not current_data.get(field)]
+                st.markdown(f"**Required details captured:** {', '.join(present) if present else 'None yet'}")
+                st.markdown(f"**Still missing:** {', '.join(missing) if missing else 'None'}")
+
+
+def render_selected_section() -> None:
+    section_key = st.session_state.selected_section
+    st.markdown(f"### {section_label(section_key)}")
+    st.caption(SECTION_INTROS[section_key])
+
+    for topic in SECTION_TOPICS[section_key]:
+        state = st.session_state.topic_states[topic]
+        current_data = st.session_state.collected_data.get(topic, {})
+        current_summary = current_data.get("summary", state.get("summary", ""))
+        previous_summary = st.session_state.previous_visit_topics.get(topic, "").strip()
+        subtitle = f"{topic_label(topic)} • {topic_status_text(topic)}"
+        with st.expander(subtitle, expanded=topic == st.session_state.current_topic):
+            if previous_summary:
+                st.markdown(f"**Previous visit:** {previous_summary}")
+            else:
+                st.markdown("**Previous visit:** No prior summary recorded.")
+            if current_summary:
+                st.markdown(f"**Current visit:** {current_summary}")
+            else:
+                st.markdown("**Current visit:** No details captured yet.")
+            required = required_fields_for_topic(topic)
+            if required:
+                present = [field for field in required if current_data.get(field)]
+                missing = [field for field in required if not current_data.get(field)]
+                st.markdown(f"**Captured:** {', '.join(present) if present else 'None yet'}")
+                st.markdown(f"**Missing:** {', '.join(missing) if missing else 'None'}")
+
+
+def ask_assistant_question(question: str) -> None:
+    st.session_state.current_question = question
+    current_topic = st.session_state.current_topic
+    st.session_state.topic_states[current_topic]["current_question"] = question
+    add_message("assistant", question, topic=current_topic)
+
+
+def section_status(section_key: str) -> str:
+    topics = SECTION_TOPICS[section_key]
+    completed_count = sum(1 for topic in topics if st.session_state.topic_states[topic]["completed"])
+    started_count = sum(1 for topic in topics if st.session_state.topic_states[topic]["main_asked"])
+    if completed_count == len(topics):
+        return "Complete"
+    if started_count > 0:
+        return "In progress"
+    return "Not started"
+
+
+def ensure_section_started(section_key: str) -> None:
+    active_topic = get_active_topic_for_section(section_key)
+    if active_topic is None:
+        return
+
+    set_active_topic(active_topic)
+    if not st.session_state.section_states[section_key]["started"]:
+        add_message("assistant", SECTION_INTROS[section_key], topic=active_topic)
+        st.session_state.section_states[section_key]["started"] = True
+
+    if not st.session_state.topic_states[active_topic]["main_asked"]:
+        st.session_state.topic_states[active_topic]["main_asked"] = True
+        ask_assistant_question(main_question_for(active_topic))
+
+
+def move_to_next_topic() -> None:
+    current_topic = st.session_state.current_topic
+    st.session_state.topic_states[current_topic]["completed"] = True
+    current_section = section_for_topic(current_topic)
+    next_topic = get_next_unfinished_topic(current_section)
+    if next_topic is not None:
+        set_active_topic(next_topic)
+        st.session_state.topic_states[next_topic]["main_asked"] = True
+        ask_assistant_question(main_question_for(next_topic))
+        return
+
+    add_message(
+        "assistant",
+        f"{section_label(current_section)} is complete. You can choose another topic from the sidebar.",
+        topic=current_topic,
+    )
+
+    if not has_remaining_topics():
+        finish_chat()
+
+
+def should_force_followup(topic: str, merged_data: dict[str, Any], missing_fields: list[str]) -> bool:
+    if not missing_fields:
+        return False
+
+    presence = normalize_presence(merged_data.get("presence"))
+    question_type = question_type_for_topic(topic)
+
+    if presence == "yes":
+        return True
+
+    if question_type in {"scale", "numeric"}:
+        return True
+
+    return False
+
+
+def finish_chat() -> None:
+    st.session_state.finished = True
+    report = report_generator_agent(st.session_state.collected_data, st.session_state.messages)
+    st.session_state.final_report = report
+    add_message(
+        "assistant",
+        "Thank you. I have enough information now and generated your structured symptom report below.",
+        topic=st.session_state.current_topic,
+    )
+
+
+def start_chat() -> None:
+    if st.session_state.messages:
+        return
+    welcome = (
+        "Hello, I’m ChatReport. Please choose one of the symptom topics from the sidebar and answer the questions for that section."
+    )
+    add_message("assistant", welcome)
+    ensure_section_started(st.session_state.selected_section)
+
+
+def process_turn(patient_message: str) -> None:
+    if st.session_state.finished:
+        return
+
+    topic = st.session_state.current_topic
+    topic_state = st.session_state.topic_states[topic]
+    current_question = st.session_state.current_question
+
+    add_message("user", patient_message, topic=topic)
+
+    extracted = symptom_extraction_agent(
+        patient_message=patient_message,
+        topic=topic,
+        question=current_question,
+        topic_data=deepcopy(get_topic_data(topic)),
+    )
+    merged_data = merge_topic_data(topic, extracted)
+    topic_state["main_answered"] = True
+    topic_state["presence"] = effective_presence(merged_data, extracted)
+    topic_state["summary"] = extracted.get("summary", "")
+    if topic_state["presence"] != "unknown":
+        merged_data["presence"] = topic_state["presence"]
+
+    inferred_missing = topic_missing_fields(topic, merged_data)
+    importance = clinical_importance_agent(topic, extracted, deepcopy(merged_data))
+    llm_missing = [item for item in importance.get("missing_fields", []) if isinstance(item, str)]
+    if inferred_missing:
+        importance["missing_fields"] = sorted(set(llm_missing + inferred_missing))
     else:
-        # No applicable steps for this topic — skip it
-        _advance_and_greet()
+        importance["missing_fields"] = llm_missing
+
+    if should_force_followup(topic, merged_data, importance["missing_fields"]):
+        importance["follow_up_needed"] = True
+    elif topic_state["presence"] == "no":
+        importance["follow_up_needed"] = False
+
+    experience = patient_experience_agent(st.session_state.messages)
+    orchestration = orchestrator_agent(
+        topic=topic,
+        extracted=extracted,
+        importance=importance,
+        experience=experience,
+        topic_state=deepcopy(topic_state),
+        topic_data=deepcopy(merged_data),
+    )
+
+    print(
+        "[decision]",
+        json.dumps(
+            {
+                "topic": topic,
+                "extracted": extracted,
+                "importance": importance,
+                "experience": experience,
+                "orchestrator": orchestration,
+            },
+            ensure_ascii=True,
+        ),
+    )
+
+    action = orchestration["action"]
+    remaining_followups = [
+        q for q in get_topic_config(topic).get("followups", []) if q not in topic_state["asked_followups"]
+    ]
+    high_conversation_fatigue = experience.get("fatigue_level") == "high"
+
+    if action == "finish":
+        finish_chat()
+        return
+
+    if action == "ask_followup" and remaining_followups:
+        if high_conversation_fatigue and importance.get("importance_level") not in {"high", "urgent"}:
+            move_to_next_topic()
+            return
+
+        followup = follow_up_agent(
+            topic=topic,
+            missing_fields=importance.get("missing_fields", []),
+            asked_followups=topic_state["asked_followups"],
+            topic_data=deepcopy(merged_data),
+        )
+        question = followup.get("question", "").strip()
+        if question:
+            topic_state["asked_followups"].append(question)
+            ask_assistant_question(question)
+            return
+
+    if should_force_followup(topic, merged_data, importance.get("missing_fields", [])) and remaining_followups:
+        followup = follow_up_agent(
+            topic=topic,
+            missing_fields=importance.get("missing_fields", []),
+            asked_followups=topic_state["asked_followups"],
+            topic_data=deepcopy(merged_data),
+        )
+        question = followup.get("question", "").strip()
+        if question:
+            topic_state["asked_followups"].append(question)
+            ask_assistant_question(question)
+            return
+
+    move_to_next_topic()
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# STREAMLIT UI
-# ─────────────────────────────────────────────────────────────────────────────
+def render_sidebar() -> None:
+    with st.sidebar:
+        st.header("ChatReport")
+        st.caption("Clinical symptom assistant")
+        st.session_state.patient_name = st.text_input(
+            "Patient Name",
+            value=st.session_state.get("patient_name", ""),
+        )
+        st.session_state.api_key_input = st.text_input(
+            "OpenAI API Key",
+            value=st.session_state.get("api_key_input", ""),
+            type="password",
+            help="Stored only in this Streamlit session. You can also set OPENAI_API_KEY.",
+        )
+        st.session_state.model_name = st.text_input(
+            "Model",
+            value=st.session_state.get("model_name", DEFAULT_MODEL),
+            help="Responses API model name.",
+        )
+        st.session_state.previous_visit_history = st.text_area(
+            "Previous Visit History",
+            value=st.session_state.get("previous_visit_history", ""),
+            height=180,
+            help="Optional. Paste a summary from the previous visit so the chatbot can show topic-by-topic context.",
+        )
+        st.caption("For safety, the app does not store an API key in code.")
 
-def _render_topic_chat(topic_key: str) -> None:
-    """Render all messages in the current topic's chat history."""
-    state = st.session_state.topic_states[topic_key]
-    for msg in state["chat"]:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
+        st.markdown("---")
+        st.subheader("Topics")
+        completed_sections = sum(1 for section_key, _ in SECTION_ORDER if section_status(section_key) == "Complete")
+        st.progress(completed_sections / len(SECTION_ORDER))
+        st.caption(f"{completed_sections}/{len(SECTION_ORDER)} sections complete")
+
+        for section_key, label in SECTION_ORDER:
+            status = section_status(section_key)
+            marker = "▶ " if st.session_state.selected_section == section_key else ""
+            icon = {"Complete": "✅", "In progress": "🔵", "Not started": "⚪"}[status]
+            button_label = f"{marker}{icon} {label}"
+            if st.button(button_label, key=f"section_{section_key}", use_container_width=True):
+                st.session_state.selected_section = section_key
+                ensure_section_started(section_key)
+                st.rerun()
+
+        st.markdown("---")
+        st.subheader("Spreadsheet")
+        if st.button("Save To Google Sheets", use_container_width=True):
+            report = st.session_state.final_report or build_fallback_report(
+                st.session_state.collected_data,
+                st.session_state.get("previous_visit_history", ""),
+                st.session_state.get("previous_visit_topics", {}),
+            )
+            save_to_sheet(
+                patient_name=st.session_state.get("patient_name", ""),
+                selected_section=st.session_state.get("selected_section", ""),
+                all_data=st.session_state.collected_data,
+                report=report,
+            )
+        if st.session_state.get("sheet_status"):
+            st.caption(st.session_state.sheet_status)
+
+        if st.button("Reset Chat"):
+            for key in list(st.session_state.keys()):
+                del st.session_state[key]
+            st.rerun()
+
+
+def render_chat() -> None:
+    st.title("ChatReport")
+    st.caption("Multi-agent clinical chatbot for head and neck cancer symptom reporting")
+
+    if st.session_state.get("previous_visit_history", "").strip():
+        with st.expander("Previous Visit History", expanded=False):
+            st.markdown(st.session_state.previous_visit_history)
+
+    render_selected_section()
+
+    selected_section = st.session_state.selected_section
+    for message in st.session_state.messages:
+        if message.get("section") not in {None, selected_section}:
+            continue
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+
+    if st.session_state.final_report:
+        st.markdown("### Final Report")
+        st.info(st.session_state.final_report)
 
 
 def main() -> None:
-    _init_session()
+    init_session_state()
+    render_sidebar()
+    refresh_previous_visit_topics()
+    start_chat()
+    ensure_section_started(st.session_state.selected_section)
+    render_chat()
 
-    st.title("🏥 ChatReport")
-    st.caption("Symptom check-in for head and neck cancer patients.")
-
-    # ── Step 0: Collect patient name ─────────────────────────────────────────
-    if not st.session_state.patient_name:
-        with st.form("name_form"):
-            name = st.text_input("Please enter your name to begin:")
-            submitted = st.form_submit_button("Start check-in")
-        if submitted and name.strip():
-            st.session_state.patient_name = name.strip()
-            topic_key = _current_topic_key()
-            if topic_key and topic_key in st.session_state.topic_states:
-                state = st.session_state.topic_states[topic_key]
-                # Ensure "data" key exists (defensive against stale state)
-                state.setdefault("data", {})
-                state.setdefault("chat", [])
-                intro = TOPIC_INTROS.get(topic_key, "")
-                first_step = get_next_step(topic_key, state["data"])
-                if first_step:
-                    question = _step_prompt_text(first_step)
-                    greeting = (
-                        f"Hello, {st.session_state.patient_name}! Welcome to ChatReport. "
-                        f"I'll guide you through a short symptom check-in. "
-                        f"{intro} {question}"
-                    )
-                    state["chat"].append({"role": "assistant", "content": greeting})
-                    st.session_state.freeform_chat.append(
-                        {"role": "assistant", "content": greeting}
-                    )
-            st.rerun()
+    if st.session_state.finished:
         return
 
-    # ── Step 1: Show completed report ────────────────────────────────────────
-    if st.session_state.report_ready:
-        st.success("✅ Check-in complete! Your clinical summary is ready.")
-        all_data = {
-            key: st.session_state.topic_states.get(key, {}).get("data", {})
-            for _, key in TOPICS
-        }
-        with st.spinner("Generating report…"):
-            report = agent_generate_report(all_data, st.session_state.patient_name)
-        st.markdown("---")
-        st.markdown(report)
-        if st.button("Start over"):
-            for k in list(st.session_state.keys()):
-                del st.session_state[k]
-            st.rerun()
+    active_topic = get_active_topic_for_section(st.session_state.selected_section)
+    if active_topic is None:
         return
 
-    # ── Step 2: Active chat ───────────────────────────────────────────────────
-    topic_key = _current_topic_key()
-    if topic_key is None:
-        st.session_state.report_ready = True
+    if prompt := st.chat_input(f"Type your answer for {section_label(st.session_state.selected_section)}"):
+        process_turn(prompt)
         st.rerun()
-        return
-
-    # Guard: topic_key must be in topic_states (repair if not)
-    if topic_key not in st.session_state.topic_states:
-        st.session_state.topic_states[topic_key] = _fresh_topic_state()
-
-    # Sidebar: topic progress tracker
-    with st.sidebar:
-        st.markdown("## 📋 Check-in Progress")
-        total = len(TOPICS)
-        completed = st.session_state.current_topic_index
-        pct = int((completed / total) * 100)
-        st.progress(pct / 100)
-        st.caption(f"{completed} of {total} topics complete")
-        st.markdown("---")
-        for i, (display_name, key) in enumerate(TOPICS):
-            idx = st.session_state.current_topic_index
-            if i < idx:
-                st.markdown(f"✅ &nbsp; ~~{display_name}~~", unsafe_allow_html=True)
-            elif i == idx:
-                st.markdown(
-                    f"<div style='background:#EEF2FF;border-left:4px solid #4F46E5;"
-                    f"padding:6px 10px;border-radius:4px;font-weight:600;color:#4F46E5'>"
-                    f"▶ {display_name}</div>",
-                    unsafe_allow_html=True,
-                )
-            else:
-                st.markdown(
-                    f"<div style='color:#9CA3AF;padding:4px 10px'>⬜ {display_name}</div>",
-                    unsafe_allow_html=True,
-                )
-
-    # Chat history for the active topic
-    _render_topic_chat(topic_key)
-
-    # Chat input
-    user_input = st.chat_input("Type your response here…")
-    if user_input:
-        with st.chat_message("user"):
-            st.markdown(user_input)
-        with st.spinner("Processing…"):
-            process_user_message(user_input)
 
 
 if __name__ == "__main__":
