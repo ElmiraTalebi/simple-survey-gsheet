@@ -869,6 +869,26 @@ def parse_multi_select_typed_input(step: dict, text: str) -> list:
 # ANSWER HANDLING
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _append_next_question_or_advance(topic_key: str) -> None:
+    """
+    After an answer is recorded, find the next unanswered step and append its
+    question to the chat.  If the topic is finished, mark it done (but do NOT
+    call st.rerun() — the caller is responsible for that).
+    """
+    state = st.session_state.topic_states[topic_key]
+    next_step = get_next_step(topic_key, state["data"])
+    if next_step is None:
+        state["status"] = "done"
+        # _advance_and_greet will handle the rerun itself
+        _advance_and_greet()
+        return
+    question = _step_prompt_text(next_step)
+    last_msg = _last_assistant_message(state)
+    if not _is_semantically_redundant_question(last_msg, question):
+        state["chat"].append({"role": "assistant", "content": question})
+        st.session_state.freeform_chat.append({"role": "assistant", "content": question})
+
+
 def handle_answer(
     topic_key: str,
     step: dict,
@@ -881,6 +901,8 @@ def handle_answer(
 
     For free_text steps, vague answers trigger a clarification request instead
     of being recorded.  All other step types are recorded immediately.
+    After recording, the next question is immediately appended so the chat
+    never stalls waiting for the user to send another message.
     """
     state = st.session_state.topic_states[topic_key]
     step_id = step["id"]
@@ -913,8 +935,14 @@ def handle_answer(
     # Brief acknowledgment (LLM-generated, gracefully degrades to a fallback)
     ack = _generate_acknowledgment(step, answer)
     state["chat"].append({"role": "assistant", "content": ack})
+    st.session_state.freeform_chat.append({"role": "assistant", "content": ack})
 
-    st.rerun()
+    # ── Immediately append the next question so the chat keeps moving ────────
+    _append_next_question_or_advance(topic_key)
+
+    # Only rerun if _advance_and_greet didn't already do so
+    if state.get("status") != "done":
+        st.rerun()
 
 
 def handle_pending_followup(topic_key: str, text: str, source: str = "followup") -> None:
@@ -947,6 +975,8 @@ def handle_pending_followup(topic_key: str, text: str, source: str = "followup")
                 "role": "assistant",
                 "content": "Thank you, I've made a note of that.",
             })
+            # Append next question so chat continues
+            _append_next_question_or_advance(topic_key)
             st.rerun()
             return
 
@@ -960,6 +990,8 @@ def handle_pending_followup(topic_key: str, text: str, source: str = "followup")
                 "role": "assistant",
                 "content": "Thank you, I've noted that.",
             })
+            # Append next question so chat continues
+            _append_next_question_or_advance(topic_key)
             st.rerun()
             return
 
@@ -1600,15 +1632,29 @@ def main() -> None:
 
     # Sidebar: topic progress tracker
     with st.sidebar:
-        st.header("Progress")
+        st.markdown("## 📋 Check-in Progress")
+        total = len(TOPICS)
+        completed = st.session_state.current_topic_index
+        pct = int((completed / total) * 100)
+        st.progress(pct / 100)
+        st.caption(f"{completed} of {total} topics complete")
+        st.markdown("---")
         for i, (display_name, key) in enumerate(TOPICS):
             idx = st.session_state.current_topic_index
             if i < idx:
-                st.write(f"✅ {display_name}")
+                st.markdown(f"✅ &nbsp; ~~{display_name}~~", unsafe_allow_html=True)
             elif i == idx:
-                st.write(f"▶️ **{display_name}**")
+                st.markdown(
+                    f"<div style='background:#EEF2FF;border-left:4px solid #4F46E5;"
+                    f"padding:6px 10px;border-radius:4px;font-weight:600;color:#4F46E5'>"
+                    f"▶ {display_name}</div>",
+                    unsafe_allow_html=True,
+                )
             else:
-                st.write(f"⬜ {display_name}")
+                st.markdown(
+                    f"<div style='color:#9CA3AF;padding:4px 10px'>⬜ {display_name}</div>",
+                    unsafe_allow_html=True,
+                )
 
     # Chat history for the active topic
     _render_topic_chat(topic_key)
