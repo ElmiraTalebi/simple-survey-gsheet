@@ -10,10 +10,7 @@ from typing import Any
 from uuid import uuid4
 
 import streamlit as st
-from dotenv import load_dotenv
 from openai import OpenAI
-
-load_dotenv()
 
 PAGE_TITLE = "ChatReport"
 PAGE_ICON = "🏥"
@@ -357,6 +354,26 @@ report_header, priority_flags, executive_summary, detailed_clinical_findings, ch
 Return only JSON.
 """
 
+
+def get_config_value(key: str, default: str | None = None) -> str | None:
+    """
+    Read configuration from Streamlit secrets first, then environment variables.
+
+    Args:
+        key: Configuration key name.
+        default: Fallback value if the key is missing.
+
+    Returns:
+        Resolved configuration value or the provided default.
+    """
+    try:
+        if key in st.secrets:
+            value = st.secrets[key]
+            return str(value) if value is not None else default
+    except Exception:
+        pass
+    return os.getenv(key, default)
+
 st.set_page_config(
     page_title=PAGE_TITLE,
     page_icon=PAGE_ICON,
@@ -387,10 +404,10 @@ def call_agent(
         ValueError: If the model response is not valid JSON.
         RuntimeError: If the API call fails.
     """
-    api_key = os.getenv("OPENAI_API_KEY")
-    model = os.getenv("OPENAI_MODEL", DEFAULT_MODEL)
+    api_key = get_config_value("OPENAI_API_KEY")
+    model = get_config_value("OPENAI_MODEL", DEFAULT_MODEL)
     if not api_key:
-        raise RuntimeError("OPENAI_API_KEY is not set.")
+        raise RuntimeError("OPENAI_API_KEY is not set in Streamlit secrets or environment variables.")
 
     payload_text = json.dumps(user_content, indent=2) if isinstance(user_content, dict) else str(user_content)
     agent_name = "unknown_agent"
@@ -560,7 +577,7 @@ def run_answer_interpreter(
     Returns:
         Parsed agent output or safe default.
     """
-    max_tokens = int(os.getenv("MAX_TOKENS_AGENT", "1000"))
+    max_tokens = int(get_config_value("MAX_TOKENS_AGENT", "1000") or "1000")
     try:
         return call_agent(
             ANSWER_INTERPRETER_PROMPT,
@@ -599,7 +616,7 @@ def run_prior_checkin_session_open(last_checkin: dict | None, current_session_an
     Returns:
         Prior-checkin summary package.
     """
-    max_tokens = int(os.getenv("MAX_TOKENS_AGENT", "1000"))
+    max_tokens = int(get_config_value("MAX_TOKENS_AGENT", "1000") or "1000")
     try:
         return call_agent(
             PRIOR_CHECKIN_PROMPT,
@@ -651,7 +668,7 @@ def run_prior_checkin_comparison(
     Returns:
         Structured comparison output.
     """
-    max_tokens = int(os.getenv("MAX_TOKENS_AGENT", "1000"))
+    max_tokens = int(get_config_value("MAX_TOKENS_AGENT", "1000") or "1000")
     current_answer = current_session_answers.get(question_id, {}).get("matched_option")
     try:
         return call_agent(
@@ -696,7 +713,7 @@ def run_history_session_start(patient_record: dict) -> dict:
     Returns:
         Context package or safe default.
     """
-    max_tokens = int(os.getenv("MAX_TOKENS_AGENT", "1000"))
+    max_tokens = int(get_config_value("MAX_TOKENS_AGENT", "1000") or "1000")
     try:
         return call_agent(
             PATIENT_HISTORY_PROMPT,
@@ -900,7 +917,7 @@ def run_history_on_demand(patient_record: dict, query_type: str, query_context: 
     Returns:
         Targeted history response or safe default.
     """
-    max_tokens = int(os.getenv("MAX_TOKENS_AGENT", "1000"))
+    max_tokens = int(get_config_value("MAX_TOKENS_AGENT", "1000") or "1000")
     try:
         return call_agent(
             PATIENT_HISTORY_PROMPT,
@@ -951,7 +968,7 @@ def run_doctor_relevance(
     Returns:
         Doctor-relevance output or safe default.
     """
-    max_tokens = int(os.getenv("MAX_TOKENS_AGENT", "1000"))
+    max_tokens = int(get_config_value("MAX_TOKENS_AGENT", "1000") or "1000")
     try:
         return call_agent(
             DOCTOR_RELEVANCE_PROMPT,
@@ -1013,7 +1030,7 @@ def run_urgency(
     Returns:
         Urgency output or safe default.
     """
-    max_tokens = int(os.getenv("MAX_TOKENS_AGENT", "1000"))
+    max_tokens = int(get_config_value("MAX_TOKENS_AGENT", "1000") or "1000")
     try:
         return call_agent(
             URGENCY_PROMPT,
@@ -1067,7 +1084,7 @@ def run_sentiment(
     Returns:
         Sentiment output or safe default.
     """
-    max_tokens = int(os.getenv("MAX_TOKENS_AGENT", "1000"))
+    max_tokens = int(get_config_value("MAX_TOKENS_AGENT", "1000") or "1000")
     try:
         return call_agent(
             SENTIMENT_PROMPT,
@@ -1140,7 +1157,7 @@ def run_next_move(
     Returns:
         Next-move output or safe default.
     """
-    max_tokens = int(os.getenv("MAX_TOKENS_AGENT", "1000"))
+    max_tokens = int(get_config_value("MAX_TOKENS_AGENT", "1000") or "1000")
     try:
         return call_agent(
             NEXT_MOVE_PROMPT,
@@ -1174,7 +1191,7 @@ def run_report(session_package: dict) -> dict:
     Returns:
         Report output or safe fallback report.
     """
-    max_tokens = int(os.getenv("MAX_TOKENS_AGENT", "1000"))
+    max_tokens = int(get_config_value("MAX_TOKENS_AGENT", "1000") or "1000")
     try:
         return call_agent(
             REPORT_PROMPT,
@@ -2232,7 +2249,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-
-
-
