@@ -10,9 +10,23 @@ from typing import Any, Optional
 
 import streamlit as st
 import streamlit.components.v1 as _stc
-import gspread
-from google.oauth2.service_account import Credentials
-from openai import OpenAI
+from streamlit.errors import StreamlitSecretNotFoundError
+
+try:
+    import gspread
+    from google.oauth2.service_account import Credentials
+    _gspread_import_error: Optional[str] = None
+except Exception as e:
+    gspread = None
+    Credentials = None
+    _gspread_import_error = str(e)
+
+try:
+    from openai import OpenAI
+    _openai_import_error: Optional[str] = None
+except Exception as e:
+    OpenAI = None
+    _openai_import_error = str(e)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -985,16 +999,21 @@ def render_chat_bubble(role: str, content: str):
 
 def _secret(*keys, default=None):
     for k in keys:
-        if k in st.secrets:
-            return st.secrets[k]
+        try:
+            if k in st.secrets:
+                return st.secrets[k]
+        except StreamlitSecretNotFoundError:
+            return default
     return default
 
 
 OPENAI_API_KEY = _secret("openai_api_key", "OPENAI_API_KEY", "openai_key")
-openai_client: Optional[OpenAI] = None
+openai_client: Optional["OpenAI"] = None
 _openai_error: Optional[str] = None
 
-if OPENAI_API_KEY:
+if _openai_import_error:
+    _openai_error = f"OpenAI package unavailable: {_openai_import_error}"
+elif OPENAI_API_KEY:
     try:
         openai_client = OpenAI(api_key=OPENAI_API_KEY)
     except Exception as e:
@@ -1015,12 +1034,20 @@ def _init_sheets():
     global _sheet, _sheet_error
     if _sheet is not None or _sheet_error is not None:
         return
+    if _gspread_import_error:
+        _sheet_error = f"Google Sheets packages unavailable: {_gspread_import_error}"
+        return
     try:
+        service_account_info = _secret("gcp_service_account")
+        gsheet_id = _secret("gsheet_id")
+        if not service_account_info or not gsheet_id:
+            _sheet_error = "Google Sheets secrets are not configured."
+            return
         creds = Credentials.from_service_account_info(
-            _secret("gcp_service_account"),
+            service_account_info,
             scopes=["https://www.googleapis.com/auth/spreadsheets"],
         )
-        book = gspread.authorize(creds).open_by_key(_secret("gsheet_id"))
+        book = gspread.authorize(creds).open_by_key(gsheet_id)
         try:
             ws = book.worksheet("ChatReport")
         except Exception:
