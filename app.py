@@ -1343,19 +1343,50 @@ def _generate_acknowledgment(step: dict, answer) -> str:
 # SESSION STATE
 # ─────────────────────────────────────────────────────────────────────────────
 
+_FRESH_TOPIC_STATE_KEYS = {
+    "data": dict,
+    "chat": list,
+    "status": lambda: "in_progress",
+    "waiting_for_followup": lambda: False,
+    "pending_followup": lambda: None,
+}
+
+_CURRENT_SCHEMA_VERSION = 2  # bump whenever TOPICS list or state shape changes
+
+
+def _fresh_topic_state() -> dict:
+    return {k: factory() for k, factory in _FRESH_TOPIC_STATE_KEYS.items()}
+
+
 def _init_session() -> None:
-    """Initialise all required Streamlit session state keys."""
+    """
+    Initialise all required Streamlit session state keys.
+
+    Also repairs any stale topic states left over from a previous deploy
+    (e.g. missing keys, or topic keys that no longer exist in TOPICS).
+    """
+    # ── schema version guard: wipe state if the schema has been bumped ───────
+    if st.session_state.get("_schema_version") != _CURRENT_SCHEMA_VERSION:
+        st.session_state.clear()
+        st.session_state["_schema_version"] = _CURRENT_SCHEMA_VERSION
+
+    # ── topic_states: create fresh or repair existing ─────────────────────────
+    expected_keys = {key for _, key in TOPICS}
     if "topic_states" not in st.session_state:
-        st.session_state.topic_states = {
-            key: {
-                "data": {},
-                "chat": [],
-                "status": "in_progress",
-                "waiting_for_followup": False,
-                "pending_followup": None,
-            }
-            for _, key in TOPICS
-        }
+        st.session_state.topic_states = {key: _fresh_topic_state() for key in expected_keys}
+    else:
+        existing: dict = st.session_state.topic_states
+        # Add any new topics missing from old state
+        for key in expected_keys:
+            if key not in existing:
+                existing[key] = _fresh_topic_state()
+            else:
+                # Repair missing sub-keys within an existing topic state
+                topic_state = existing[key]
+                for sub_key, factory in _FRESH_TOPIC_STATE_KEYS.items():
+                    if sub_key not in topic_state:
+                        topic_state[sub_key] = factory()
+
     if "freeform_chat" not in st.session_state:
         st.session_state.freeform_chat = []
     if "current_topic_index" not in st.session_state:
@@ -1466,7 +1497,13 @@ def _advance_and_greet() -> None:
         st.rerun()
         return
 
+    # Ensure state exists and is well-formed
+    if topic_key not in st.session_state.topic_states:
+        st.session_state.topic_states[topic_key] = _fresh_topic_state()
     state = st.session_state.topic_states[topic_key]
+    state.setdefault("data", {})
+    state.setdefault("chat", [])
+
     intro = TOPIC_INTROS.get(topic_key, "")
     first_step = get_next_step(topic_key, state["data"])
 
@@ -1512,8 +1549,11 @@ def main() -> None:
         if submitted and name.strip():
             st.session_state.patient_name = name.strip()
             topic_key = _current_topic_key()
-            if topic_key:
+            if topic_key and topic_key in st.session_state.topic_states:
                 state = st.session_state.topic_states[topic_key]
+                # Ensure "data" key exists (defensive against stale state)
+                state.setdefault("data", {})
+                state.setdefault("chat", [])
                 intro = TOPIC_INTROS.get(topic_key, "")
                 first_step = get_next_step(topic_key, state["data"])
                 if first_step:
@@ -1534,7 +1574,7 @@ def main() -> None:
     if st.session_state.report_ready:
         st.success("✅ Check-in complete! Your clinical summary is ready.")
         all_data = {
-            key: st.session_state.topic_states[key]["data"]
+            key: st.session_state.topic_states.get(key, {}).get("data", {})
             for _, key in TOPICS
         }
         with st.spinner("Generating report…"):
@@ -1553,6 +1593,10 @@ def main() -> None:
         st.session_state.report_ready = True
         st.rerun()
         return
+
+    # Guard: topic_key must be in topic_states (repair if not)
+    if topic_key not in st.session_state.topic_states:
+        st.session_state.topic_states[topic_key] = _fresh_topic_state()
 
     # Sidebar: topic progress tracker
     with st.sidebar:
