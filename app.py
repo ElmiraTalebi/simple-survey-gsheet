@@ -215,55 +215,6 @@ def _build_retry_prompt(step: dict, user_input: str) -> str:
 
 
 
-def interpret_user_input_with_options(step, user_input):
-    if not openai_client:
-        return user_input
-
-    options = step.get("opts", [])
-    if not options:
-        return user_input
-
-    generic_options = {"other", "somewhere else"}
-    allowed_options = [opt for opt in options if _norm_text(opt) not in generic_options]
-
-    prompt = f"""
-    You are a clinical assistant.
-    
-    QUESTION:
-    "{step['text']}"
-    
-    OPTIONS:
-    {allowed_options}
-    
-    PATIENT RESPONSE:
-    "{user_input}"
-    
-    TASK:
-    - If the response clearly matches ONE non-generic option → return that option EXACTLY
-    - Do NOT map a typed answer to "Other" or "Somewhere else" unless the patient literally says "other" or "somewhere else"
-    - Otherwise return the original response
-    
-    ONLY return one line.
-    """
-
-    try:
-        r = openai_client.chat.completions.create(
-            model="gpt-4.1-mini",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=40,
-            temperature=0
-        )
-        mapped = r.choices[0].message.content.strip()
-
-        if mapped in options and _norm_text(mapped) not in generic_options:
-            return mapped
-
-        return user_input
-
-    except:
-        return user_input
-
-
 def parse_multi_select_typed_input(step: dict, user_input: str):
     if not user_input.strip():
         return []
@@ -3459,8 +3410,18 @@ def _freeform_llm_response(messages: list) -> str:
     }
     prior_context = st.session_state.get("last_checkin", {})
 
+    hnc_context = (
+        "You are a compassionate, clinically trained nurse at a head and neck cancer "
+        "(HNC) center conducting a structured symptom check-in with a patient currently "
+        "receiving chemoradiation or surgery for head and neck cancer. "
+        "This patient population frequently experiences: severe mucositis, dysphagia, "
+        "pain, significant weight loss, fatigue, depression, and impaired communication. "
+        "Many patients have low health literacy or face barriers to care. "
+        "Your tone is always warm, clear, and non-alarming. Never use medical jargon "
+        "without explaining it simply. Never minimize a patient's reported symptom."
+    )
     system = (
-        f"{_SYSTEM_CONTEXT}\n\n"
+        f"{hnc_context}\n\n"
         "You are now in an open conversation with the patient. They may raise anything not "
         "covered by the structured check-in — a new symptom, a question about their treatment, "
         "a concern about a medication, or just something they want their provider to know.\n\n"
@@ -4173,10 +4134,11 @@ def render_topic_detail(topic_label: str, topic_key: str):
 def render_sidebar():
     with st.sidebar:
         # ── Header ───────────────────────────────────────────────
+        _urg_html = render_urgency_indicator_html()
         st.markdown(
-            '<div style="font-size:18px;font-weight:800;color:#10233d;margin:0 0 2px 0;letter-spacing:-0.03em;">🩺 ChatReport</div>'
+            f'<div style="font-size:18px;font-weight:800;color:#10233d;margin:0 0 2px 0;letter-spacing:-0.03em;">🩺 ChatReport</div>'
             f'<div style="font-size:11px;color:#6b7b92;margin-bottom:8px;text-transform:uppercase;letter-spacing:0.08em;">'
-            f'Clinical symptom assistant &nbsp;{render_urgency_indicator_html()}'
+            f'Clinical symptom assistant &nbsp;{_urg_html}'
             f'</div>',
             unsafe_allow_html=True,
         )
