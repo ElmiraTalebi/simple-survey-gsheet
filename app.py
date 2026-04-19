@@ -369,6 +369,7 @@ def init_session_state() -> None:
     st.session_state.previous_visit_topics = {}
     st.session_state.patient_name = ""
     st.session_state.sheet_status = ""
+    st.session_state.pending_user_input = ""
 
 
 def add_message(role: str, content: str, topic: str | None = None) -> None:
@@ -1267,22 +1268,13 @@ def ensure_section_started(section_key: str) -> None:
 def move_to_next_topic() -> None:
     current_topic = st.session_state.current_topic
     st.session_state.topic_states[current_topic]["completed"] = True
-    current_section = section_for_topic(current_topic)
-    next_topic = get_next_unfinished_topic(current_section)
-    if next_topic is not None:
-        set_active_topic(next_topic)
-        st.session_state.topic_states[next_topic]["main_asked"] = True
-        ask_assistant_question(main_question_for(next_topic))
-        return
-
-    add_message(
-        "assistant",
-        f"{section_label(current_section)} is complete. You can choose another topic from the sidebar.",
-        topic=current_topic,
-    )
-
-    if not has_remaining_topics():
+    next_topic = get_next_unfinished_topic()
+    if next_topic is None:
         finish_chat()
+        return
+    set_active_topic(next_topic)
+    st.session_state.topic_states[next_topic]["main_asked"] = True
+    ask_assistant_question(main_question_for(next_topic))
 
 
 def should_force_followup(topic: str, merged_data: dict[str, Any], missing_fields: list[str]) -> bool:
@@ -1316,10 +1308,13 @@ def start_chat() -> None:
     if st.session_state.messages:
         return
     welcome = (
-        "Hello, I’m ChatReport. Please choose one of the symptom topics from the sidebar and answer the questions for that section."
+        "Hello, I’m ChatReport. I’ll ask a sequence of symptom questions to build a concise clinical report for your doctor."
     )
     add_message("assistant", welcome)
-    ensure_section_started(st.session_state.selected_section)
+    first_topic = TOPIC_ORDER[0]
+    set_active_topic(first_topic)
+    st.session_state.topic_states[first_topic]["main_asked"] = True
+    ask_assistant_question(main_question_for(first_topic))
 
 
 def process_turn(patient_message: str) -> None:
@@ -1481,20 +1476,16 @@ def render_sidebar() -> None:
 def render_chat() -> None:
     st.markdown("# ChatReport")
     st.markdown("Multi-agent clinical chatbot for head and neck cancer symptom reporting")
+    st.markdown(f"**Current topic:** {topic_label(st.session_state.current_topic)}")
+    st.markdown("---")
 
     if st.session_state.get("previous_visit_history", "").strip():
         st.markdown("### Previous Visit History")
         st.markdown(st.session_state.previous_visit_history)
         st.markdown("---")
-
-    render_selected_section()
-
-    selected_section = st.session_state.selected_section
     for message in st.session_state.messages:
-        if message.get("section") not in {None, selected_section}:
-            continue
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
+        speaker = "Assistant" if message["role"] == "assistant" else "Patient"
+        st.markdown(f"**{speaker}:** {message['content']}")
 
     if st.session_state.final_report:
         st.markdown("### Final Report")
@@ -1503,21 +1494,38 @@ def render_chat() -> None:
 
 def main() -> None:
     init_session_state()
-    render_sidebar()
+    st.markdown("### Visit Information")
+    st.session_state.patient_name = st.text_input(
+        "Patient Name",
+        value=st.session_state.get("patient_name", ""),
+    )
+    st.session_state.previous_visit_history = st.text_area(
+        "Previous Visit History",
+        value=st.session_state.get("previous_visit_history", ""),
+        height=140,
+    )
     refresh_previous_visit_topics()
     start_chat()
-    ensure_section_started(st.session_state.selected_section)
     render_chat()
 
     if st.session_state.finished:
         return
 
-    active_topic = get_active_topic_for_section(st.session_state.selected_section)
-    if active_topic is None:
-        return
-
-    if prompt := st.chat_input(f"Type your answer for {section_label(st.session_state.selected_section)}"):
+    st.markdown("### Your Response")
+    prompt = st.text_area(
+        f"Type your answer for {topic_label(st.session_state.current_topic)}",
+        value=st.session_state.get("pending_user_input", ""),
+        key="pending_user_input",
+        height=100,
+    )
+    if st.button("Send Response") and prompt.strip():
         process_turn(prompt)
+        st.session_state.pending_user_input = ""
+        st.rerun()
+
+    if st.button("Reset Chat"):
+        for key in list(st.session_state.keys()):
+            del st.session_state[key]
         st.rerun()
 
 
