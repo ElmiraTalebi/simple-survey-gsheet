@@ -2020,7 +2020,7 @@ def inject_css() -> None:
 
 def initialize_app_state() -> None:
     """Initialize Streamlit session state on first load."""
-    if "initialized" in st.session_state:
+    if st.session_state.get("initialized") and "session" in st.session_state and "messages" in st.session_state:
         return
     session = initialize_session(MOCK_PATIENT)
     st.session_state["session"] = session
@@ -2038,6 +2038,33 @@ def initialize_app_state() -> None:
     first_question = get_current_question(session)
     if first_question:
         st.session_state["messages"].append({"role": "assistant", "content": first_question["text"], "type": "question"})
+
+
+def ensure_session_state() -> bool:
+    """
+    Ensure the minimal Streamlit state exists before rendering.
+
+    Returns:
+        True when session state is ready, otherwise False.
+    """
+    try:
+        initialize_app_state()
+        required_keys = {"session", "messages", "initialized"}
+        missing = [key for key in required_keys if key not in st.session_state]
+        if missing:
+            session = initialize_session(MOCK_PATIENT)
+            st.session_state["session"] = session
+            st.session_state["messages"] = st.session_state.get("messages", [])
+            st.session_state["initialized"] = True
+            st.session_state.setdefault("doctor_report", None)
+            st.session_state.setdefault("text_input_value", "")
+            st.session_state.setdefault("last_submitted_answer", None)
+            st.session_state.setdefault("last_submission_follow_up", False)
+            st.session_state.setdefault("last_error", None)
+        return True
+    except Exception as exc:
+        st.error(f"Unable to initialize the app session: {exc}")
+        return False
 
 
 def add_output_messages(patient_facing_output: dict) -> None:
@@ -2062,6 +2089,8 @@ def add_output_messages(patient_facing_output: dict) -> None:
 def submit_answer(answer: str) -> None:
     """Submit one patient answer and update the UI state."""
     if not answer.strip():
+        return
+    if not ensure_session_state():
         return
     session = st.session_state["session"]
     is_follow_up = session["awaiting_follow_up"]
@@ -2090,6 +2119,8 @@ def submit_answer(answer: str) -> None:
 
 def run_mock_session() -> None:
     """Run the full mock session automatically for testing."""
+    if not ensure_session_state():
+        return
     session = initialize_session(MOCK_PATIENT)
     for _ in range(20):
         question = get_current_question(session)
@@ -2111,6 +2142,8 @@ def run_mock_session() -> None:
 
 def render_sidebar() -> None:
     """Render sidebar metadata and developer controls."""
+    if not ensure_session_state():
+        return
     session = st.session_state["session"]
     context = session.get("patient_context") or {}
     patient_name = (
@@ -2131,6 +2164,8 @@ def render_sidebar() -> None:
 
 def render_status_indicator() -> None:
     """Render the top-right urgency tier indicator."""
+    if not ensure_session_state():
+        return
     urgency_tier = st.session_state["session"]["urgency_state"]["current_tier"]
     color = STATUS_COLORS[urgency_tier]
     st.markdown(
@@ -2146,7 +2181,9 @@ def render_status_indicator() -> None:
 
 def render_messages() -> None:
     """Render the chat thread."""
-    for message in st.session_state["messages"]:
+    if not ensure_session_state():
+        return
+    for message in st.session_state.get("messages", []):
         with st.chat_message(message["role"]):
             message_type = message.get("type", "standard")
             if message_type == "tier2":
@@ -2164,6 +2201,8 @@ def render_messages() -> None:
 
 def render_input_area() -> None:
     """Render button options and text input for the current question."""
+    if not ensure_session_state():
+        return
     session = st.session_state["session"]
     if session["session_completion_status"] != "in_progress":
         return
@@ -2195,6 +2234,8 @@ def render_input_area() -> None:
 
 def render_clinical_report() -> None:
     """Render the doctor-facing report after session completion."""
+    if not ensure_session_state():
+        return
     report = st.session_state.get("doctor_report")
     if not report:
         return
@@ -2239,7 +2280,8 @@ def render_clinical_report() -> None:
 def main() -> None:
     """Run the Streamlit app."""
     inject_css()
-    initialize_app_state()
+    if not ensure_session_state():
+        return
     render_sidebar()
     render_status_indicator()
     render_messages()
