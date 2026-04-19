@@ -1441,7 +1441,6 @@ def render_sidebar() -> None:
         st.markdown("---")
         st.markdown("### Topics")
         completed_sections = sum(1 for section_key, _ in SECTION_ORDER if section_status(section_key) == "Complete")
-        st.progress(completed_sections / len(SECTION_ORDER))
         st.caption(f"{completed_sections}/{len(SECTION_ORDER)} sections complete")
 
         for section_key, label in SECTION_ORDER:
