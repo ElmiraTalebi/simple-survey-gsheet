@@ -265,8 +265,7 @@ def section_for_topic(topic: str) -> str:
 
 def get_openai_client() -> OpenAI | None:
     api_key = (
-        st.session_state.get("api_key_input")
-        or st.secrets.get("OPENAI_API_KEY", None)
+        st.secrets.get("OPENAI_API_KEY", None)
         or os.getenv("OPENAI_API_KEY")
     )
     if not api_key:
@@ -345,7 +344,6 @@ def init_session_state() -> None:
     st.session_state.current_question = ""
     st.session_state.final_report = ""
     st.session_state.finished = False
-    st.session_state.api_key_input = ""
     st.session_state.model_name = DEFAULT_MODEL
     st.session_state.previous_visit_history = ""
     st.session_state.previous_visit_topics = {}
@@ -1128,24 +1126,12 @@ def render_sidebar() -> None:
             "Patient Name",
             value=st.session_state.get("patient_name", ""),
         )
-        st.session_state.api_key_input = st.text_input(
-            "OpenAI API Key",
-            value=st.session_state.get("api_key_input", ""),
-            type="password",
-            help="Stored only in this Streamlit session. You can also set OPENAI_API_KEY.",
-        )
-        st.session_state.model_name = st.text_input(
-            "Model",
-            value=st.session_state.get("model_name", DEFAULT_MODEL),
-            help="Responses API model name.",
-        )
         st.session_state.previous_visit_history = st.text_area(
             "Previous Visit History",
             value=st.session_state.get("previous_visit_history", ""),
             height=180,
             help="Optional. Paste a summary from the previous visit so the chatbot can show topic-by-topic context.",
         )
-        st.caption("For safety, the app does not store an API key in code.")
 
         st.markdown("---")
         st.subheader("Topics")
