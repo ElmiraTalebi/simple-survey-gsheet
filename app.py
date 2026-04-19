@@ -761,17 +761,28 @@ def interpret_user_input_with_options(step: dict, text: str) -> str:
         # Presence of a symptom word without preceding negation → Yes
         SYMP_ROOT = (
             r"\b(hurt|pain|sore|ache|burn|throb|bleed|nausea|vomit|tired|weak"
-            r"|difficult|trouble|problem|dry)\w*\b"
+            r"|difficult|trouble|problem|dry|swollen|swelling|tender|stiff"
+            r"|discomfort|inflamed|blister|wound|bruise)\w*\b"
         )
         if re.search(SYMP_ROOT, lower):
             return "Yes"
 
+        # Intensity / quantity phrases that imply presence → Yes
+        # e.g. "a lot", "quite a bit", "very much", "really bad", "kind of"
+        INTENSITY_YES = (
+            r"\b(a lot|quite a bit|very much|really|pretty bad|kind of|sort of"
+            r"|a little|somewhat|slightly|a bit|quite|extremely|severely"
+            r"|badly|constantly|always|all the time|every day|most days)\b"
+        )
+        if re.search(INTENSITY_YES, lower):
+            return "Yes"
+
         # Explicit affirmation
-        if re.search(r"\b(yes|yeah|yep|yup|sure|definitely|absolutely)\b", lower):
+        if re.search(r"\b(yes|yeah|yep|yup|sure|definitely|absolutely|of course|indeed)\b", lower):
             return "Yes"
 
         # Explicit negation (standalone or leading)
-        if re.search(r"\b(no|nope|nah|none)\b", lower):
+        if re.search(r"\b(no|nope|nah|none|not really|not at all|hardly|barely)\b", lower):
             return "No"
 
     # ── 4a. Substring match ───────────────────────────────────────────────────
@@ -798,20 +809,39 @@ def interpret_user_input_with_options(step: dict, text: str) -> str:
             max_tokens=50,
             messages=[
                 {
+                    "role": "system",
+                    "content": (
+                        "You are a clinical intake assistant for head and neck cancer patients. "
+                        "Patients often express themselves in casual, indirect, or colloquial language. "
+                        "Your job is to map what they MEAN to the closest structured answer option.\n\n"
+                        "CRITICAL RULES for Yes/No questions:\n"
+                        "- ANY intensity word ('a lot', 'quite a bit', 'very', 'really', 'a little', "
+                        "'some', 'kind of', 'sort of', 'a bit', 'somewhat') means the symptom IS present → 'Yes'\n"
+                        "- Describing a symptom at all (even mildly) → 'Yes'\n"
+                        "- Negation ('no', 'not', 'none', 'don't have', 'not really') → 'No'\n"
+                        "- For multi-option questions, pick the semantically closest match.\n"
+                        "Return ONLY the exact option text. If truly unmappable, return the patient's original words."
+                    ),
+                },
+                {
                     "role": "user",
                     "content": (
                         "You are helping match a patient's answer to one of the listed options. "
                         f"Options: [{opts_str}]\n"
                         f'Question: "{question}"\n'
                         f'Patient answer: "{stripped}"\n'
-                        "Return only the matching option name exactly as listed, or the patient's "
-                        "original answer if nothing matches."
+                        "Return only the single best matching option (exact text), "
+                        "or the patient's original answer if no option fits."
                     ),
-                }
+                },
             ],
         )
         result = resp.choices[0].message.content.strip()
-        return result if result in opts else stripped
+        # Case-insensitive match so "yes" matches "Yes", "no" matches "No", etc.
+        for opt in opts:
+            if opt.lower() == result.lower():
+                return opt
+        return stripped
     except Exception:
         return stripped
 
@@ -1016,6 +1046,7 @@ def _request_resolution_for_option_step(
     state = st.session_state.topic_states[topic_key]
     question = step.get("question", "")
 
+    opts_str = ", ".join(step.get("opts", []))
     try:
         resp = openai_client.chat.completions.create(
             model=MODEL,
@@ -1023,23 +1054,43 @@ def _request_resolution_for_option_step(
             max_tokens=200,
             messages=[
                 {
+                    "role": "system",
+                    "content": (
+                        "You are a clinical intake assistant for head and neck cancer patients. "
+                        "A patient gave a response that didn't exactly match one of the options. "
+                        "Your job is to decide: can you confidently map this to an option, or is "
+                        "the response genuinely too ambiguous to map?\n\n"
+                        "STRONG PREFERENCE for mode='continue': resolve to an option whenever "
+                        "you can reasonably infer the patient's meaning. Only use mode='follow_up' "
+                        "when the response gives you absolutely no signal.\n\n"
+                        "Examples that MUST use continue:\n"
+                        "- 'a lot', 'very much', 'quite a bit', 'a little', 'some' → Yes (symptom present)\n"
+                        "- 'not really', 'not much', 'barely' → No (symptom absent)\n"
+                        "- 'my jaw' for a location question → Jaw\n"
+                        "- 'advil', 'tylenol', 'ibuprofen' for medication → closest known option or Other\n\n"
+                        "For mode='continue': set assistant_message to the EXACT matching option text.\n"
+                        "For mode='follow_up': write a warm, specific one-sentence clarifying question."
+                    ),
+                },
+                {
                     "role": "user",
                     "content": (
-                        'Return JSON only in this exact shape: '
+                        "Return JSON only in this exact shape: "
                         '{"mode": "continue" or "follow_up", '
-                        '"assistant_message": "string", '
-                        '"follow_up_question": "string"}\n\n'
+                        '"assistant_message": "exact option text or empty string", '
+                        '"follow_up_question": "clarifying question or empty string"}\n\n'
+                        f'Available options: [{opts_str}]\n'
                         f'QUESTION ASKED: "{question}"\n'
                         f'PATIENT RESPONSE: "{text}"'
                     ),
-                }
+                },
             ],
         )
         result = json.loads(resp.choices[0].message.content.strip())
     except Exception:
         result = {
             "mode": "follow_up",
-            "follow_up_question": "Could you clarify that for me?",
+            "follow_up_question": "Could you tell me a bit more about that?",
             "assistant_message": "",
         }
 
@@ -1074,8 +1125,18 @@ def _request_retry_for_step(
 ) -> None:
     """Ask the patient to try again (unrecoverable parse failure for multi-select)."""
     state = st.session_state.topic_states[topic_key]
-    retry_q = step.get("question", "Could you try answering again?")
-    msg = f"I'm sorry, I didn't quite understand that. {retry_q}"
+    opts = step.get("opts", [])
+    if opts:
+        opts_preview = ", ".join(opts[:4])
+        if len(opts) > 4:
+            opts_preview += ", …"
+        msg = (
+            f"I wasn't quite able to match that to one of the options. "
+            f"Could you choose from: {opts_preview}? "
+            f"You can also type multiple if needed."
+        )
+    else:
+        msg = "I didn't quite catch that — could you try rephrasing?"
     state["chat"].append({"role": "assistant", "content": msg})
     st.rerun()
 
@@ -1098,9 +1159,17 @@ def agent_extract_symptoms(message: str) -> dict:
                 {
                     "role": "system",
                     "content": (
-                        "You are a clinical NLP system. Extract symptoms from the patient message. "
-                        "Return JSON only with keys: symptoms (list of strings), context (string), "
-                        "severity_hint (string or null)."
+                        "You are a clinical NLP system specializing in head and neck cancer care. "
+                        "Extract ALL symptoms, complaints, and relevant clinical observations from "
+                        "the patient's message.\n"
+                        "Return JSON only with keys:\n"
+                        "- symptoms: list of strings (specific symptom names, e.g. 'throat pain', "
+                        "'difficulty swallowing', 'dry mouth')\n"
+                        "- context: string (brief clinical context or modifiers, e.g. 'worse at night', "
+                        "'started 3 days ago', 'affecting eating')\n"
+                        "- severity_hint: string or null ('mild', 'moderate', 'severe', or null)\n"
+                        "Be thorough — capture implied symptoms too (e.g. 'a lot' in response to "
+                        "a pain question means pain is present and likely moderate-to-severe)."
                     ),
                 },
                 {"role": "user", "content": f"Patient message: {message}"},
@@ -1130,10 +1199,16 @@ def agent_clinical_importance(symptoms: dict) -> dict:
                 {
                     "role": "system",
                     "content": (
-                        "You are a clinical nurse specialist reviewing a head and neck cancer "
-                        "patient's symptoms. Return JSON only with keys: "
-                        "importance_level (low/medium/high), follow_up_needed (bool), "
-                        "reasoning (string)."
+                        "You are an oncology clinical nurse specialist reviewing symptom reports "
+                        "from head and neck cancer patients (commonly post-radiation or post-surgical).\n"
+                        "Assess the clinical urgency of the reported symptoms.\n"
+                        "Return JSON only with keys:\n"
+                        "- importance_level: 'low', 'medium', or 'high'\n"
+                        "  (high = pain ≥7/10, bleeding, breathing difficulty, inability to swallow, "
+                        "significant weight loss, signs of infection; medium = moderate pain, oral sores "
+                        "affecting eating, nausea; low = mild/managed symptoms)\n"
+                        "- follow_up_needed: true/false\n"
+                        "- reasoning: one concise sentence explaining the assessment"
                     ),
                 },
                 {"role": "user", "content": f"Symptoms: {json.dumps(symptoms)}"},
@@ -1304,21 +1379,29 @@ def agent_generate_report(all_data: dict, patient_name: str) -> str:
         resp = openai_client.chat.completions.create(
             model=MODEL,
             temperature=TEMP,
-            max_tokens=1500,
+            max_tokens=2000,
             messages=[
                 {
                     "role": "system",
                     "content": (
-                        "You are a clinical documentation specialist. Generate a structured, "
-                        "professional symptom-check-in report for a head and neck cancer patient. "
-                        "Use clear markdown sections. Be concise and clinically precise."
+                        "You are a clinical documentation specialist for a head and neck cancer "
+                        "care team. Generate a concise, professional symptom check-in report.\n\n"
+                        "Format guidelines:\n"
+                        "- Open with a one-line patient summary and check-in date.\n"
+                        "- Group findings by symptom area using ## headers.\n"
+                        "- Only include sections where data was collected (skip empty topics).\n"
+                        "- Use plain clinical language — no jargon, no speculation.\n"
+                        "- Flag high-priority items (pain ≥7, swallowing difficulty, weight loss, "
+                        "breathing issues, blood) with a ⚠️ marker.\n"
+                        "- End with a 'Key Actions' section listing any items that need follow-up.\n"
+                        "- Be concise: clinicians are busy. Bullet points preferred over prose."
                     ),
                 },
                 {
                     "role": "user",
                     "content": (
-                        f"Patient: {patient_name}\n\n"
-                        f"Collected data:\n{json.dumps(all_data, indent=2)}"
+                        f"Patient name: {patient_name}\n\n"
+                        f"Symptom check-in data:\n{json.dumps(all_data, indent=2)}"
                     ),
                 },
             ],
@@ -1342,33 +1425,52 @@ def agent_generate_report(all_data: dict, patient_name: str) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _generate_acknowledgment(step: dict, answer) -> str:
-    """Generate a brief empathetic one-sentence acknowledgment of the patient's answer."""
+    """
+    Generate a brief, empathetic acknowledgment of the patient's answer.
+    Varies in tone based on what was reported — validates concern for
+    difficult symptoms, stays neutral for routine answers.
+    """
+    answer_str = ", ".join(answer) if isinstance(answer, list) else str(answer)
+    question = step.get("question", "")
     try:
         resp = openai_client.chat.completions.create(
             model=MODEL,
-            temperature=0.4,
-            max_tokens=60,
+            temperature=0.5,
+            max_tokens=80,
             messages=[
                 {
                     "role": "system",
                     "content": (
-                        "You are a clinical chatbot. Write ONE brief, warm sentence acknowledging "
-                        "the patient's answer. Do NOT ask another question."
+                        "You are a compassionate clinical chatbot supporting head and neck cancer "
+                        "patients during a symptom check-in. Write ONE short, warm sentence "
+                        "(10–18 words) acknowledging the patient's answer.\n\n"
+                        "Rules:\n"
+                        "- Pain / difficult symptoms → empathize specifically: "
+                        "'I'm sorry you're dealing with that — I've made a note for your team.'\n"
+                        "- No symptoms / doing well → affirm warmly: "
+                        "'That's good to hear.' or 'Glad things are manageable on that front.'\n"
+                        "- Specific detail (location, med name, severity score) → confirm: "
+                        "'Understood — [echo key detail] has been noted.'\n"
+                        "- NEVER ask a question. NEVER use the phrase 'I've noted that for your "
+                        "care team' — vary your language. NEVER be robotic or generic."
                     ),
                 },
                 {
                     "role": "user",
                     "content": (
-                        f"Question: {step.get('question', '')}\n"
-                        f"Patient answered: {answer}"
+                        f"Question asked: {question}\n"
+                        f"Patient answered: {answer_str}"
                     ),
                 },
             ],
         )
         ack = resp.choices[0].message.content.strip()
-        return ack if ack else "I've noted that for your care team."
+        return ack if ack else "Got it, thank you."
     except Exception:
-        return "I've noted that for your care team."
+        # Vary fallback based on answer type to avoid robotic repetition
+        if str(answer).lower() in ("yes", "no"):
+            return "Got it, thank you."
+        return "I've made a note of that."
 
 
 # ─────────────────────────────────────────────────────────────────────────────
