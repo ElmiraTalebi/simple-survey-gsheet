@@ -168,11 +168,31 @@ TOPIC_ORDER = [
 
 
 DEFAULT_MODEL = "gpt-4.1-mini"
+TOPIC_LABELS = {
+    "pain": "Pain",
+    "oral_sores": "Oral Sores",
+    "nutrition": "Nutrition",
+    "weight": "Weight",
+    "dry_mouth": "Dry Mouth",
+    "swallowing": "Swallowing",
+    "breathing": "Breathing",
+    "mucus": "Mucus / Secretions",
+    "gi": "GI Symptoms",
+    "medications": "Medications",
+    "fatigue": "Fatigue",
+    "sleep": "Sleep",
+    "mood": "Mood",
+    "general": "General Well-Being",
+}
 
 
 def extract_json(text: str, fallback: Any) -> Any:
     if not text:
         return fallback
+
+
+def topic_label(topic: str) -> str:
+    return TOPIC_LABELS.get(topic, topic.replace("_", " ").title())
     cleaned = text.strip()
     try:
         return json.loads(cleaned)
@@ -229,6 +249,18 @@ def normalize_presence(value: Any) -> str:
     return "unknown"
 
 
+def question_type_for_topic(topic: str) -> str:
+    return get_topic_config(topic)["main"][0].get("type", "free_text")
+
+
+def effective_presence(topic_data: dict[str, Any], extracted: dict[str, Any]) -> str:
+    latest = normalize_presence(extracted.get("presence"))
+    if latest != "unknown":
+        return latest
+    stored = normalize_presence(topic_data.get("presence"))
+    return stored
+
+
 def init_session_state() -> None:
     if "initialized" in st.session_state:
         return
@@ -254,6 +286,8 @@ def init_session_state() -> None:
     st.session_state.finished = False
     st.session_state.api_key_input = ""
     st.session_state.model_name = DEFAULT_MODEL
+    st.session_state.previous_visit_history = ""
+    st.session_state.previous_visit_topics = {}
 
 
 def add_message(role: str, content: str) -> None:
@@ -343,6 +377,8 @@ Important:
         "question": question,
         "topic_config": config,
         "existing_topic_data": topic_data,
+        "previous_visit_topic_summary": st.session_state.previous_visit_topics.get(topic, ""),
+        "previous_visit_history": st.session_state.get("previous_visit_history", ""),
         "patient_message": patient_message,
     }
     result = call_json_agent(system_prompt, payload, fallback)
@@ -394,6 +430,7 @@ Important:
         "extracted": extracted,
         "topic_data": topic_data,
         "required_fields": required_fields_for_topic(topic),
+        "previous_visit_topic_summary": st.session_state.previous_visit_topics.get(topic, ""),
     }
     result = call_json_agent(system_prompt, payload, fallback)
     if not isinstance(result.get("missing_fields"), list):
@@ -430,6 +467,7 @@ Rules:
         "missing_fields": missing_fields,
         "candidate_followups": candidate_followups,
         "topic_data": topic_data,
+        "previous_visit_topic_summary": st.session_state.previous_visit_topics.get(topic, ""),
     }
     result = call_json_agent(system_prompt, payload, fallback)
     question = result.get("question", "")
@@ -509,6 +547,7 @@ Decision rules:
         "experience": experience,
         "topic_state": topic_state,
         "topic_data": topic_data,
+        "previous_visit_topic_summary": st.session_state.previous_visit_topics.get(topic, ""),
         "remaining_followups": [
             q for q in config.get("followups", []) if q not in topic_state.get("asked_followups", [])
         ],
@@ -521,7 +560,11 @@ Decision rules:
 
 
 def report_generator_agent(collected_data: dict[str, Any], history: list[dict[str, str]]) -> str:
-    fallback_report = build_fallback_report(collected_data)
+    fallback_report = build_fallback_report(
+        collected_data,
+        st.session_state.get("previous_visit_history", ""),
+        st.session_state.get("previous_visit_topics", {}),
+    )
     client = get_openai_client()
     if client is None:
         return fallback_report
@@ -553,6 +596,8 @@ Do not:
     payload = {
         "collected_data": collected_data,
         "conversation_history": history,
+        "previous_visit_history": st.session_state.get("previous_visit_history", ""),
+        "previous_visit_topics": st.session_state.get("previous_visit_topics", {}),
     }
     try:
         response = client.responses.create(
@@ -571,13 +616,29 @@ Do not:
         return fallback_report
 
 
-def build_fallback_report(collected_data: dict[str, Any]) -> str:
+def build_fallback_report(
+    collected_data: dict[str, Any],
+    previous_visit_history: str = "",
+    previous_visit_topics: dict[str, str] | None = None,
+) -> str:
+    previous_visit_topics = previous_visit_topics or {}
     lines = ["## Structured Clinical Report", ""]
+    if previous_visit_history.strip():
+        lines.extend(
+            [
+                "### Previous Visit History",
+                previous_visit_history.strip(),
+                "",
+            ]
+        )
     for topic in TOPIC_ORDER:
         topic_data = collected_data.get(topic, {})
-        if not topic_data:
+        previous_summary = previous_visit_topics.get(topic, "").strip()
+        if not topic_data and not previous_summary:
             continue
-        lines.append(f"### {topic.replace('_', ' ').title()}")
+        lines.append(f"### {topic_label(topic)}")
+        if previous_summary:
+            lines.append(f"- **Previous Visit:** {previous_summary}")
         for key, value in topic_data.items():
             if value in (None, "", [], {}):
                 continue
@@ -602,6 +663,94 @@ def merge_topic_data(topic: str, extracted: dict[str, Any]) -> dict[str, Any]:
     return topic_data
 
 
+def previous_visit_agent(previous_visit_history: str) -> dict[str, str]:
+    history = previous_visit_history.strip()
+    if not history:
+        return {}
+
+    fallback = {topic: "" for topic in TOPIC_ORDER}
+    client = get_openai_client()
+    if client is None:
+        return fallback
+
+    system_prompt = f"""
+You are a clinical summarization helper.
+Summarize the previous visit history into short topic-specific snippets for this head and neck symptom interview.
+
+Return JSON only with exactly these keys:
+{json.dumps({topic: "" for topic in TOPIC_ORDER}, ensure_ascii=True)}
+
+Rules:
+- Each value should be a short phrase or sentence fragment.
+- Leave a value as an empty string when the previous visit history does not mention that topic.
+- Do not invent data.
+- Use concise clinician-friendly wording.
+"""
+    try:
+        response = client.responses.create(
+            model=st.session_state.get("model_name", DEFAULT_MODEL),
+            temperature=0,
+            input=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": history},
+            ],
+        )
+        parsed = extract_json(response.output_text, fallback)
+        if isinstance(parsed, dict):
+            return {topic: str(parsed.get(topic, "") or "") for topic in TOPIC_ORDER}
+    except Exception as exc:
+        print(f"[previous-visit-error] {exc}")
+    return fallback
+
+
+def refresh_previous_visit_topics() -> None:
+    history = st.session_state.get("previous_visit_history", "").strip()
+    cache_key = "_previous_visit_cache"
+    if not history:
+        st.session_state.previous_visit_topics = {}
+        st.session_state[cache_key] = ""
+        return
+    if st.session_state.get(cache_key) == history:
+        return
+    st.session_state.previous_visit_topics = previous_visit_agent(history)
+    st.session_state[cache_key] = history
+
+
+def topic_status_text(topic: str) -> str:
+    state = st.session_state.topic_states[topic]
+    if state["completed"]:
+        return "Complete"
+    if state["main_asked"]:
+        return "In progress"
+    return "Not started"
+
+
+def render_topic_sections() -> None:
+    st.markdown("### Topic Sections")
+    for topic in TOPIC_ORDER:
+        state = st.session_state.topic_states[topic]
+        current_data = st.session_state.collected_data.get(topic, {})
+        current_summary = current_data.get("summary", state.get("summary", ""))
+        previous_summary = st.session_state.previous_visit_topics.get(topic, "").strip()
+        priority = get_topic_config(topic).get("priority", "routine").title()
+        with st.expander(f"{topic_label(topic)} • {topic_status_text(topic)}", expanded=topic == st.session_state.current_topic):
+            st.caption(f"Priority: {priority}")
+            if previous_summary:
+                st.markdown(f"**Previous visit:** {previous_summary}")
+            else:
+                st.markdown("**Previous visit:** No prior summary recorded for this topic.")
+            if current_summary:
+                st.markdown(f"**Current visit:** {current_summary}")
+            else:
+                st.markdown("**Current visit:** No details captured yet.")
+            required = required_fields_for_topic(topic)
+            if required:
+                present = [field for field in required if current_data.get(field)]
+                missing = [field for field in required if not current_data.get(field)]
+                st.markdown(f"**Required details captured:** {', '.join(present) if present else 'None yet'}")
+                st.markdown(f"**Still missing:** {', '.join(missing) if missing else 'None'}")
+
+
 def ask_assistant_question(question: str) -> None:
     st.session_state.current_question = question
     add_message("assistant", question)
@@ -616,6 +765,22 @@ def move_to_next_topic() -> None:
         return
     ask_assistant_question(main_question_for(next_topic))
     st.session_state.topic_states[next_topic]["main_asked"] = True
+
+
+def should_force_followup(topic: str, merged_data: dict[str, Any], missing_fields: list[str]) -> bool:
+    if not missing_fields:
+        return False
+
+    presence = normalize_presence(merged_data.get("presence"))
+    question_type = question_type_for_topic(topic)
+
+    if presence == "yes":
+        return True
+
+    if question_type in {"scale", "numeric"}:
+        return True
+
+    return False
 
 
 def finish_chat() -> None:
@@ -660,14 +825,23 @@ def process_turn(patient_message: str) -> None:
     )
     merged_data = merge_topic_data(topic, extracted)
     topic_state["main_answered"] = True
-    topic_state["presence"] = extracted.get("presence", "unknown")
+    topic_state["presence"] = effective_presence(merged_data, extracted)
     topic_state["summary"] = extracted.get("summary", "")
+    if topic_state["presence"] != "unknown":
+        merged_data["presence"] = topic_state["presence"]
 
     inferred_missing = topic_missing_fields(topic, merged_data)
     importance = clinical_importance_agent(topic, extracted, deepcopy(merged_data))
     llm_missing = [item for item in importance.get("missing_fields", []) if isinstance(item, str)]
     if inferred_missing:
         importance["missing_fields"] = sorted(set(llm_missing + inferred_missing))
+    else:
+        importance["missing_fields"] = llm_missing
+
+    if should_force_followup(topic, merged_data, importance["missing_fields"]):
+        importance["follow_up_needed"] = True
+    elif topic_state["presence"] == "no":
+        importance["follow_up_needed"] = False
 
     experience = patient_experience_agent(st.session_state.messages)
     orchestration = orchestrator_agent(
@@ -720,6 +894,19 @@ def process_turn(patient_message: str) -> None:
             ask_assistant_question(question)
             return
 
+    if should_force_followup(topic, merged_data, importance.get("missing_fields", [])) and remaining_followups:
+        followup = follow_up_agent(
+            topic=topic,
+            missing_fields=importance.get("missing_fields", []),
+            asked_followups=topic_state["asked_followups"],
+            topic_data=deepcopy(merged_data),
+        )
+        question = followup.get("question", "").strip()
+        if question:
+            topic_state["asked_followups"].append(question)
+            ask_assistant_question(question)
+            return
+
     move_to_next_topic()
 
 
@@ -737,6 +924,12 @@ def render_sidebar() -> None:
             value=st.session_state.get("model_name", DEFAULT_MODEL),
             help="Responses API model name.",
         )
+        st.session_state.previous_visit_history = st.text_area(
+            "Previous Visit History",
+            value=st.session_state.get("previous_visit_history", ""),
+            height=180,
+            help="Optional. Paste a summary from the previous visit so the chatbot can show topic-by-topic context.",
+        )
         st.caption("For safety, the app does not store an API key in code.")
 
         if st.button("Reset Chat"):
@@ -748,6 +941,12 @@ def render_sidebar() -> None:
 def render_chat() -> None:
     st.title("ChatReport")
     st.caption("Multi-agent clinical chatbot for head and neck cancer symptom reporting")
+
+    if st.session_state.get("previous_visit_history", "").strip():
+        with st.expander("Previous Visit History", expanded=False):
+            st.markdown(st.session_state.previous_visit_history)
+
+    render_topic_sections()
 
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
@@ -761,6 +960,7 @@ def render_chat() -> None:
 def main() -> None:
     init_session_state()
     render_sidebar()
+    refresh_previous_visit_topics()
     start_chat()
     render_chat()
 
