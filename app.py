@@ -551,23 +551,18 @@ def _looks_vague_answer(answer: Any) -> bool:
 
     vague_phrases = {
         "idk", "i dont know", "dont know", "not sure", "unsure", "maybe",
-        "kinda", "kind of", "sort of", "bad", "worse", "same", "fine",
-        "ok", "okay", "ugh", "hard", "stuff", "things", "whatever",
+        "kinda", "kind of", "sort of", "ugh", "stuff", "things", "whatever",
     }
     if text in vague_phrases:
         return True
 
     words = text.split()
-    if len(words) == 1 and words[0] in {"bad", "worse", "same", "fine", "hard"}:
-        return True
     if len(words) >= 1:
         unique_chars = set(text.replace(" ", ""))
         if len(unique_chars) <= 2 and len(text.replace(" ", "")) >= 4:
             return True
         if re.fullmatch(r"[a-zA-Z]{1,2,}", text):
             return True
-    if len(words) <= 2 and not any(ch.isdigit() for ch in answer):
-        return text in vague_phrases
     return False
 
 
@@ -612,6 +607,10 @@ def _suggest_step_options(step: dict, user_input: str, limit: int = 3) -> list[s
 
 
 def _build_retry_prompt(step: dict, user_input: str) -> str:
+    schema = STEP_SCHEMAS.get(step.get("id"), {})
+    if schema.get("unmatched_followup") and not _looks_vague_answer(user_input):
+        return schema["unmatched_followup"]
+
     if _looks_vague_answer(user_input):
         return "I didn’t quite catch that. Could you please say it again?"
 
@@ -2501,6 +2500,21 @@ STEP_BY_ID = {
 
 
 STEP_SCHEMAS = {
+    "eating_ability": {
+        "unmatched_followup": "Could you tell me which sounds closest: eating normally, eating less than usual, mostly liquids, or tube feeds only?",
+    },
+    "activity_level": {
+        "unmatched_followup": "Would you say you're doing your usual activities, doing less than usual, or really struggling with daily tasks?",
+    },
+    "sleep_quality": {
+        "unmatched_followup": "Are you mostly sleeping through the night, or are you waking up a lot?",
+    },
+    "support_adequate": {
+        "unmatched_followup": "Would you say you have enough support between visits, or not really?",
+    },
+    "social_support_quality": {
+        "unmatched_followup": "Would you say you have good support, some support, or not much support right now?",
+    },
     "med_dose_freq": {
         "components": {
             "frequency": {
@@ -4363,6 +4377,55 @@ def _request_retry_for_step(topic_key: str, step: dict, raw_input: str, source: 
     st.rerun()
 
 
+def _clear_step_inputs(topic_key: str, step: dict):
+    sid = step["id"]
+    stype = step["type"]
+
+    keys_to_clear = []
+    if stype == "options":
+        keys_to_clear.extend([
+            f"text_{topic_key}_{sid}",
+            f"text_{topic_key}_{sid}_submitted",
+            f"dropdown_{topic_key}_{sid}",
+            f"dropdown_{topic_key}_{sid}_submitted",
+            f"voice_{topic_key}_{sid}_submitted",
+            f"_vt_{topic_key}_{sid}_opt",
+            f"_vh_{topic_key}_{sid}_opt",
+        ])
+    elif stype == "multi_select":
+        keys_to_clear.extend([
+            f"text_{topic_key}_{sid}",
+            f"text_{topic_key}_{sid}_submitted",
+            f"dropdown_{topic_key}_{sid}",
+            f"dropdown_{topic_key}_{sid}_submitted",
+            f"voice_{topic_key}_{sid}_submitted",
+            f"_vt_{topic_key}_{sid}_multi",
+            f"_vh_{topic_key}_{sid}_multi",
+        ])
+    elif stype == "number":
+        keys_to_clear.extend([
+            f"text_{topic_key}_{sid}",
+            f"text_{topic_key}_{sid}_submitted",
+            f"_vt_{topic_key}_{sid}_num",
+            f"_vh_{topic_key}_{sid}_num",
+        ])
+    elif stype == "free_text":
+        keys_to_clear.extend([
+            f"ft_{topic_key}_{sid}",
+            f"ft_{topic_key}_{sid}_submitted",
+            f"ft_{topic_key}_{sid}_voice_sync",
+            f"_vt_{topic_key}_{sid}",
+            f"_vh_{topic_key}_{sid}",
+        ])
+
+    for key in keys_to_clear:
+        if key in st.session_state:
+            if key.startswith("dropdown_"):
+                st.session_state[key] = "Select an option..."
+            else:
+                st.session_state[key] = ""
+
+
 def handle_pending_followup(topic_key: str, answer: str, source: str = "typed"):
     state = st.session_state.topic_states[topic_key]
     pending = state.get("pending_followup") or {}
@@ -4417,6 +4480,12 @@ def handle_pending_followup(topic_key: str, answer: str, source: str = "typed"):
 
     state["chat"].append({"role": "user", "content": answer})
     state["data"][answer_key] = answer
+    pending_key = f"pending_followup_{topic_key}_{pending.get('answer_key', 'pending')}"
+    if pending_key in st.session_state:
+        st.session_state[pending_key] = ""
+    submitted_pending_key = f"{pending_key}_submitted"
+    if submitted_pending_key in st.session_state:
+        st.session_state[submitted_pending_key] = ""
     state["waiting_for_followup"] = False
     state.pop("pending_followup", None)
 
@@ -4465,6 +4534,7 @@ def handle_answer(
         state["followup_counts"] = {}
     if "raw_answers" not in state:
         state["raw_answers"] = {}
+    _clear_step_inputs(topic_key, step)
 
     display = display_override if display_override is not None else (
         ", ".join(answer) if isinstance(answer, list) else str(answer)
@@ -4625,16 +4695,26 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
     state = st.session_state.topic_states[topic_key]
     prev = state["data"].get(step["id"])
     _, composer_col = st.columns([1.05, 0.95])
+
+    def render_option_buttons(button_topic_key: str, button_step: dict, multi: bool = False):
+        opts = button_step.get("opts", [])
+        if not opts:
+            return
+        cols_per_row = 2 if len(opts) > 1 else 1
+        for idx in range(0, len(opts), cols_per_row):
+            row = st.columns(cols_per_row)
+            for offset, opt in enumerate(opts[idx:idx + cols_per_row]):
+                with row[offset]:
+                    if st.button(opt, key=f"btn_{button_topic_key}_{button_step['id']}_{idx + offset}", use_container_width=True):
+                        payload = [opt] if multi else opt
+                        handle_answer(button_topic_key, button_step, payload, source="structured")
+                        return
+
     # ── Options ─────────────────────────────────────────────────
     if stype == "options":
         with composer_col:
             st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
-            dropdown_key = f"dropdown_{topic_key}_{sid}"
-            dropdown_options = ["Select an option..."] + step["opts"]
-            if dropdown_key not in st.session_state:
-                st.session_state[dropdown_key] = "Select an option..."
-            col_text, col_dropdown = st.columns([4.6, 1.7])
-
+            col_text = st.columns([1])[0]
             with col_text:
                 user_text = st.text_input(
                     "Message",
@@ -4642,21 +4722,10 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
                     label_visibility="collapsed",
                     placeholder="Type a reply..."
                 )
-
-            with col_dropdown:
-                selected_option = st.selectbox(
-                    "Quick option",
-                    dropdown_options,
-                    key=dropdown_key,
-                    label_visibility="collapsed",
-                )
+            render_option_buttons(topic_key, step, multi=False)
 
             with st.container():
                 voice_text = voice_widget(f"{topic_key}_{sid}_opt", label="Mic")
-
-            if selected_option != "Select an option..." and st.session_state.get(f"{dropdown_key}_submitted") != selected_option:
-                st.session_state[f"{dropdown_key}_submitted"] = selected_option
-                handle_answer(topic_key, step, selected_option, source="structured")
 
             submitted_key = f"text_{topic_key}_{sid}_submitted"
 
@@ -4688,13 +4757,9 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
     elif stype == "multi_select":
         with composer_col:
             st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
-            dropdown_key = f"dropdown_{topic_key}_{sid}"
-            dropdown_options = ["Select an option..."] + step["opts"]
-            if dropdown_key not in st.session_state:
-                st.session_state[dropdown_key] = "Select an option..."
-            col_text, col_dropdown = st.columns([4.6, 1.7])
             text_key = f"text_{topic_key}_{sid}"
             submit_key = f"{text_key}_submitted"
+            col_text = st.columns([1])[0]
             with col_text:
                 user_text = st.text_input(
                     "Reply",
@@ -4702,19 +4767,9 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
                     label_visibility="collapsed",
                     placeholder="Type one or more answers, separated by commas..."
                 )
-            with col_dropdown:
-                selected_option = st.selectbox(
-                    "Quick option",
-                    dropdown_options,
-                    key=dropdown_key,
-                    label_visibility="collapsed",
-                )
+            render_option_buttons(topic_key, step, multi=True)
             with st.container():
                 voice_text = voice_widget(f"{topic_key}_{sid}_multi", label="Mic")
-
-            if selected_option != "Select an option..." and st.session_state.get(f"{dropdown_key}_submitted") != selected_option:
-                st.session_state[f"{dropdown_key}_submitted"] = selected_option
-                handle_answer(topic_key, step, [selected_option], source="structured")
 
             if user_text and st.session_state.get(submit_key) != user_text:
                 st.session_state[submit_key] = user_text
