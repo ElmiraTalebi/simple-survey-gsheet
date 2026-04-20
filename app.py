@@ -251,6 +251,8 @@ _OPTION_ALIAS_HINTS = {
     "no appetite": ["no appetite", "not hungry", "appetite"],
     "nausea": ["nausea", "nauseous", "sick to my stomach"],
     "too tired to prepare food": ["too tired", "no energy", "too exhausted"],
+    "soft foods only yogurt soup pudding": ["soup", "soups", "yogurt", "pudding", "mashed", "soft food", "soft foods", "applesauce", "oatmeal"],
+    "mainly liquids": ["liquid", "liquids", "broth", "shake", "shakes", "smoothie", "smoothies", "juice", "water only"],
     "pain when eating/swallowing": ["pain when swallowing", "hurts to swallow", "hurts to eat", "pain eating"],
     "dry mouth": ["dry mouth", "mouth is dry"],
     "pain": ["pain", "hurts", "ache", "aching", "sore"],
@@ -480,6 +482,17 @@ def _has_specific_type_info(text: str) -> bool:
 
 def _has_plain_yes_no_signal(text: str) -> bool:
     return _match_binary_option({"opts": ["Yes", "No"]}, text) is not None
+
+
+def _is_negative_screening_answer(text: str) -> bool:
+    normalized = _norm_text(text)
+    if not normalized:
+        return False
+    if _match_binary_option({"opts": ["Yes", "No"]}, text) == "No":
+        return True
+    return normalized in {
+        "none", "nothing", "not really", "im okay", "i am okay", "okay", "fine", "good", "all good",
+    }
 
 
 DETECTORS_BY_KIND = {
@@ -1839,7 +1852,6 @@ def _dynamic_step_text(topic_key: Optional[str], step: dict, state: Optional[dic
         return question_text
 
     raw_answers = state.get("raw_answers", {})
-    current_data = state.get("data", {})
     prev_step = _previous_step_in_flow(topic_key or "", step.get("id", ""))
     prev_raw = str(raw_answers.get(prev_step["id"], "")).strip() if prev_step else ""
     prev_phrase = _contextualize_raw_phrase(prev_raw)
@@ -1856,48 +1868,11 @@ def _dynamic_step_text(topic_key: Optional[str], step: dict, state: Optional[dic
     if topic_key == "pain" and step.get("id") == "med_adherence_issue":
         prior = _norm_text(str(raw_answers.get("taking_as_prescribed", "")))
         if any(token in prior for token in {"forget", "forgot", "late", "on time", "timing", "schedule"}):
-            return _prior_visit_context_text(
-                topic_key,
-                step,
-                "Is the main issue remembering to take them on time, or is something else getting in the way?",
-                state,
-            )
+            return "Is the main issue remembering to take them on time, or is something else getting in the way?"
         if any(token in prior for token in {"side effect", "makes me sick", "too sleepy", "drowsy", "nausea"}):
-            return _prior_visit_context_text(
-                topic_key,
-                step,
-                "Are the side effects the main reason it has been hard to take them, or is something else also part of it?",
-                state,
-            )
+            return "Are the side effects the main reason it has been hard to take them, or is something else also part of it?"
         if prior:
-            return _prior_visit_context_text(
-                topic_key,
-                step,
-                "What has been getting in the way of taking them the way you planned?",
-                state,
-            )
-
-    if topic_key == "nutrition" and step.get("id") == "weight_impact":
-        last_weight = _safe_float(st.session_state.get("last_checkin", {}).get("nutrition", {}).get("weight"))
-        current_weight = _safe_float(current_data.get("weight"))
-        if last_weight is not None and current_weight is not None:
-            delta = round(current_weight - last_weight, 1)
-            if abs(delta) < 0.5:
-                return (
-                    f"Your weight looks about the same as last visit at around {int(round(current_weight))} pounds. "
-                    "Has your weight still been affecting how you feel or your energy at all?"
-                )
-            if delta < 0:
-                pounds_lost = int(round(abs(delta))) if abs(delta).is_integer() else abs(delta)
-                return (
-                    f"You were about {int(round(last_weight))} pounds last visit and you're {int(round(current_weight))} now, "
-                    f"so that's about {pounds_lost} pounds lower. Has that weight loss been affecting how you feel or your energy?"
-                )
-            pounds_gained = int(round(delta)) if delta.is_integer() else delta
-            return (
-                f"You were about {int(round(last_weight))} pounds last visit and you're {int(round(current_weight))} now, "
-                f"so that's about {pounds_gained} pounds higher. Has that change been affecting how you feel or your energy?"
-            )
+            return "What has been getting in the way of taking them the way you planned?"
 
     lower = _norm_text(question_text)
     if prev_phrase:
@@ -1922,7 +1897,7 @@ def _dynamic_step_text(topic_key: Optional[str], step: dict, state: Optional[dic
         if "is it painful to swallow, or just mechanically difficult" in lower:
             return "Does swallowing feel painful, or does it feel like things just don't go down well?"
 
-    return _prior_visit_context_text(topic_key, step, question_text, state)
+    return question_text
 
 
 def _step_prompt_text(step: dict, topic_key: Optional[str] = None, state: Optional[dict] = None) -> str:
@@ -3427,6 +3402,17 @@ change_magnitude rules:
 clinical_note: One sentence, plain English. Include change magnitude and direction.
 If no prior data: "No prior data available for comparison."
 
+patient_facing_note:
+  - 1 short sentence in chatbot voice for the patient, or null if not useful
+  - Use only when the comparison adds value to the conversation
+  - Good uses: weight increased/decreased, pain improved/worsened, symptom better/same/worse
+  - Do NOT use for trivial yes/no comparisons like "Last time you said yes"
+  - Keep it natural and supportive, not report-like
+  - Examples:
+    - "Your weight is up from last visit, which is encouraging."
+    - "It sounds like this has been a bit worse than last time."
+    - "This seems about the same as your last visit."
+
 Return ONLY valid JSON:
 {
   "has_prior_data": true/false,
@@ -3434,7 +3420,8 @@ Return ONLY valid JSON:
   "change_detected": true/false,
   "change_direction": "improved|worsened|neutral_change|no_change|new_data",
   "change_magnitude": "large|moderate|small|none",
-  "clinical_note": "..."
+  "clinical_note": "...",
+  "patient_facing_note": "..." or null
 }
 """
 
@@ -3447,7 +3434,8 @@ def run_prior_comparison(step: dict, current_answer: str, last_topic_data: dict)
     default = {
         "has_prior_data": False, "last_answer": None,
         "change_detected": False, "change_direction": "new_data",
-        "change_magnitude": "none", "clinical_note": "No prior data available."
+        "change_magnitude": "none", "clinical_note": "No prior data available.",
+        "patient_facing_note": None,
     }
     if not last_topic_data:
         return default
@@ -3736,6 +3724,7 @@ SPECIAL CLINICAL SIGNALS (set if present):
   medication_stop_signal: patient stopped taking prescription medication without explanation
   aggravating_medication_signal: patient reports their medication makes symptoms worse
   severity_underreporting: patient rates low severity but describes severe functional impact
+  screen_negative_signal: patient's answer functions as a meaningful negative screen for the symptom/concern being assessed
 
 follow_up_goal: A statement of WHAT information is needed — NOT a question.
   Example: "Obtain a numeric pain severity score — patient described pain without rating it."
@@ -3768,7 +3757,8 @@ Return ONLY valid JSON:
     "trajectory_mismatch": false,
     "medication_stop_signal": false,
     "aggravating_medication_signal": false,
-    "severity_underreporting": false
+    "severity_underreporting": false,
+    "screen_negative_signal": false
   }}
 }}
 """
@@ -3793,6 +3783,7 @@ def run_doctor_relevance(
         "special_signals": {
             "trajectory_mismatch": False, "medication_stop_signal": False,
             "aggravating_medication_signal": False, "severity_underreporting": False,
+            "screen_negative_signal": False,
         },
     }
     result = _call_agent(_DOCTOR_RELEVANCE_SYS, {
@@ -4084,6 +4075,7 @@ def run_agent_pipeline(
     assistant_message = ""
     if not do_follow_up:
         comp_note    = prior_comp.get("clinical_note", "")
+        patient_change_note = (prior_comp.get("patient_facing_note") or "").strip()
         change_dir   = prior_comp.get("change_direction", "new_data")
         prev_answer  = prior_comp.get("last_answer", "")
         emotional    = sentiment_out.get("emotional_state", "neutral")
@@ -4091,6 +4083,8 @@ def run_agent_pipeline(
         # Build a brief contextual acknowledgment
         if targeted_followup.get("assistant_message"):
             assistant_message = targeted_followup["assistant_message"]
+        elif patient_change_note:
+            assistant_message = patient_change_note
         elif comp_note and change_dir in ("worsened", "improved") and prev_answer:
             assistant_message = comp_note
         elif emotional == "distressed":
@@ -4881,6 +4875,35 @@ def _append_next_question(
         _append_assistant_message(state, next_text)
 
 
+def _maybe_skip_next_impact_question(topic_key: str, state: dict):
+    next_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
+    if not next_step or next_step.get("type") != "options":
+        return
+
+    opts = next_step.get("opts", [])
+    if "No" not in opts:
+        return
+
+    lower = _norm_text(next_step.get("text", ""))
+    impact_markers = {
+        "affect", "affecting", "impact", "impacting", "interfere", "interfering",
+        "worry", "worried", "concern", "harder", "difficult", "difficulty",
+        "daily activities", "sleep", "eating", "motivation",
+    }
+    if not any(marker in lower for marker in impact_markers):
+        return
+
+    state["data"][next_step["id"]] = "No"
+    state["raw_answers"][next_step["id"]] = "No"
+
+
+def _maybe_apply_prompt_driven_skip(topic_key: str, state: dict, pipeline: dict):
+    special = pipeline.get("special_signals", {}) or {}
+    if not special.get("screen_negative_signal"):
+        return
+    _maybe_skip_next_impact_question(topic_key, state)
+
+
 def _store_followup_prompt(
     topic_key: str,
     state: dict,
@@ -5133,6 +5156,9 @@ def handle_answer(
             return
         if binary_override.get("action") == "accept":
             assistant_message = binary_override.get("assistant_message", _default_chatty_reply(topic_key, answer, step, last_topic_data))
+            if _is_negative_screening_answer(answer):
+                _maybe_skip_next_impact_question(topic_key, state)
+                next_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
             if topic_is_complete(topic_key, state["data"], state.get("raw_answers")):
                 state["status"] = "completed"
                 state["chat"].append({
@@ -5236,6 +5262,9 @@ def handle_answer(
                 assistant_message = f"{ack}\n\n{assistant_message}"
             elif ack:
                 assistant_message = ack
+
+            _maybe_apply_prompt_driven_skip(topic_key, state, pipeline)
+            next_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
 
         else:
             # No OpenAI — use fallback reply
