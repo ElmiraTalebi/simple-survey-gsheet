@@ -5086,8 +5086,9 @@ def handle_pending_followup(topic_key: str, answer: str, source: str = "typed"):
                     topic_key,
                     source_step,
                     interpreted,
-                    source=source,
+                    source="structured",
                     raw_answer=retry_text,
+                    display_override=retry_text,
                 )
                 return
             _request_retry_for_step(topic_key, source_step, retry_text, source=source)
@@ -5096,7 +5097,14 @@ def handle_pending_followup(topic_key: str, answer: str, source: str = "typed"):
         if source_step["type"] == "multi_select":
             parsed = parse_multi_select_typed_input(source_step, retry_text)
             if parsed:
-                handle_answer(topic_key, source_step, parsed, source=source)
+                handle_answer(
+                    topic_key,
+                    source_step,
+                    parsed,
+                    source="structured",
+                    raw_answer=retry_text,
+                    display_override=retry_text,
+                )
                 return
             if pending.get("allow_other_detail") and retry_text and not _looks_vague_answer(retry_text):
                 state["data"][f"{source_step['id']}_other_detail"] = retry_text
@@ -5104,8 +5112,9 @@ def handle_pending_followup(topic_key: str, answer: str, source: str = "typed"):
                     topic_key,
                     source_step,
                     ["Other"],
-                    source=source,
+                    source="structured",
                     display_override=retry_text,
+                    raw_answer=retry_text,
                 )
                 return
             _request_retry_for_step(topic_key, source_step, retry_text, source=source)
@@ -5193,11 +5202,12 @@ def handle_answer(
     last_topic_data = st.session_state.last_checkin.get(topic_key, {})
 
     # ══════════════════════════════════════════════════════════════
-    # BRANCH A — Structured button / dropdown click (fast path, no agents)
-    # source="structured" means the patient clicked a predefined option —
-    # it is already a clean matched answer, no LLM classification needed.
+    # BRANCH A — Structured answer (fast path, no agents)
+    # source="structured" means we already mapped the patient's reply to a
+    # real option/list value, whether it came from a button, typing, or retry.
+    # Once we have that mapping, do not send it back through the LLM.
     # ══════════════════════════════════════════════════════════════
-    if source == "structured" and not isinstance(answer, str):
+    if source == "structured":
         if topic_is_complete(topic_key, state["data"], state.get("raw_answers")):
             state["status"] = "completed"
             state["chat"].append({
