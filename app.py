@@ -357,6 +357,57 @@ def _contextualize_raw_phrase(text: str, max_words: int = 8) -> str:
     return normalized
 
 
+def _prompt_value_text(step_id: str, value: Any, topic_key: Optional[str] = None, topic_data: Optional[dict] = None) -> str:
+    if value is None:
+        return ""
+
+    if isinstance(value, list):
+        items = []
+        for item in value:
+            if item == "Other" and topic_data and topic_data.get(f"{step_id}_other_detail"):
+                items.append(str(topic_data.get(f"{step_id}_other_detail")))
+            elif item not in {None, ""}:
+                items.append(str(item))
+        text = ", ".join(items)
+    else:
+        text = str(value)
+
+    text = " ".join(text.strip().split())
+    if len(text) > 80:
+        text = text[:77] + "..."
+    return text
+
+
+def _prior_visit_context_text(topic_key: Optional[str], step: dict, question_text: str, state: Optional[dict]) -> str:
+    if not state or not topic_key:
+        return question_text
+
+    last_topic_data = st.session_state.get("last_checkin", {}).get(topic_key, {})
+    if not last_topic_data:
+        return question_text
+
+    step_id = step.get("id")
+    if not step_id:
+        return question_text
+
+    prior_value = last_topic_data.get(step_id)
+    if prior_value is None:
+        return question_text
+
+    prior_text = _prompt_value_text(step_id, prior_value, topic_key=topic_key, topic_data=last_topic_data)
+    if not prior_text:
+        return question_text
+
+    lower = _norm_text(question_text)
+    if "since your last visit" in lower:
+        return f"Last visit you reported {prior_text}. How has that been since then?"
+    if "compared to your last visit" in lower:
+        return f"Last visit you reported {prior_text}. How has that changed since then?"
+    if step.get("type") == "number":
+        return f"Last visit this was about {prior_text}. {question_text}"
+    return f"Last visit you reported {prior_text}. {question_text}"
+
+
 def _infer_option_from_text(step: dict, user_input: str) -> Optional[str]:
     binary = _match_binary_option(step, user_input)
     if binary:
@@ -697,6 +748,52 @@ def _looks_vague_answer(answer: Any) -> bool:
         if re.fullmatch(r"[a-zA-Z]{1,2,}", text):
             return True
     return False
+
+
+def _free_text_binary_response_override(step: dict, answer: str) -> dict[str, str]:
+    if step.get("type") != "free_text" or not isinstance(answer, str):
+        return {}
+
+    binary = _match_binary_option({"opts": ["Yes", "No"]}, answer)
+    if not binary:
+        return {}
+
+    question = _norm_text(step.get("text", ""))
+    if not question:
+        return {}
+
+    detail_prefixes = ("when ", "where ", "what ", "which ", "who ")
+    detail_fragments = {
+        "how often", "how much", "how many", "how high", "how bad", "what type",
+        "what kind", "what are you using", "what have you been using",
+        "which body part", "tell me more",
+    }
+    if question.startswith(detail_prefixes) or any(fragment in question for fragment in detail_fragments):
+        return {
+            "action": "clarify",
+            "question": _fallback_clarifying_question(step),
+        }
+
+    yes_no_framing = {
+        "are you", "do you", "have you", "has it", "is it", "does it",
+        "would you", "can you", "are there", "have there",
+        "how are you feeling", "how have you been",
+    }
+    if any(fragment in question for fragment in yes_no_framing):
+        if binary == "No":
+            return {
+                "action": "accept",
+                "assistant_message": "Thanks for sharing that. I've noted that there doesn't seem to be a major issue there right now.",
+            }
+        return {
+            "action": "accept",
+            "assistant_message": "Thanks for sharing that. I've noted that for your care team.",
+        }
+
+    return {
+        "action": "clarify",
+        "question": _fallback_clarifying_question(step),
+    }
 
 
 def _fallback_clarifying_question(step: dict) -> str:
@@ -1727,6 +1824,7 @@ def _dynamic_step_text(topic_key: Optional[str], step: dict, state: Optional[dic
         return question_text
 
     raw_answers = state.get("raw_answers", {})
+    current_data = state.get("data", {})
     prev_step = _previous_step_in_flow(topic_key or "", step.get("id", ""))
     prev_raw = str(raw_answers.get(prev_step["id"], "")).strip() if prev_step else ""
     prev_phrase = _contextualize_raw_phrase(prev_raw)
@@ -1743,11 +1841,48 @@ def _dynamic_step_text(topic_key: Optional[str], step: dict, state: Optional[dic
     if topic_key == "pain" and step.get("id") == "med_adherence_issue":
         prior = _norm_text(str(raw_answers.get("taking_as_prescribed", "")))
         if any(token in prior for token in {"forget", "forgot", "late", "on time", "timing", "schedule"}):
-            return "Is the main issue remembering to take them on time, or is something else getting in the way?"
+            return _prior_visit_context_text(
+                topic_key,
+                step,
+                "Is the main issue remembering to take them on time, or is something else getting in the way?",
+                state,
+            )
         if any(token in prior for token in {"side effect", "makes me sick", "too sleepy", "drowsy", "nausea"}):
-            return "Are the side effects the main reason it has been hard to take them, or is something else also part of it?"
+            return _prior_visit_context_text(
+                topic_key,
+                step,
+                "Are the side effects the main reason it has been hard to take them, or is something else also part of it?",
+                state,
+            )
         if prior:
-            return "What has been getting in the way of taking them the way you planned?"
+            return _prior_visit_context_text(
+                topic_key,
+                step,
+                "What has been getting in the way of taking them the way you planned?",
+                state,
+            )
+
+    if topic_key == "nutrition" and step.get("id") == "weight_impact":
+        last_weight = _safe_float(st.session_state.get("last_checkin", {}).get("nutrition", {}).get("weight"))
+        current_weight = _safe_float(current_data.get("weight"))
+        if last_weight is not None and current_weight is not None:
+            delta = round(current_weight - last_weight, 1)
+            if abs(delta) < 0.5:
+                return (
+                    f"Your weight looks about the same as last visit at around {int(round(current_weight))} pounds. "
+                    "Has your weight still been affecting how you feel or your energy at all?"
+                )
+            if delta < 0:
+                pounds_lost = int(round(abs(delta))) if abs(delta).is_integer() else abs(delta)
+                return (
+                    f"You were about {int(round(last_weight))} pounds last visit and you're {int(round(current_weight))} now, "
+                    f"so that's about {pounds_lost} pounds lower. Has that weight loss been affecting how you feel or your energy?"
+                )
+            pounds_gained = int(round(delta)) if delta.is_integer() else delta
+            return (
+                f"You were about {int(round(last_weight))} pounds last visit and you're {int(round(current_weight))} now, "
+                f"so that's about {pounds_gained} pounds higher. Has that change been affecting how you feel or your energy?"
+            )
 
     lower = _norm_text(question_text)
     if prev_phrase:
@@ -1772,7 +1907,7 @@ def _dynamic_step_text(topic_key: Optional[str], step: dict, state: Optional[dic
         if "is it painful to swallow, or just mechanically difficult" in lower:
             return "Does swallowing feel painful, or does it feel like things just don't go down well?"
 
-    return question_text
+    return _prior_visit_context_text(topic_key, step, question_text, state)
 
 
 def _step_prompt_text(step: dict, topic_key: Optional[str] = None, state: Optional[dict] = None) -> str:
@@ -1988,6 +2123,13 @@ def _q(id, text, type="options", opts=None, when=None,
 def _safe_int(val, default=0):
     try:
         return int(val)
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_float(val, default: Optional[float] = None) -> Optional[float]:
+    try:
+        return float(val)
     except (TypeError, ValueError):
         return default
 
@@ -3563,10 +3705,12 @@ FOLLOW-UP RULES:
   - The question list is a question bank, not a rigid script. Judge the current answer
     like a clinician deciding whether anything important is still missing.
   - A meaningful free-text answer in the patient's own words is clinically usable even if it does not match the option wording.
+  - If a free-text question contains yes/no wording and the patient gives a simple "yes" or "no", treat that as minimally usable data unless the question clearly asked for a descriptive detail like where, when, how often, or what kind.
   - If the patient gave a broad but meaningful answer, break down what is missing conceptually; do NOT treat it as meaningless.
   - If the patient already explained the reason in their own words, do NOT recommend a generic "what is making this difficult" follow-up.
   - If the patient supplies one detail and explicitly does not know another, accept the known detail and only ask for the missing one if it is truly necessary.
   - If the missing detail is something the patient reasonably may not know right now, prefer no follow-up over repetitive questioning.
+  - Never imply the presence of a symptom the patient just denied.
   - ONLY recommend follow-up if information_completeness is "partial" or "none"
     AND follow_up_count is 0 AND the missing info is clinically meaningful
   - NEVER recommend follow-up if follow_up_count ≥ 1 (absolute limit: 1 per question)
@@ -3686,6 +3830,8 @@ RULES:
   - If the patient used plain-language wording, mirror that wording naturally instead of switching back to rigid form language
   - Ask only for the single missing detail; never restate details the patient already provided
   - If the patient said they do not know a detail, do not challenge that or sound repetitive
+  - Never contradict an explicit "no" or "yes" the patient just gave
+  - Never write a follow-up like "Besides anxiety..." or otherwise imply a symptom exists after the patient denied it
   - Write in second person, conversational language
   - Never use medical jargon without immediate plain explanation
   - NEVER ask a multi-part question
@@ -4960,6 +5106,30 @@ def handle_answer(
     # BRANCH B — Free text / voice / typed — run full agent pipeline
     # ══════════════════════════════════════════════════════════════
     if isinstance(answer, str):
+        binary_override = _free_text_binary_response_override(step, answer)
+        if binary_override.get("action") == "clarify":
+            _store_followup_prompt(
+                topic_key,
+                state,
+                step,
+                binary_override.get("question", _fallback_clarifying_question(step)),
+            )
+            st.rerun()
+            return
+        if binary_override.get("action") == "accept":
+            assistant_message = binary_override.get("assistant_message", _default_chatty_reply(topic_key, answer, step, last_topic_data))
+            if topic_is_complete(topic_key, state["data"], state.get("raw_answers")):
+                state["status"] = "completed"
+                state["chat"].append({
+                    "role": "assistant",
+                    "content": f"{assistant_message}\n\n✅ Thank you — I have everything I need for this topic.",
+                })
+                st.rerun()
+                return
+            _append_next_question(topic_key, state, next_step, assistant_message)
+            st.rerun()
+            return
+
         is_vague = _looks_vague_answer(answer)
 
         # Vague answer with no options to try → ask clarification (no LLM needed)
