@@ -2106,10 +2106,21 @@ MATCHING RULES:
    NEVER return no_match when a catch-all option exists and the answer is a
    recognisable, meaningful response to the question asked.
 
-4. AMBIGUITY — two or more SPECIFIC (non-catch-all) options equally plausible
+4. TYPE MISMATCH DETECTION — if the question asks for one type of information but
+   the patient provides a different type, return match_type "no_match" even if a
+   catch-all option exists. Do NOT accept a wrong-type answer via catch-all.
+   Examples of type mismatches:
+     - Question asks WHERE the pain is (a location) but patient says "comes and goes",
+       "all the time", "only when I swallow", "sometimes" (these are timing/pattern, not location)
+     - Question asks HOW BAD the pain is (severity) but patient names a body part
+     - Question asks WHEN pain started but patient describes the type of pain
+   In these cases: match_type = "no_match", matched_option = null,
+   reasoning should explain the type mismatch so the chatbot can ask again clearly.
+
+5. AMBIGUITY — two or more SPECIFIC (non-catch-all) options equally plausible
    → match_type "no_match", list candidates
 
-5. NO MATCH — answer is completely unrelated/nonsensical AND no catch-all exists
+6. NO MATCH — answer is completely unrelated/nonsensical AND no catch-all exists
    → match_type "no_match"
 
 6. SPECIAL STATES:
@@ -2246,21 +2257,35 @@ RED FLAGS TO DETECT:
 
 TIER DEFINITIONS:
   0 — NO URGENCY: Continue normally.
-  1 — WATCH: Notable signal. Log it, elevate in report, continue session.
+  1 — WATCH: Notable signal. Log for report, continue session normally.
   2 — URGENT: Care team must contact patient today. Continue session.
        Show one care team message to the patient.
   3 — EMERGENCY: Immediate threat. Terminate session. Patient to emergency services.
 
 SIGNAL RULES:
-  Medical signals → Tier 2 minimum:
-    M1: Severe uncontrolled pain (≥7/10) with nothing helping
-    M2: Sudden new severe pain in head/neck/throat
-    M3: Fever with chills in an HNC patient (immunocompromised)
-    M4: Complete inability to swallow ANY liquids
-    M5: Breathing difficulty at rest / wheezing
-    M6: Prescription medication suddenly stopped
-    M7: Reported falls
-    M8: Significant functional disruption (can't sleep, can't eat for days)
+
+  IMPORTANT CLINICAL CONTEXT FOR HNC PATIENTS:
+  Pain scores of 7-8/10 are clinically expected during active chemoradiation for head
+  and neck cancer — mucositis, dysphagia, and treatment toxicity routinely produce this
+  level. A high pain score ALONE does not warrant Tier 2 escalation in this population.
+  You MUST look for additional signals beyond the number itself.
+
+  Medical signals:
+    M1 — SEVERE UNCONTROLLED PAIN:
+      Tier 1 (WATCH): Pain 7-9/10 alone, without other signals.
+      Tier 2 (URGENT): Pain 7-9/10 AND at least one of:
+        - Patient states nothing helps OR medication is not working
+        - Patient cannot eat, sleep, or perform basic activities because of pain
+        - Pain is new or suddenly much worse than their baseline
+        - Fever/chills present alongside severe pain
+      Tier 2 (URGENT): Pain reported as 10/10 or "worst of my life" or "unbearable"
+    M2: Sudden new severe pain in head/neck — Tier 2
+    M3: Fever with chills in an HNC patient (immunocompromised) — Tier 2 always
+    M4: Complete inability to swallow ANY liquids — Tier 2
+    M5: Breathing difficulty at rest or wheezing — Tier 2
+    M6: Prescription medication suddenly stopped — Tier 2
+    M7: Reported falls — Tier 1
+    M8: Significant functional disruption (3+ nights no sleep, cannot eat for days) — Tier 2
   
   Psychological signals:
     P1: Explicit suicidal ideation or self-harm intent → TIER 3 ALWAYS
@@ -2876,19 +2901,51 @@ def _merge_sentiment_state(sentiment_out: dict):
 _CATCHALL_KEYWORDS = {"somewhere else", "other", "none of these", "something else"}
 
 
+# Timing/pattern words that are never valid body-location answers
+_TIMING_WORDS = {
+    "all the time", "comes and goes", "comes and go", "sometimes", "occasionally",
+    "only when", "always", "never", "constant", "intermittent", "at night",
+    "in the morning", "after eating", "when swallowing", "when i eat",
+    "only at night", "mostly", "often", "rarely", "every day", "all day",
+}
+
+
+def _is_timing_answer(text: str) -> bool:
+    """Return True if the text looks like a timing/frequency answer, not a location."""
+    normalized = _norm_text(text)
+    return any(phrase in normalized for phrase in _TIMING_WORDS)
+
+
 def _catchall_fallback(step: dict, user_input: str) -> str:
     """
     If the step has a catch-all option (Somewhere else / Other / None of these),
     return it for any answer that looks like a genuine (non-vague) response.
     This is the last-resort safety net so patients never get stuck in a retry loop
     when they name something real that just isn't one of the specific listed options.
+
+    Exception: if the question is asking for a location but the patient answered
+    with a timing/pattern description, we do NOT use the catch-all — instead we
+    return the raw input unchanged so the chatbot retries with a clearer prompt.
     """
     opts = step.get("opts", [])
+    question_lower = _norm_text(step.get("text", ""))
+
+    # Detect location questions by their wording
+    is_location_question = any(
+        w in question_lower
+        for w in ("where", "location", "located", "which part", "which area")
+    )
+
     for opt in opts:
         if any(kw in opt.lower() for kw in _CATCHALL_KEYWORDS):
             # Only use catch-all if the answer is not empty/gibberish
-            if user_input.strip() and not _looks_vague_answer(user_input):
-                return opt
+            if not user_input.strip() or _looks_vague_answer(user_input):
+                break
+            # Don't use catch-all if it's a location question and the answer
+            # describes timing — that's a type mismatch, not a location
+            if is_location_question and _is_timing_answer(user_input):
+                break
+            return opt
     return user_input
 
 
@@ -3849,7 +3906,9 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
                 st.session_state[submitted_key] = user_text
                 interpreted = interpret_user_input_with_options(step, user_text)
                 if interpreted in step.get("opts", []):
-                    handle_answer(topic_key, step, interpreted, source="typed")
+                    # Use fast-path (no agents) but show the patient's raw text in chat
+                    handle_answer(topic_key, step, interpreted, source="structured",
+                                  display_override=user_text)
                 else:
                     _request_retry_for_step(topic_key, step, user_text, source="typed")
                     return
@@ -3859,7 +3918,8 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
                 st.session_state[voice_submitted_key] = voice_text
                 interpreted = interpret_user_input_with_options(step, voice_text)
                 if interpreted in step.get("opts", []):
-                    handle_answer(topic_key, step, interpreted, source="voice")
+                    handle_answer(topic_key, step, interpreted, source="structured",
+                                  display_override=voice_text)
                 else:
                     _request_retry_for_step(topic_key, step, voice_text, source="voice")
                     return
@@ -3902,7 +3962,8 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
                 st.session_state[submit_key] = user_text
                 parsed = parse_multi_select_typed_input(step, user_text)
                 if parsed:
-                    handle_answer(topic_key, step, parsed, source="typed")
+                    handle_answer(topic_key, step, parsed, source="structured",
+                                  display_override=user_text)
                 else:
                     _request_retry_for_step(topic_key, step, user_text, source="typed")
                     return
@@ -3912,7 +3973,8 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
                 st.session_state[voice_submit_key] = voice_text
                 parsed = parse_multi_select_typed_input(step, voice_text)
                 if parsed:
-                    handle_answer(topic_key, step, parsed, source="voice")
+                    handle_answer(topic_key, step, parsed, source="structured",
+                                  display_override=voice_text)
                 else:
                     _request_retry_for_step(topic_key, step, voice_text, source="voice")
                     return
