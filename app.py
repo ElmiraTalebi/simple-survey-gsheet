@@ -1053,6 +1053,8 @@ div[data-baseweb="select"] > div {
 .chat-shell-header {
     display: flex;
     align-items: center;
+    justify-content: space-between;
+    gap: 12px;
     padding: 10px 14px;
     border-bottom: 1px solid #e2ebf2;
     background: linear-gradient(180deg, rgba(255,255,255,0.92) 0%, rgba(245,249,252,0.9) 100%);
@@ -1069,6 +1071,44 @@ div[data-baseweb="select"] > div {
     font-weight: 800;
     color: #143551;
     letter-spacing: -0.03em;
+}
+
+.chat-shell-inline-summary {
+    flex: 0 0 auto;
+}
+
+.chat-shell-inline-summary details {
+    display: inline-block;
+}
+
+.chat-shell-inline-summary summary {
+    list-style: none;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 700;
+    color: #607589;
+    white-space: nowrap;
+}
+
+.chat-shell-inline-summary summary::-webkit-details-marker {
+    display: none;
+}
+
+.chat-shell-inline-summary summary::before {
+    content: "▸";
+    display: inline-block;
+    margin-right: 6px;
+    color: #607589;
+}
+
+.chat-shell-inline-summary details[open] summary::before {
+    content: "▾";
+}
+
+.chat-shell-inline-summary-body {
+    padding: 10px 14px 8px 14px;
+    border-bottom: 1px solid #e8eef4;
+    background: rgba(247, 251, 254, 0.78);
 }
 
 .chat-history {
@@ -5313,16 +5353,26 @@ def render_topic_detail(topic_label: str, topic_key: str):
     # ── Urgency banner (Tier 1–3 from multi-agent system) ───────────
     render_urgency_banner()
 
-    # ── Previous check-in summary card ────────────────────────────
+    # ── Previous check-in summary content ────────────────────────
+    chips_html = _checkin_summary_html(topic_key, last_data) if (has_prev and last_data) else ""
+    inline_summary_html = ""
     if has_prev:
-        if last_data:
-            chips_html = _checkin_summary_html(topic_key, last_data)
-            if chips_html:
-                with st.expander("Last visit summary", expanded=False):
-                    st.caption("These answers are from your last visit. You can change any of them for this visit.")
-                    st.markdown(chips_html, unsafe_allow_html=True)
-        else:
-            st.caption("No information from your last visit was recorded for this section.")
+        summary_inner = (
+            '<div class="chat-shell-inline-summary-body">'
+            '<div style="font-size:12px;color:#5f7386;line-height:1.5;margin-bottom:6px;">'
+            'These answers are from your last visit. You can change any of them for this visit.'
+            '</div>'
+            + (chips_html if chips_html else '<div style="font-size:12px;color:#6d7f90;">No prior summary recorded for this topic.</div>')
+            + '</div>'
+        )
+        inline_summary_html = (
+            '<div class="chat-shell-inline-summary">'
+            '<details>'
+            '<summary>Last visit summary</summary>'
+            f'{summary_inner}'
+            '</details>'
+            '</div>'
+        )
 
     # ── Initialize topic on first visit ─────────────────────────
     if state["status"] == "not_started":
@@ -5340,6 +5390,7 @@ def render_topic_detail(topic_label: str, topic_key: str):
         '    <div class="chat-shell-title">'
         f'      <div class="chat-shell-name">{_html.escape(topic_label)}</div>'
         '    </div>'
+        f'    {inline_summary_html}'
         '  </div>'
         '  <div class="chat-history">'
     )
