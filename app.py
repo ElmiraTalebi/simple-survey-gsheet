@@ -3107,54 +3107,9 @@ def _step_is_relevant(topic_key: str, step: dict, data: dict, raw_answers: Optio
     raw_answers = raw_answers or {}
     step_id = step.get("id")
 
-    def raw(field: str) -> str:
-        return _norm_text(str(raw_answers.get(field, "")))
-
     if topic_key == "pain":
         if step_id in {"ear_pain", "jaw_swelling", "pain_with_chewing"}:
             return _needs_head_neck_followup(data.get("other_pain_desc", "")) or _needs_head_neck_followup(raw_answers.get("other_pain_desc", ""))
-
-        if step_id == "pain_med_timing":
-            barrier = raw("eating_barrier")
-            meds = data.get("pain_medications") or []
-            has_pain_med = isinstance(meds, list) and "No pain medication" not in meds and len(meds) > 0
-            return has_pain_med and any(token in barrier for token in {"pain", "swallow"})
-
-    if topic_key == "oral":
-        if step_id == "magic_mouthwash":
-            impact = data.get("sore_pain_impact") or raw_answers.get("sore_pain_impact", "")
-            return _norm_text(str(impact)) != _norm_text("No pain, just noticed it")
-
-        if step_id == "avoiding_brushing":
-            issue = _norm_text(str(data.get("teeth_issue_type") or raw_answers.get("teeth_issue_type", "")))
-            brushing = data.get("brushing_difficult")
-            return brushing == "Yes" or any(token in issue for token in {"pain", "sore", "multiple"})
-
-    if topic_key == "fatigue":
-        if step_id == "drowsy_schedule":
-            return data.get("sleep_quality") == "No" and data.get("medication_drowsy") in {"Yes", "Sometimes"}
-
-    if topic_key == "nutrition":
-        if step_id == "pain_med_timing":
-            barrier = raw("eating_barrier")
-            meds = data.get("pain_medications") or []
-            has_pain_med = isinstance(meds, list) and "No pain medication" not in meds and len(meds) > 0
-            return has_pain_med and any(token in barrier for token in {"pain", "swallow"})
-
-        if step_id == "iv_adjust":
-            return data.get("iv_helping") == "No" or any(
-                token in raw("iv_frequency") for token in {"want", "need", "more", "less", "change"}
-            )
-
-    if topic_key == "other":
-        if step_id == "hearing_worsening":
-            hearing = _norm_text(str(data.get("hearing_type") or raw_answers.get("hearing_type", "")))
-            return bool(hearing)
-
-        if step_id == "voice_communication_impact":
-            progression = data.get("voice_progression")
-            timing = data.get("voice_timing")
-            return progression in {"About the same", "Worse"} or timing == "Constant"
 
     return True
 
@@ -3406,6 +3361,8 @@ patient_facing_note:
   - 1 short sentence in chatbot voice for the patient, or null if not useful
   - Use only when the comparison adds value to the conversation
   - Good uses: weight increased/decreased, pain improved/worsened, symptom better/same/worse
+  - Mention improvement when it is clinically encouraging, such as weight gain, lower symptom burden, or better function
+  - Mention worsening when it helps orient the patient and clinician to a meaningful change
   - Do NOT use for trivial yes/no comparisons like "Last time you said yes"
   - Keep it natural and supportive, not report-like
   - Examples:
@@ -3710,6 +3667,8 @@ FOLLOW-UP RULES:
   - A meaningful free-text answer in the patient's own words is clinically usable even if it does not match the option wording.
   - If a free-text question contains yes/no wording and the patient gives a simple "yes" or "no", treat that as minimally usable data unless the question clearly asked for a descriptive detail like where, when, how often, or what kind.
   - If the patient gave a broad but meaningful answer, break down what is missing conceptually; do NOT treat it as meaningless.
+  - If the patient gives a meaningful negative screen ("no", "not really", "I am okay", "fine") to a broad symptom or emotional check-in question, treat that as a usable answer rather than forcing an unnecessary impact follow-up.
+  - If the patient gives a negative screen to a broad opener, set screen_negative_signal=true when the next likely question would otherwise just ask about downstream impact of the same denied problem.
   - If the patient already explained the reason in their own words, do NOT recommend a generic "what is making this difficult" follow-up.
   - If the patient supplies one detail and explicitly does not know another, accept the known detail and only ask for the missing one if it is truly necessary.
   - If the missing detail is something the patient reasonably may not know right now, prefer no follow-up over repetitive questioning.
@@ -3725,6 +3684,18 @@ SPECIAL CLINICAL SIGNALS (set if present):
   aggravating_medication_signal: patient reports their medication makes symptoms worse
   severity_underreporting: patient rates low severity but describes severe functional impact
   screen_negative_signal: patient's answer functions as a meaningful negative screen for the symptom/concern being assessed
+
+next_step_action:
+  - Use this to suppress an immediate next question when it no longer makes clinical sense
+  - This is the main mechanism for skipping downstream impact/management/change questions generically across topics
+  - Only use it when the candidate next step would be unnecessary, redundant, or context-mismatched given the current answer and session answers
+  - Prefer suggested_answer to be an exact option from the candidate next step when obvious, often "No"
+  - Good examples:
+    - Patient denies emotional distress and next step asks whether anxiety is affecting sleep/eating → skip with suggested_answer "No"
+    - Patient says a sore is not painful and next step asks whether treatment for painful sores is helping → skip with suggested_answer "No"
+    - Patient says IV fluids are helping and gives no sign they want changes, and next step asks about adjusting frequency → skip with suggested_answer "No"
+    - Patient says medication is not causing drowsiness and next step asks whether drowsiness is affecting schedule → skip with suggested_answer "No"
+  - Do not use this to skip structurally essential questions like a severity rating or a new symptom location unless the current answer already fully covers them
 
 follow_up_goal: A statement of WHAT information is needed — NOT a question.
   Example: "Obtain a numeric pain severity score — patient described pain without rating it."
@@ -3753,6 +3724,11 @@ Return ONLY valid JSON:
   "change_significance": "critical|notable|stable|no_baseline",
   "clinical_priority": "high|medium|low",
   "doctor_note": "..." or null,
+  "next_step_action": {{
+    "skip_immediate_next_step": false,
+    "suggested_answer": "..." or null,
+    "reason": "..." or null
+  }},
   "special_signals": {{
     "trajectory_mismatch": false,
     "medication_stop_signal": false,
@@ -3771,6 +3747,7 @@ def run_doctor_relevance(
     prior_comparison: dict,
     session_answers: dict,
     followup_count: int,
+    candidate_next_step: Optional[dict] = None,
 ) -> dict:
     """
     Agent 5: Assess clinical sufficiency and decide if follow-up is warranted.
@@ -3780,6 +3757,11 @@ def run_doctor_relevance(
         "follow_up_recommended": False, "follow_up_goal": None,
         "follow_up_urgency": "none", "change_significance": "no_baseline",
         "clinical_priority": "medium", "doctor_note": None,
+        "next_step_action": {
+            "skip_immediate_next_step": False,
+            "suggested_answer": None,
+            "reason": None,
+        },
         "special_signals": {
             "trajectory_mismatch": False, "medication_stop_signal": False,
             "aggravating_medication_signal": False, "severity_underreporting": False,
@@ -3795,6 +3777,12 @@ def run_doctor_relevance(
         "prior_comparison": prior_comparison,
         "session_answers_so_far": session_answers,
         "follow_up_count_this_question": followup_count,
+        "candidate_next_step": {
+            "id": candidate_next_step.get("id"),
+            "text": candidate_next_step.get("text"),
+            "type": candidate_next_step.get("type"),
+            "options": candidate_next_step.get("opts", []),
+        } if candidate_next_step else None,
     }, max_tokens=400)
 
     if not result:
@@ -3806,6 +3794,8 @@ def run_doctor_relevance(
         result["follow_up_goal"] = None
 
     merged = {**default, **result}
+    if "next_step_action" in result and isinstance(result["next_step_action"], dict):
+        merged["next_step_action"] = {**default["next_step_action"], **result["next_step_action"]}
     if "special_signals" in result and isinstance(result["special_signals"], dict):
         merged["special_signals"] = {**default["special_signals"], **result["special_signals"]}
 
@@ -3838,6 +3828,7 @@ RULES:
   - If the patient said they do not know a detail, do not challenge that or sound repetitive
   - Never contradict an explicit "no" or "yes" the patient just gave
   - Never write a follow-up like "Besides anxiety..." or otherwise imply a symptom exists after the patient denied it
+  - If prior-comparison context is clinically useful, you may briefly reflect it in a natural way, but only as conversational context, never as a rigid template
   - Write in second person, conversational language
   - Never use medical jargon without immediate plain explanation
   - NEVER ask a multi-part question
@@ -3959,6 +3950,7 @@ def run_agent_pipeline(
     prior_baseline  = _build_prior_baseline(topic_key)
     followup_count  = state.get("followup_counts", {}).get(step["id"], 0)
     targeted_followup = _targeted_followup_override(step, answer, state)
+    candidate_next_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
 
     # ── STEP 1: Answer Interpreter (must run first) ────────────────
     interp = run_answer_interpreter(step, answer)
@@ -4015,7 +4007,7 @@ def run_agent_pipeline(
 
     # ── STEP 4: Doctor-Relevance ───────────────────────────────────
     dr_out = run_doctor_relevance(
-        step, answer, matched, prior_comp, session_answers, followup_count
+        step, answer, matched, prior_comp, session_answers, followup_count, candidate_next_step=candidate_next_step
     )
     if targeted_followup:
         dr_out = {
@@ -4102,6 +4094,9 @@ def run_agent_pipeline(
     acknowledgment = ""
     if adapt.get("acknowledgment_required") and adapt.get("acknowledgment_text"):
         acknowledgment = adapt["acknowledgment_text"]
+
+    # ── STEP 8b: Apply generic next-step suppression if appropriate ─
+    _apply_agent_next_step_action(topic_key, state, dr_out.get("next_step_action"))
 
     # ── STEP 9: Merge urgency and sentiment state ──────────────────
     _merge_sentiment_state(sentiment_out)
@@ -4490,13 +4485,22 @@ def _default_chatty_reply(
 ) -> str:
     """Fallback acknowledgment when agents are unavailable."""
     prev_same = _short_prev_answer(last_topic_data.get(step["id"])) if last_topic_data else ""
-    if prev_same and prev_same.lower() != answer.strip().lower():
-        return "I've noted that — it sounds a bit different from last time, which is helpful for your team to know."
-    if topic_key == "mood":
-        return "That sounds like a lot to carry. I've made a note of it for your care team."
-    if topic_key == "pain":
-        return "I've noted those pain details so your team can see exactly how it's been feeling."
-    return "I've noted that detail for your care team."
+    normalized = answer.strip().lower()
+    if prev_same and prev_same.lower() != normalized:
+        try:
+            prev_num = float(str(last_topic_data.get(step["id"])))
+            cur_num = float(str(answer))
+            if cur_num > prev_num:
+                return "I've noted that — this looks a bit higher than last time, which is helpful for your care team to know."
+            if cur_num < prev_num:
+                return "I've noted that — this looks a bit lower than last time, which is helpful for your care team to know."
+        except (TypeError, ValueError):
+            return "I've noted that — it sounds a bit different from last time, which is helpful for your team to know."
+
+    if _is_negative_screening_answer(answer):
+        return "Thanks for sharing that. I've noted that for your care team."
+
+    return "I've noted that for your care team."
 
 
 
@@ -4897,6 +4901,72 @@ def _maybe_skip_next_impact_question(topic_key: str, state: dict):
     state["raw_answers"][next_step["id"]] = "No"
 
 
+def _apply_agent_next_step_action(topic_key: str, state: dict, action: Optional[dict]):
+    if not action or not action.get("skip_immediate_next_step"):
+        return
+
+    next_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
+    if not next_step or next_step.get("type") != "options":
+        return
+
+    opts = next_step.get("opts", [])
+    suggested = action.get("suggested_answer")
+    if suggested in opts:
+        state["data"][next_step["id"]] = suggested
+        state["raw_answers"][next_step["id"]] = suggested
+        return
+
+    normalized_opts = {_norm_text(opt): opt for opt in opts}
+    if "no" in normalized_opts:
+        state["data"][next_step["id"]] = normalized_opts["no"]
+        state["raw_answers"][next_step["id"]] = normalized_opts["no"]
+        return
+
+    for opt in opts:
+        if _norm_text(opt).startswith("no"):
+            state["data"][next_step["id"]] = opt
+            state["raw_answers"][next_step["id"]] = opt
+            return
+
+
+def _apply_generic_fallback_next_step_action(topic_key: str, state: dict):
+    next_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
+    if not next_step or next_step.get("type") != "options":
+        return
+
+    text = _norm_text(next_step.get("text", ""))
+    opts = next_step.get("opts", [])
+    normalized_opts = {_norm_text(opt): opt for opt in opts}
+    raw_values = [_norm_text(str(v)) for v in state.get("raw_answers", {}).values() if str(v).strip()]
+
+    def choose_no():
+        if "no" in normalized_opts:
+            choice = normalized_opts["no"]
+            state["data"][next_step["id"]] = choice
+            state["raw_answers"][next_step["id"]] = choice
+            return True
+        for opt in opts:
+            if _norm_text(opt).startswith("no"):
+                state["data"][next_step["id"]] = opt
+                state["raw_answers"][next_step["id"]] = opt
+                return True
+        return False
+
+    treatment_markers = {
+        "using anything for it", "is it helping", "taking anything", "magic mouthwash",
+        "thrush medicine", "mouthwash", "helping enough",
+    }
+    minimal_problem_markers = {
+        "no pain just noticed it", "not painful", "just noticed it", "not really bothering",
+        "little but manageable", "a little but manageable",
+    }
+    if any(marker in text for marker in treatment_markers) and any(
+        any(flag in value for flag in minimal_problem_markers) for value in raw_values
+    ):
+        if choose_no():
+            return
+
+
 def _maybe_apply_prompt_driven_skip(topic_key: str, state: dict, pipeline: dict):
     special = pipeline.get("special_signals", {}) or {}
     if not special.get("screen_negative_signal"):
@@ -5127,7 +5197,7 @@ def handle_answer(
     # source="structured" means the patient clicked a predefined option —
     # it is already a clean matched answer, no LLM classification needed.
     # ══════════════════════════════════════════════════════════════
-    if source == "structured":
+    if source == "structured" and not isinstance(answer, str):
         if topic_is_complete(topic_key, state["data"], state.get("raw_answers")):
             state["status"] = "completed"
             state["chat"].append({
@@ -5158,6 +5228,7 @@ def handle_answer(
             assistant_message = binary_override.get("assistant_message", _default_chatty_reply(topic_key, answer, step, last_topic_data))
             if _is_negative_screening_answer(answer):
                 _maybe_skip_next_impact_question(topic_key, state)
+                _apply_generic_fallback_next_step_action(topic_key, state)
                 next_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
             if topic_is_complete(topic_key, state["data"], state.get("raw_answers")):
                 state["status"] = "completed"
@@ -5271,6 +5342,8 @@ def handle_answer(
             assistant_message = _default_chatty_reply(
                 topic_key, answer, step, last_topic_data
             )
+            _apply_generic_fallback_next_step_action(topic_key, state)
+            next_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
 
     else:
         # Non-string answer (numeric, list from multi_select on structured path)
