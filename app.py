@@ -184,6 +184,56 @@ def _needs_head_neck_followup(text: str) -> bool:
     return bool(words & focused_terms)
 
 
+def _indicates_no_low_mood(text: str) -> bool:
+    normalized = _norm_text(text)
+    if not normalized:
+        return False
+
+    explicit_phrases = {
+        "no low mood",
+        "not feeling down",
+        "not depressed",
+        "i am not depressed",
+        "i m not depressed",
+        "i dont feel down",
+        "i do not feel down",
+        "i dont have low mood",
+        "i do not have low mood",
+        "my mood is okay",
+        "my mood is fine",
+        "emotionally okay",
+        "emotionally fine",
+        "doing okay emotionally",
+        "doing fine emotionally",
+        "i feel okay",
+        "i feel fine",
+    }
+    if normalized in {"okay", "ok", "fine", "good"}:
+        return True
+    if "low mood" in normalized and any(token in normalized for token in {"no", "not", "dont", "don t"}):
+        return True
+    if "depressed" in normalized and any(token in normalized for token in {"no", "not", "dont", "don t"}):
+        return True
+    if "feeling down" in normalized and any(token in normalized for token in {"no", "not", "dont", "don t"}):
+        return True
+    return any(phrase in normalized for phrase in explicit_phrases)
+
+
+def _format_prior_answer_for_prompt(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, list):
+        value = ", ".join(str(v) for v in value)
+    text = str(value).strip()
+    if not text:
+        return ""
+    if re.fullmatch(r"\d+(\.\d+)?", text):
+        return text
+    if len(text) > 80:
+        text = text[:77] + "..."
+    return text
+
+
 def _match_binary_option(step: dict, user_input: str) -> Optional[str]:
     opts = step.get("opts", [])
     if len(opts) != 2:
@@ -1738,6 +1788,24 @@ def _dynamic_step_text(topic_key: Optional[str], step: dict, state: Optional[dic
     if not state:
         return question_text
 
+    prior_topic_data = st.session_state.get("last_checkin", {}).get(topic_key or "", {})
+    if step["id"] == "weight_impact":
+        prior_weight = prior_topic_data.get("weight")
+        current_weight = state.get("data", {}).get("weight")
+        if prior_weight not in (None, "") and current_weight not in (None, ""):
+            question_text = (
+                f"Last visit your weight was {prior_weight} pounds, and today you entered "
+                f"{current_weight} pounds. Has that weight change been affecting how you feel or your energy levels?"
+            )
+
+    prior_value = prior_topic_data.get(step["id"])
+    prior_text = _format_prior_answer_for_prompt(prior_value)
+    if prior_text:
+        if step["id"] == "weight":
+            question_text = f"Last visit your weight was {prior_text} pounds. {question_text}"
+        else:
+            question_text = f"Last visit you reported {prior_text}. {question_text}"
+
     raw_answers = state.get("raw_answers", {})
     prev_step = _previous_step_in_flow(topic_key or "", step.get("id", ""))
     prev_raw = str(raw_answers.get(prev_step["id"], "")).strip() if prev_step else ""
@@ -3171,6 +3239,12 @@ def _step_is_relevant(topic_key: str, step: dict, data: dict, raw_answers: Optio
     if topic_key == "fatigue":
         if step_id == "drowsy_schedule":
             return data.get("sleep_quality") == "No" and data.get("medication_drowsy") in {"Yes", "Sometimes"}
+
+    if topic_key == "mood":
+        if step_id == "feeling_down":
+            emotional_state = str(data.get("emotional_state") or raw_answers.get("emotional_state", ""))
+            if data.get("anxiety_impact") == "No" and _indicates_no_low_mood(emotional_state):
+                return False
 
     if topic_key == "nutrition":
         if step_id == "pain_med_timing":
