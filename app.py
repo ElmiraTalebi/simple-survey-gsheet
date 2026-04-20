@@ -193,6 +193,30 @@ _FREQUENCY_HINTS = {
     "as needed", "prn",
 }
 
+_UNKNOWN_PHRASES = {
+    "dont remember", "i dont remember", "do not remember", "not sure", "unsure",
+    "no idea", "unknown", "cant remember", "cannot remember", "dont know",
+    "i dont know", "not sure about", "not sure exactly", "i forget", "forgot",
+}
+
+_OPTION_ALIAS_HINTS = {
+    "schedule": ["forget", "forgot", "late", "on time", "timing", "routine", "remember"],
+    "side effects": ["side effect", "nausea", "drowsy", "sleepy", "constipated", "makes me sick", "dizzy"],
+    "access issues": ["cost", "insurance", "refill", "pharmacy", "ran out", "couldnt get", "could not get"],
+    "no appetite": ["no appetite", "not hungry", "appetite"],
+    "nausea": ["nausea", "nauseous", "sick to my stomach"],
+    "too tired to prepare food": ["too tired", "no energy", "too exhausted"],
+    "pain when eating/swallowing": ["pain when swallowing", "hurts to swallow", "hurts to eat", "pain eating"],
+    "dry mouth": ["dry mouth", "mouth is dry"],
+    "pain": ["pain", "hurts", "ache", "aching", "sore"],
+    "fatigue": ["fatigue", "tired", "exhausted", "worn out", "weak"],
+    "treatment side effects": ["treatment", "radiation", "chemo", "chemotherapy", "side effect"],
+    "energy levels": ["energy", "tired", "fatigue", "exhausted"],
+    "family, friends, or caregivers": ["family", "friend", "caregiver", "wife", "husband", "daughter", "son", "mom", "dad"],
+    "yes, it helps": ["helps", "working", "better"],
+    "yes, but it's not enough": ["not enough", "barely helps", "helps a little", "still hurts", "still not enough"],
+}
+
 
 def _has_frequency_info(text: str) -> bool:
     normalized = _norm_text(text)
@@ -207,6 +231,15 @@ def _has_frequency_info(text: str) -> bool:
     return False
 
 
+def _is_unknown_answer(text: str) -> bool:
+    normalized = _norm_text(text)
+    if not normalized:
+        return False
+    if normalized in _UNKNOWN_PHRASES:
+        return True
+    return any(phrase in normalized for phrase in _UNKNOWN_PHRASES)
+
+
 def _has_dose_info(text: str) -> bool:
     normalized = _norm_text(text)
     if not normalized:
@@ -218,13 +251,152 @@ def _has_dose_info(text: str) -> bool:
     return False
 
 
+def _has_amount_info(text: str) -> bool:
+    normalized = _norm_text(text)
+    if not normalized:
+        return False
+    if re.search(r"\b\d+\b", normalized):
+        return True
+    return any(token in normalized for token in {"small", "little", "a lot", "large", "amount", "few", "several"})
+
+
+def _has_helping_info(text: str) -> bool:
+    normalized = _norm_text(text)
+    if not normalized:
+        return False
+    return any(
+        phrase in normalized
+        for phrase in {"help", "helping", "helps", "working", "works", "not enough", "doesnt help", "does not help", "no relief", "better", "worse"}
+    )
+
+
+def _has_management_info(text: str) -> bool:
+    normalized = _norm_text(text)
+    if not normalized:
+        return False
+    return bool(
+        re.search(r"\b(take|taking|use|using|used|try|trying|on|take|drink|drinking)\b", normalized)
+        or re.search(r"\b\d+\s*(mg|mcg|g|ml)\b", normalized)
+        or any(word in normalized for word in {"zofran", "imodium", "miralax", "senna", "gabapentin", "oxycodone", "advil", "tylenol", "motrin", "rinse", "mouthwash"})
+    )
+
+
+def _previous_step_in_flow(topic_key: str, step_id: str) -> Optional[dict]:
+    flow = FLOWS.get(topic_key, [])
+    prev = None
+    for step in flow:
+        if step["id"] == step_id:
+            return prev
+        prev = step
+    return None
+
+
+def _contextualize_raw_phrase(text: str, max_words: int = 8) -> str:
+    normalized = " ".join(str(text or "").strip().split())
+    if not normalized:
+        return ""
+    words = normalized.split()
+    if len(words) > max_words:
+        normalized = " ".join(words[:max_words]) + "..."
+    return normalized
+
+
+def _infer_option_from_text(step: dict, user_input: str) -> Optional[str]:
+    binary = _match_binary_option(step, user_input)
+    if binary:
+        return binary
+
+    normalized = _norm_text(user_input)
+    if not normalized or not step.get("opts"):
+        return None
+
+    for opt in step.get("opts", []):
+        opt_norm = _norm_text(opt)
+        if not opt_norm:
+            continue
+        if opt_norm in normalized:
+            return opt
+        aliases = _OPTION_ALIAS_HINTS.get(opt_norm, [])
+        if any(alias in normalized for alias in aliases):
+            return opt
+    return None
+
+
+def _has_location_info(text: str) -> bool:
+    normalized = _norm_text(text)
+    return bool(normalized) and (_looks_like_body_location(text) or any(
+        token in normalized for token in {"inside", "outside", "left", "right", "back", "front", "near", "around"}
+    ))
+
+
+def _has_start_time_info(text: str) -> bool:
+    normalized = _norm_text(text)
+    if not normalized:
+        return False
+    return any(
+        token in normalized
+        for token in {"today", "yesterday", "week", "weeks", "month", "months", "day", "days", "ago", "since", "started", "begin", "began"}
+    )
+
+
+def _has_support_info(text: str) -> bool:
+    normalized = _norm_text(text)
+    return any(
+        token in normalized
+        for token in {"family", "friend", "caregiver", "wife", "husband", "daughter", "son", "mom", "dad", "sister", "brother", "partner"}
+    )
+
+
+def _has_reason_info(text: str) -> bool:
+    normalized = _norm_text(text)
+    if not normalized:
+        return False
+    return len(normalized.split()) >= 3 or any(
+        token in normalized
+        for token in {
+            "because", "due to", "from", "since", "hard", "difficult", "forget", "forgot", "pain",
+            "fatigue", "tired", "nausea", "dry mouth", "not hungry", "appetite", "schedule",
+            "cost", "insurance", "transportation", "side effect",
+        }
+    )
+
+
+def _has_specific_type_info(text: str) -> bool:
+    normalized = _norm_text(text)
+    return len(normalized.split()) >= 2 and not _is_unknown_answer(text)
+
+
+def _has_plain_yes_no_signal(text: str) -> bool:
+    return _match_binary_option({"opts": ["Yes", "No"]}, text) is not None
+
+
+DETECTORS_BY_KIND = {
+    "frequency": _has_frequency_info,
+    "dose": _has_dose_info,
+    "amount": _has_amount_info,
+    "helping": _has_helping_info,
+    "management": _has_management_info,
+    "location": _has_location_info,
+    "start_time": _has_start_time_info,
+    "support": _has_support_info,
+    "reason": _has_reason_info,
+    "specific_type": _has_specific_type_info,
+    "yes_no_signal": _has_plain_yes_no_signal,
+}
+
+
 def _best_known_pain_medication_label(state: dict) -> str:
     raw_answers = state.get("raw_answers", {})
     raw_text = str(raw_answers.get("pain_medications", "")).strip()
     if raw_text:
         cleaned = raw_text.strip(" .")
+        cleaned = re.sub(r"\b(nothing else|and nothing else|only|just)\b", " ", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"[,.]+", " ", cleaned)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
         if cleaned:
-            return cleaned
+            first_part = cleaned.split(" and ")[0].split(" but ")[0].strip()
+            if first_part:
+                return first_part.title()
 
     meds = state.get("data", {}).get("pain_medications") or []
     if isinstance(meds, list):
@@ -234,19 +406,98 @@ def _best_known_pain_medication_label(state: dict) -> str:
     return "that medication"
 
 
+def _dose_is_unknown(text: str) -> bool:
+    normalized = _norm_text(text)
+    if not normalized:
+        return False
+    return ("dose" in normalized and _is_unknown_answer(normalized)) or "no idea" in normalized
+
+
+def _generic_missing_detail_override(step: dict, answer: str, state: dict) -> dict[str, Any]:
+    question = _norm_text(step.get("text", ""))
+    if not question or not isinstance(answer, str):
+        return {}
+
+    if _is_unknown_answer(answer):
+        if any(token in question for token in {"when did", "how often", "what has your weight", "how high", "blood pressure", "what has your blood pressure", "when did it start", "where is", "where exactly", "what type", "which body part"}):
+            return {
+                "follow_up_recommended": False,
+                "follow_up_goal": None,
+                "assistant_message": "That's okay if you're not sure right now. I've noted that for your care team.",
+                "information_completeness": "partial",
+                "clinical_priority": "low",
+            }
+
+    if "what are you using" in question and "is it helping" in question:
+        has_management = _has_management_info(answer)
+        has_helping = _has_helping_info(answer)
+        if has_management and not has_helping:
+            return {
+                "follow_up_recommended": True,
+                "follow_up_goal": "Obtain whether the management strategy is helping.",
+                "follow_up_question": "Has that been helping at all?",
+                "information_completeness": "partial",
+                "clinical_priority": "medium",
+            }
+        if has_helping and not has_management:
+            return {
+                "follow_up_recommended": True,
+                "follow_up_goal": "Obtain what the patient is using to manage the symptom.",
+                "follow_up_question": "What have you been using for it?",
+                "information_completeness": "partial",
+                "clinical_priority": "medium",
+            }
+
+    if "how often" in question and "how much" in question:
+        has_freq = _has_frequency_info(answer)
+        has_amount = _has_amount_info(answer)
+        if has_freq and not has_amount and not _is_unknown_answer(answer):
+            return {
+                "follow_up_recommended": True,
+                "follow_up_goal": "Obtain the amount only; frequency was already provided.",
+                "follow_up_question": "About how much is it each time?",
+                "information_completeness": "partial",
+                "clinical_priority": "medium",
+            }
+        if has_amount and not has_freq and not _is_unknown_answer(answer):
+            return {
+                "follow_up_recommended": True,
+                "follow_up_goal": "Obtain the frequency only; amount was already provided.",
+                "follow_up_question": "How often has that been happening?",
+                "information_completeness": "partial",
+                "clinical_priority": "medium",
+            }
+
+    return {}
+
+
 def _targeted_followup_override(step: dict, answer: str, state: dict) -> dict[str, Any]:
+    generic = _generic_missing_detail_override(step, answer, state)
+    if generic:
+        return generic
+
     if step.get("id") != "med_dose_freq":
         return {}
 
     has_freq = _has_frequency_info(answer)
     has_dose = _has_dose_info(answer)
+    dose_unknown = _dose_is_unknown(answer)
     med_label = _best_known_pain_medication_label(state)
+
+    if has_freq and dose_unknown:
+        return {
+            "follow_up_recommended": False,
+            "follow_up_goal": None,
+            "assistant_message": f"That's okay if you don't remember the dose right now. I've noted that you take {med_label} almost every day.",
+            "information_completeness": "partial",
+            "clinical_priority": "low",
+        }
 
     if has_freq and not has_dose:
         return {
             "follow_up_recommended": True,
             "follow_up_goal": "Obtain the medication dose only; frequency was already provided.",
-            "follow_up_question": f"What dose of {med_label} do you usually take each time?",
+            "follow_up_question": f"About how much {med_label} do you usually take each time?",
             "information_completeness": "partial",
             "clinical_priority": "medium",
         }
@@ -354,6 +605,36 @@ def _build_retry_prompt(step: dict, user_input: str) -> str:
         )
 
     return "I didn’t find a clear match there. Could you please say it again or choose the closest option?"
+
+
+def _auto_capture_following_answers(topic_key: str, state: dict, seed_text: str):
+    text = (seed_text or "").strip()
+    if not text or _looks_vague_answer(text):
+        return
+
+    for _ in range(3):
+        next_step = get_next_step(topic_key, state["data"])
+        if not next_step or next_step.get("type") not in {"options", "multi_select"}:
+            return
+
+        inferred = None
+        if next_step["type"] == "options":
+            inferred = _infer_option_from_text(next_step, text)
+            if not inferred and len(_norm_text(text).split()) >= 3:
+                maybe = interpret_user_input_with_options(next_step, text)
+                if maybe in next_step.get("opts", []):
+                    inferred = maybe
+            if inferred in next_step.get("opts", []):
+                state["data"][next_step["id"]] = inferred
+                continue
+            return
+
+        if next_step["type"] == "multi_select":
+            parsed = parse_multi_select_typed_input(next_step, text)
+            if parsed:
+                state["data"][next_step["id"]] = parsed
+                continue
+            return
 
 
 
@@ -1116,9 +1397,54 @@ CONVERSATIONAL_QUESTION_BANK = {
 }
 
 
-def _step_prompt_text(step: dict) -> str:
+def _dynamic_step_text(topic_key: Optional[str], step: dict, state: Optional[dict] = None) -> str:
     question_text = CONVERSATIONAL_QUESTION_BANK.get(step["id"], step["text"])
-    if step.get("type") == "options":
+    if not state:
+        return question_text
+
+    raw_answers = state.get("raw_answers", {})
+    prev_step = _previous_step_in_flow(topic_key or "", step.get("id", ""))
+    prev_raw = str(raw_answers.get(prev_step["id"], "")).strip() if prev_step else ""
+    prev_phrase = _contextualize_raw_phrase(prev_raw)
+
+    if topic_key == "pain" and step.get("id") == "med_adherence_issue":
+        prior = _norm_text(str(raw_answers.get("taking_as_prescribed", "")))
+        if any(token in prior for token in {"forget", "forgot", "late", "on time", "timing", "schedule"}):
+            return "Is the main issue remembering to take them on time, or is something else getting in the way?"
+        if any(token in prior for token in {"side effect", "makes me sick", "too sleepy", "drowsy", "nausea"}):
+            return "Are the side effects the main reason it has been hard to take them, or is something else also part of it?"
+        if prior:
+            return "What has been getting in the way of taking them the way you planned?"
+
+    lower = _norm_text(question_text)
+    if prev_phrase:
+        if "what is stopping you" in lower:
+            return f"You mentioned {prev_phrase}. What feels like the biggest reason that's limiting you?"
+        if "what s making it hard" in lower or "what's making it hard" in lower:
+            return f"You mentioned {prev_phrase}. What's making that hardest right now?"
+        if "what activities are most difficult" in lower:
+            return f"From what you shared, what daily activities feel hardest right now?"
+        if "what kind of support would be most helpful" in lower:
+            return "What kind of help would feel most useful for you right now?"
+        if lower.startswith("is it helping"):
+            return "Has that been helping at all?"
+        if "where is the skin issue located" in lower:
+            return "Where on your body are you noticing that skin problem?"
+        if "who is supporting you" in lower:
+            return "Who has been helping support you between visits?"
+        if "what type are you using" in lower:
+            return "What kind have you been using?"
+        if "what is making it difficult to take your medications" in lower:
+            return "What has been making it hardest to take them regularly?"
+        if "is it painful to swallow, or just mechanically difficult" in lower:
+            return "Does swallowing feel painful, or does it feel like things just don't go down well?"
+
+    return question_text
+
+
+def _step_prompt_text(step: dict, topic_key: Optional[str] = None, state: Optional[dict] = None) -> str:
+    question_text = _dynamic_step_text(topic_key, step, state)
+    if step.get("type") == "options" and step.get("id") != "med_adherence_issue":
         question_text += " (Choose an option below, or answer in your own words if that fits better.)"
     return question_text
 
@@ -2828,7 +3154,13 @@ def _build_session_answers(topic_key: str) -> dict:
     """Build {question_id: raw_answer} from current session state for the topic."""
     state = st.session_state.topic_states.get(topic_key, {})
     data = state.get("data", {})
-    return {k: str(v) for k, v in data.items() if v is not None}
+    raw_answers = state.get("raw_answers", {})
+    payload = {}
+    for k, v in data.items():
+        if v is None:
+            continue
+        payload[k] = str(raw_answers.get(k, v))
+    return payload
 
 
 def _build_prior_baseline(topic_key: str) -> dict:
@@ -3012,7 +3344,9 @@ def run_agent_pipeline(
         emotional    = sentiment_out.get("emotional_state", "neutral")
 
         # Build a brief contextual acknowledgment
-        if comp_note and change_dir in ("worsened", "improved") and prev_answer:
+        if targeted_followup.get("assistant_message"):
+            assistant_message = targeted_followup["assistant_message"]
+        elif comp_note and change_dir in ("worsened", "improved") and prev_answer:
             assistant_message = comp_note
         elif emotional == "distressed":
             assistant_message = "That sounds really difficult. I've made a note of this for your care team."
@@ -3163,6 +3497,10 @@ def interpret_user_input_with_options(step, user_input):
     binary_match = _match_binary_option(step, user_input)
     if binary_match:
         return binary_match
+
+    alias_match = _infer_option_from_text(step, user_input)
+    if alias_match:
+        return alias_match
 
     if step.get("id") == "pain_location":
         normalized = _norm_text(user_input)
@@ -3783,12 +4121,13 @@ def _freeform_llm_response(messages: list) -> str:
 # ══════════════════════════════════════════════════════════════════
 
 def _append_next_question(
+    topic_key: str,
     state: dict,
     next_step: Optional[dict],
     assistant_message: str = "",
 ):
     message = assistant_message.strip()
-    next_text = _step_prompt_text(next_step) if next_step else ""
+    next_text = _step_prompt_text(next_step, topic_key=topic_key, state=state) if next_step else ""
     if message and next_text and _is_semantically_redundant_question(message, next_text):
         message = ""
     if message:
@@ -3912,7 +4251,7 @@ def handle_pending_followup(topic_key: str, answer: str, source: str = "typed"):
             "content": f"{closing}\n\n✅ Thank you — I have everything I need for this topic."
         })
     else:
-        _append_next_question(state, next_step, closing)
+        _append_next_question(topic_key, state, next_step, closing)
 
     st.rerun()
     return
@@ -3949,6 +4288,8 @@ def handle_answer(
         state["raw_answers"][step["id"]] = verbatim.strip()
     answer = _coerce_structured_answer(topic_key, step, answer, state["data"], raw_answer=raw_answer)
     state["data"][step["id"]] = answer
+    if isinstance(verbatim, str):
+        _auto_capture_following_answers(topic_key, state, verbatim)
     next_step = get_next_step(topic_key, state["data"])
     state["status"] = "in_progress"
 
@@ -3968,7 +4309,7 @@ def handle_answer(
             })
             st.rerun()
             return
-        _append_next_question(state, next_step)
+        _append_next_question(topic_key, state, next_step)
         st.rerun()
         return
 
@@ -4078,7 +4419,7 @@ def handle_answer(
         st.rerun()
         return
 
-    _append_next_question(state, next_step, assistant_message)
+    _append_next_question(topic_key, state, next_step, assistant_message)
     st.rerun()
     return
 
@@ -4394,7 +4735,7 @@ def render_topic_detail(topic_label: str, topic_key: str):
         state["chat"] = [{"role": "assistant", "content": intro}]
         first_step = get_next_step(topic_key, state["data"])
         if first_step:
-            _append_assistant_message(state, _step_prompt_text(first_step))
+            _append_assistant_message(state, _step_prompt_text(first_step, topic_key=topic_key, state=state))
 
     # ── Header with progress bar ─────────────────────────────────
     answered, applicable = get_topic_progress(topic_key, state["data"])
@@ -4462,7 +4803,7 @@ def render_topic_detail(topic_label: str, topic_key: str):
     if next_step:
         # Look up previous answer for this specific question
         prev_answer = last_data.get(next_step["id"]) if last_data else None
-        _append_assistant_message(state, _step_prompt_text(next_step))
+        _append_assistant_message(state, _step_prompt_text(next_step, topic_key=topic_key, state=state))
         render_input(topic_key, next_step, prev_answer=prev_answer)
 
 
