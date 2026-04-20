@@ -900,48 +900,157 @@ div[data-baseweb="select"] > div {
     border-left: none;
 }
 
+.chat-shell {
+    background:
+        radial-gradient(circle at top right, rgba(15,108,189,0.07), transparent 32%),
+        linear-gradient(180deg, rgba(255,255,255,0.96) 0%, rgba(248,251,254,0.98) 100%);
+    border: 1px solid #d9e6f0;
+    border-radius: 30px;
+    padding: 0;
+    overflow: hidden;
+    box-shadow: 0 24px 60px rgba(23, 50, 74, 0.09);
+    margin-top: 8px;
+}
+
+.chat-shell-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 18px 20px 16px 20px;
+    border-bottom: 1px solid #e2ebf2;
+    background: linear-gradient(180deg, rgba(255,255,255,0.92) 0%, rgba(245,249,252,0.9) 100%);
+}
+
+.chat-shell-title {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.chat-shell-avatar {
+    width: 44px;
+    height: 44px;
+    border-radius: 14px;
+    background: linear-gradient(135deg, #0f6cbd 0%, #26a69a 100%);
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+    box-shadow: 0 12px 28px rgba(15,108,189,0.22);
+}
+
+.chat-shell-title-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.chat-shell-label {
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #6e8497;
+}
+
+.chat-shell-name {
+    font-family: 'Manrope', sans-serif;
+    font-size: 18px;
+    font-weight: 800;
+    color: #143551;
+    letter-spacing: -0.03em;
+}
+
+.chat-shell-note {
+    font-size: 12px;
+    color: #607589;
+    background: #f3f8fb;
+    border: 1px solid #dbe8f1;
+    border-radius: 999px;
+    padding: 8px 12px;
+}
+
+.chat-history {
+    padding: 18px 18px 12px 18px;
+    min-height: 420px;
+    background:
+        linear-gradient(180deg, rgba(250,252,254,0.88) 0%, rgba(244,248,252,0.92) 100%);
+}
+
+.composer-wrap {
+    padding: 0 16px 16px 16px;
+    background: transparent;
+}
+
 .chat-row {
     display: flex !important;
     width: 100% !important;
-    margin-bottom: 10px;
-    align-items: flex-start;
+    margin-bottom: 14px;
+    align-items: flex-end;
 }
 
 .chat-row.assistant {
     justify-content: flex-start !important;
-    padding-right: 24%;
+    padding-right: 18%;
 }
 
 .chat-row.user {
     justify-content: flex-end !important;
-    padding-left: 24%;
+    padding-left: 18%;
+}
+
+.chat-bubble-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-width: min(78%, 720px);
+}
+
+.chat-row.user .chat-bubble-wrap {
+    align-items: flex-end;
+}
+
+.chat-row.assistant .chat-bubble-wrap {
+    align-items: flex-start;
+}
+
+.chat-role {
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #70889d;
+    padding: 0 6px;
 }
 
 .chat-bubble {
     display: inline-block;
     width: auto !important;
-    max-width: min(72%, 680px);
-    border-radius: 16px;
-    padding: 0.8rem 0.95rem;
-    border: 1px solid rgba(215, 228, 239, 0.9);
-    background: #ffffff;
-    line-height: 1.65;
+    max-width: 100%;
+    border-radius: 22px;
+    padding: 0.92rem 1.02rem;
+    border: 1px solid rgba(215, 228, 239, 0.95);
+    line-height: 1.68;
     white-space: pre-wrap;
     word-break: break-word;
+    font-size: 14.5px;
+    box-shadow: 0 12px 28px rgba(23, 50, 74, 0.06);
 }
 
 .chat-row.assistant .chat-bubble {
-    margin-left: 0 !important;
-    margin-right: auto !important;
-    border-left: 3px solid #b7d5eb;
+    background: #ffffff;
+    color: #17324a;
+    border-top-left-radius: 10px;
 }
 
 .chat-row.user .chat-bubble {
-    margin-left: auto !important;
-    margin-right: 0 !important;
-    background: #f8fbfe;
-    border-left: none;
-    border-right: 3px solid #0f6cbd;
+    background: linear-gradient(135deg, #0f6cbd 0%, #167ac7 100%);
+    color: #ffffff;
+    border-color: rgba(15, 108, 189, 0.35);
+    border-top-right-radius: 10px;
+    box-shadow: 0 16px 30px rgba(15,108,189,0.18);
 }
 
 /* ── Topic status pills ── */
@@ -974,14 +1083,6 @@ div[data-baseweb="select"] > div {
     border-radius: 20px;
     padding: 18px 18px;
     box-shadow: var(--shadow-sm);
-}
-
-.chat-shell {
-    background: rgba(255,255,255,0.82);
-    border: 1px solid var(--border);
-    border-radius: 24px;
-    padding: 14px;
-    box-shadow: var(--shadow);
 }
 
 .assistant-chip {
@@ -1253,15 +1354,16 @@ div[data-baseweb="select"] > div {
 }
 
 .composer-shell {
-    background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
+    background: rgba(255,255,255,0.92);
     border: 1px solid #d9e4ed;
-    border-radius: 24px;
-    padding: 10px;
-    box-shadow: 0 12px 26px rgba(23, 50, 74, 0.05);
+    border-radius: 26px;
+    padding: 12px;
+    box-shadow: 0 18px 36px rgba(23, 50, 74, 0.08);
+    backdrop-filter: blur(10px);
 }
 
 .composer-shell.compact {
-    padding: 8px;
+    padding: 12px;
 }
 
 
@@ -1293,12 +1395,21 @@ div[data-baseweb="select"] > div {
 }
 
 .composer-shell div[data-testid="stButton"] > button {
-    width: auto !important;
+    width: 100% !important;
     min-width: 0 !important;
-    padding: 0.46rem 0.9rem !important;
-    border-radius: 999px !important;
+    padding: 0.72rem 0.95rem !important;
+    border-radius: 16px !important;
     font-size: 13px !important;
-    box-shadow: none !important;
+    font-weight: 700 !important;
+    box-shadow: 0 8px 18px rgba(23, 50, 74, 0.06) !important;
+    background: linear-gradient(180deg, #ffffff 0%, #f7fbfe 100%) !important;
+    border: 1px solid #d9e4ed !important;
+}
+
+.composer-shell div[data-testid="stButton"] > button:hover {
+    transform: translateY(-1px);
+    border-color: #9fc1dd !important;
+    color: #10375a !important;
 }
 
 .composer-shell div[data-baseweb="select"] > div {
@@ -1316,8 +1427,11 @@ div[data-baseweb="select"] > div {
 }
 
 .composer-shell [data-testid="stTextInput"] input {
-    min-height: 46px !important;
-    height: 46px !important;
+    min-height: 52px !important;
+    height: 52px !important;
+    background: #f9fcff !important;
+    border: 1px solid #d6e4ef !important;
+    padding-left: 16px !important;
 }
 
 .composer-shell [data-testid="stSelectbox"] {
@@ -1336,7 +1450,7 @@ div[data-baseweb="select"] > div {
     align-items: center;
     justify-content: center;
     padding: 0;
-    margin: 6px 0 0 0;
+    margin: 10px 0 0 0;
     box-shadow: none !important;
 }
 
@@ -1353,13 +1467,46 @@ div[data-baseweb="select"] > div {
 .composer-shell [data-testid="stAudioInput"] button {
     border-radius: 16px !important;
     width: 100% !important;
-    height: 46px !important;
+    height: 48px !important;
     min-width: 100% !important;
     padding: 0 !important;
     margin: 0 !important;
     border: 1px solid #d7e4ee !important;
     background: linear-gradient(180deg, #ffffff 0%, #f5f9fd 100%) !important;
     box-shadow: 0 8px 18px rgba(23, 50, 74, 0.08) !important;
+}
+
+@media (max-width: 768px) {
+    .chat-shell {
+        border-radius: 24px;
+    }
+
+    .chat-shell-header {
+        padding: 15px 14px 13px 14px;
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
+    .chat-history {
+        padding: 14px 12px 10px 12px;
+        min-height: 360px;
+    }
+
+    .composer-wrap {
+        padding: 0 12px 12px 12px;
+    }
+
+    .chat-row.assistant {
+        padding-right: 10%;
+    }
+
+    .chat-row.user {
+        padding-left: 10%;
+    }
+
+    .chat-bubble-wrap {
+        max-width: 92%;
+    }
 }
 
 .composer-shell [data-testid="stAudioInput"] button::before {
@@ -1499,8 +1646,14 @@ def _append_assistant_message(state: dict, text: str):
 def render_chat_bubble(role: str, content: str):
     safe = _html.escape(content or "").replace("\n", "<br>")
     role_cls = "user" if role == "user" else "assistant"
+    role_label = "You" if role == "user" else "Care Assistant"
     st.markdown(
-        f'<div class="chat-row {role_cls}"><div class="chat-bubble">{safe}</div></div>',
+        f'<div class="chat-row {role_cls}">'
+        f'  <div class="chat-bubble-wrap">'
+        f'    <div class="chat-role">{role_label}</div>'
+        f'    <div class="chat-bubble">{safe}</div>'
+        f'  </div>'
+        f'</div>',
         unsafe_allow_html=True,
     )
 
@@ -4419,11 +4572,7 @@ def _clear_step_inputs(topic_key: str, step: dict):
         ])
 
     for key in keys_to_clear:
-        if key in st.session_state:
-            if key.startswith("dropdown_"):
-                st.session_state[key] = "Select an option..."
-            else:
-                st.session_state[key] = ""
+        st.session_state.pop(key, None)
 
 
 def handle_pending_followup(topic_key: str, answer: str, source: str = "typed"):
@@ -4877,10 +5026,20 @@ def render_freeform_chat():
         }
     })();
     </script>""", height=0)
-    st.subheader("Anything else you’d like to share?")
-    st.caption(
-        "Mention any other symptoms, questions, or concerns you’d like your care team "
-        "to know about before your visit."
+    st.markdown(
+        '<div class="chat-shell">'
+        '  <div class="chat-shell-header">'
+        '    <div class="chat-shell-title">'
+        '      <div class="chat-shell-avatar">💬</div>'
+        '      <div class="chat-shell-title-text">'
+        '        <div class="chat-shell-label">Open Conversation</div>'
+        '        <div class="chat-shell-name">Anything else you’d like to share?</div>'
+        '      </div>'
+        '    </div>'
+        '    <div class="chat-shell-note">Share symptoms, concerns, or questions for your team</div>'
+        '  </div>'
+        '  <div class="chat-history">',
+        unsafe_allow_html=True,
     )
 
     # ── Initialise conversation ──────────────────────────────────
@@ -4896,6 +5055,8 @@ def render_freeform_chat():
     with chat_container:
         for msg in st.session_state.freeform_chat:
             render_chat_bubble(msg["role"], msg["content"])
+
+    st.markdown('</div><div class="composer-wrap">', unsafe_allow_html=True)
 
     # ── Input ────────────────────────────────────────────────────
     user_input = st.chat_input("Type here, or use the voice button below…",
@@ -4930,6 +5091,7 @@ def render_freeform_chat():
                 {"role": "assistant", "content": reply}
             )
             st.rerun()
+    st.markdown('</div></div>', unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -4981,12 +5143,22 @@ def render_topic_detail(topic_label: str, topic_key: str):
 
     # ── Header with progress bar ─────────────────────────────────
     answered, applicable = get_topic_progress(topic_key, state["data"])
-    col_title, col_prog = st.columns([3, 1])
-    with col_title:
-        st.subheader(topic_label)
-    with col_prog:
-        if applicable > 0:
-            st.caption(f"{answered}/{applicable} answered")
+    progress_note = f"{answered}/{applicable} answered" if applicable > 0 else "Getting started"
+    st.markdown(
+        '<div class="chat-shell">'
+        '  <div class="chat-shell-header">'
+        '    <div class="chat-shell-title">'
+        '      <div class="chat-shell-avatar">🩺</div>'
+        '      <div class="chat-shell-title-text">'
+        f'        <div class="chat-shell-label">Topic Check-In</div>'
+        f'        <div class="chat-shell-name">{_html.escape(topic_label)}</div>'
+        '      </div>'
+        '    </div>'
+        f'    <div class="chat-shell-note">{_html.escape(progress_note)}</div>'
+        '  </div>'
+        '  <div class="chat-history">',
+        unsafe_allow_html=True,
+    )
 
     # ── Chat history ─────────────────────────────────────────────
     if state["chat"]:
@@ -5008,6 +5180,7 @@ def render_topic_detail(topic_label: str, topic_key: str):
             })
             state["data"].pop("_correction_note", None)
             st.rerun()
+        st.markdown('</div><div class="composer-wrap"></div></div>', unsafe_allow_html=True)
         return
 
     # ── Current question ─────────────────────────────────────────
@@ -5019,6 +5192,7 @@ def render_topic_detail(topic_label: str, topic_key: str):
         if pending_key not in st.session_state:
             st.session_state[pending_key] = ""
         _, composer_col = st.columns([1.05, 0.95])
+        st.markdown('</div><div class="composer-wrap">', unsafe_allow_html=True)
 
         with composer_col:
             st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
@@ -5040,13 +5214,16 @@ def render_topic_detail(topic_label: str, topic_key: str):
                 handle_pending_followup(topic_key, pending_text, source="followup")
 
             st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown('</div></div>', unsafe_allow_html=True)
         return
     next_step = get_next_step(topic_key, state["data"])
     if next_step:
         # Look up previous answer for this specific question
         prev_answer = last_data.get(next_step["id"]) if last_data else None
         _append_assistant_message(state, _step_prompt_text(next_step, topic_key=topic_key, state=state))
+        st.markdown('</div><div class="composer-wrap">', unsafe_allow_html=True)
         render_input(topic_key, next_step, prev_answer=prev_answer)
+        st.markdown('</div></div>', unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════════════════════════════
