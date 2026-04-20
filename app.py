@@ -107,10 +107,16 @@ def _coerce_structured_answer(topic_key: str, step: dict, answer: Any, current_d
 
     if topic_key == "pain" and step["id"] == "pain_location":
         normalized = _norm_text(raw)
-        if normalized in {"throat", "my throat"}:
+        # Specific HNC locations — match broadly (not just exact phrases)
+        if any(w in normalized for w in ("throat", "pharynx", "larynx", "voice box")):
             return "Throat"
-        if normalized in {"tongue", "my tongue"}:
+        if any(w in normalized for w in ("tongue", "lingual")):
             return "Tongue"
+        # Already a clean option value — pass through unchanged
+        if raw in ("Throat", "Tongue", "Somewhere else"):
+            return raw
+        # Everything else: it's a real location the patient named → preserve it
+        # and classify as "Somewhere else" so the flowchart continues correctly
         current_data["other_pain_desc"] = raw
         return "Somewhere else"
 
@@ -2076,21 +2082,46 @@ Your ONLY job: classify a patient's free-text answer for the current question.
 
 MATCHING RULES:
 1. EXACT MATCH — case-insensitive, ignore minor punctuation → match_type "exact"
-2. IMPLICIT/SEMANTIC MATCH — use natural language understanding; do NOT use a rigid
-   synonym list. Ask: does the answer clearly and unambiguously imply one option?
+
+2. IMPLICIT/SEMANTIC MATCH — use natural language understanding to determine if the
+   answer clearly and unambiguously implies one specific option.
    Exception for severity questions: map numbers to ranges:
      0 → "0 — No pain/None", 1-3 → Mild, 4-6 → Moderate, 7-9 → Severe/High, 10 → Worst
-3. AMBIGUITY — two or more options equally plausible → match_type "no_match", list candidates
-4. NO MATCH — cannot map reliably → match_type "no_match"
-5. SPECIAL STATES:
+
+3. CATCH-ALL OPTION RULE (CRITICAL) — if the options list contains a catch-all such
+   as "Somewhere else", "Other", "None of these", or "Something else", AND the
+   patient's answer does not match any specific option but IS a valid, meaningful
+   response to the question, you MUST map it to the catch-all option.
+   - match_type = "implicit", confidence = 0.85
+   - Examples for options ["Throat", "Tongue", "Somewhere else"]:
+       "headache" → "Somewhere else"   (it's a valid pain location, just not listed)
+       "my hand"  → "Somewhere else"
+       "jaw"      → "Somewhere else"
+       "shoulder" → "Somewhere else"
+       "ear"      → "Somewhere else"
+       "neck"     → "Somewhere else"
+   - Examples for options ["Gabapentin", "Oxycodone", "Other"]:
+       "Tylenol"  → "Other"
+       "ibuprofen"→ "Other"
+   NEVER return no_match when a catch-all option exists and the answer is a
+   recognisable, meaningful response to the question asked.
+
+4. AMBIGUITY — two or more SPECIFIC (non-catch-all) options equally plausible
+   → match_type "no_match", list candidates
+
+5. NO MATCH — answer is completely unrelated/nonsensical AND no catch-all exists
+   → match_type "no_match"
+
+6. SPECIAL STATES:
    a) DISTRESS FLAG: any expression of being unable to cope, hopelessness, suicidal
       ideation → distress_flag true
    b) URGENCY FLAG: sudden severe pain, breathing difficulty, "worst of my life",
       fever with chills, bleeding, or any red flag symptom → urgency_flag true
-   c) OFF-TOPIC: unrelated answer → match_type "off_topic"
+   c) OFF-TOPIC: answer is entirely unrelated to the question (e.g. patient asks
+      about appointment scheduling when asked about pain location) → match_type "off_topic"
    d) INVALID: empty or gibberish → match_type "invalid"
 
-CONFIDENCE: 1.0 exact, 0.7-0.95 strong implicit, <0.7 → no_match instead.
+CONFIDENCE: 1.0 exact, 0.85-0.95 strong implicit, 0.85 catch-all, <0.7 → no_match.
 matched_option MUST be copied VERBATIM from options list, or null.
 
 Return ONLY valid JSON:
@@ -2841,20 +2872,49 @@ def _merge_sentiment_state(sentiment_out: dict):
 # LEGACY SUPPORT: keep interpret_user_input_with_options working
 # ══════════════════════════════════════════════════════════════════
 
+# Keywords that identify a catch-all option in any question
+_CATCHALL_KEYWORDS = {"somewhere else", "other", "none of these", "something else"}
+
+
+def _catchall_fallback(step: dict, user_input: str) -> str:
+    """
+    If the step has a catch-all option (Somewhere else / Other / None of these),
+    return it for any answer that looks like a genuine (non-vague) response.
+    This is the last-resort safety net so patients never get stuck in a retry loop
+    when they name something real that just isn't one of the specific listed options.
+    """
+    opts = step.get("opts", [])
+    for opt in opts:
+        if any(kw in opt.lower() for kw in _CATCHALL_KEYWORDS):
+            # Only use catch-all if the answer is not empty/gibberish
+            if user_input.strip() and not _looks_vague_answer(user_input):
+                return opt
+    return user_input
+
+
 def interpret_user_input_with_options(step, user_input):
     """
-    Legacy wrapper: use the Answer Interpreter Agent to classify text.
+    Use the Answer Interpreter Agent to classify free-text against question options.
+    Falls back to the catch-all option (Somewhere else / Other) if the agent returns
+    no_match but a catch-all exists and the answer is a real, meaningful response.
     Returns matched option string if found, else original input.
     """
     if not openai_client:
-        return user_input
+        # No LLM available — still try catch-all fallback for valid answers
+        return _catchall_fallback(step, user_input)
+
     if not step.get("opts"):
         return user_input
+
     result = run_answer_interpreter(step, user_input)
     matched = result.get("matched_option")
+
+    # Agent found a valid specific match
     if matched and matched in step.get("opts", []):
         return matched
-    return user_input
+
+    # Agent returned no_match — apply catch-all safety net
+    return _catchall_fallback(step, user_input)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -3040,20 +3100,7 @@ def generate_report(name: str, all_data: dict) -> str:
         if note:
             sentiment_notes.append(note)
 
-    result = _call_agent(_REPORT_AGENT_SYS, {
-        "patient_name": name,
-        "report_date": today,
-        "symptom_data_by_topic": topic_summaries,
-        "freeform_notes": all_data.get("freeform_notes", []),
-        "urgency_tier": urg_tier,
-        "urgency_signals_active": urg_sigs,
-        "agent_doctor_notes": doctor_notes,
-        "patient_sentiment_notes": sentiment_notes,
-        "last_checkin_data": st.session_state.get("last_checkin", {}),
-    }, max_tokens=2500)
-
-    # _call_agent returns a dict — for the report we want plain text
-    # Fall back to _call_openai for the report since it's long prose
+    # Build prompt payload — note notes already collected above
     data_json = json.dumps({
         "patient_name": name,
         "report_date": today,
@@ -3621,9 +3668,11 @@ def handle_answer(
     last_topic_data = st.session_state.last_checkin.get(topic_key, {})
 
     # ══════════════════════════════════════════════════════════════
-    # BRANCH A — Structured button click (fast path, no agents)
+    # BRANCH A — Structured button / dropdown click (fast path, no agents)
+    # source="structured" means the patient clicked a predefined option —
+    # it is already a clean matched answer, no LLM classification needed.
     # ══════════════════════════════════════════════════════════════
-    if source == "structured" and isinstance(answer, (list, int)):
+    if source == "structured":
         if topic_is_complete(topic_key, state["data"]):
             state["status"] = "completed"
             state["chat"].append({
