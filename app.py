@@ -234,6 +234,71 @@ def _format_prior_answer_for_prompt(value: Any) -> str:
     return text
 
 
+def _natural_prior_memory(step_id: str, prior_text: str) -> str:
+    normalized = _norm_text(prior_text)
+    if not normalized:
+        return ""
+
+    if step_id == "has_pain":
+        if normalized == "yes":
+            return "You mentioned pain at your last visit."
+        if normalized == "no":
+            return "You weren't having pain at your last visit."
+
+    if step_id == "pain_location":
+        return f"Last time it sounded like it was more in your {prior_text.lower()}."
+
+    if step_id == "dry_mouth":
+        if normalized == "yes":
+            return "Dry mouth was bothering you last time."
+        if normalized == "no":
+            return "Dry mouth wasn't a big issue last time."
+
+    if step_id == "hearing_changes":
+        if normalized == "yes":
+            return "You were noticing hearing changes at your last visit."
+        if normalized == "no":
+            return "You weren't noticing hearing changes last time."
+
+    if step_id == "mouth_sores":
+        if normalized == "yes":
+            return "You had mouth sores at your last visit."
+        if normalized == "no":
+            return "You weren't dealing with mouth sores last time."
+
+    if step_id == "support_adequate":
+        if normalized == "yes":
+            return "Last time it sounded like support between visits was okay."
+        if normalized == "no":
+            return "Last time it sounded like support between visits was limited."
+
+    if step_id == "social_support_quality":
+        return f"Last time you described your support as {prior_text.lower()}."
+
+    if step_id == "emotional_state":
+        return f"Last time you described feeling {prior_text.lower()}."
+
+    if step_id == "eating_ability":
+        return f"Last time you were {prior_text.lower()}."
+
+    if step_id == "weight":
+        return f"Last time your weight was about {prior_text} pounds."
+
+    if normalized == "yes":
+        return "This was present at your last visit too."
+    if normalized == "no":
+        return "This wasn't an issue at your last visit."
+
+    return f"Last time you mentioned {prior_text.lower()}."
+
+
+def _blend_prior_memory(question_text: str, step_id: str, prior_text: str) -> str:
+    memory = _natural_prior_memory(step_id, prior_text)
+    if not memory:
+        return question_text
+    return f"{question_text} {memory}"
+
+
 def _match_binary_option(step: dict, user_input: str) -> Optional[str]:
     opts = step.get("opts", [])
     if len(opts) != 2:
@@ -1794,17 +1859,14 @@ def _dynamic_step_text(topic_key: Optional[str], step: dict, state: Optional[dic
         current_weight = state.get("data", {}).get("weight")
         if prior_weight not in (None, "") and current_weight not in (None, ""):
             question_text = (
-                f"Last visit your weight was {prior_weight} pounds, and today you entered "
-                f"{current_weight} pounds. Has that weight change been affecting how you feel or your energy levels?"
+                f"Has that weight change been affecting how you feel or your energy levels? "
+                f"Last time your weight was {prior_weight} pounds, and today you entered {current_weight}."
             )
 
     prior_value = prior_topic_data.get(step["id"])
     prior_text = _format_prior_answer_for_prompt(prior_value)
     if prior_text:
-        if step["id"] == "weight":
-            question_text = f"Last visit your weight was {prior_text} pounds. {question_text}"
-        else:
-            question_text = f"Last visit you reported {prior_text}. {question_text}"
+        question_text = _blend_prior_memory(question_text, step["id"], prior_text)
 
     raw_answers = state.get("raw_answers", {})
     prev_step = _previous_step_in_flow(topic_key or "", step.get("id", ""))
