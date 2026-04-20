@@ -3,15 +3,30 @@ import html as _html
 import io
 import json
 import re
+import concurrent.futures as _futures
 from difflib import get_close_matches
 from datetime import datetime
 from typing import Any, Optional
 
 import streamlit as st
 import streamlit.components.v1 as _stc
-import gspread
-from google.oauth2.service_account import Credentials
-from openai import OpenAI
+from streamlit.errors import StreamlitSecretNotFoundError
+
+try:
+    import gspread
+    from google.oauth2.service_account import Credentials
+    _gspread_import_error: Optional[str] = None
+except Exception as e:
+    gspread = None
+    Credentials = None
+    _gspread_import_error = str(e)
+
+try:
+    from openai import OpenAI
+    _openai_import_error: Optional[str] = None
+except Exception as e:
+    OpenAI = None
+    _openai_import_error = str(e)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -212,55 +227,6 @@ def _build_retry_prompt(step: dict, user_input: str) -> str:
 
 
 
-
-
-def interpret_user_input_with_options(step, user_input):
-    if not openai_client:
-        return user_input
-
-    options = step.get("opts", [])
-    if not options:
-        return user_input
-
-    generic_options = {"other", "somewhere else"}
-    allowed_options = [opt for opt in options if _norm_text(opt) not in generic_options]
-
-    prompt = f"""
-    You are a clinical assistant.
-    
-    QUESTION:
-    "{step['text']}"
-    
-    OPTIONS:
-    {allowed_options}
-    
-    PATIENT RESPONSE:
-    "{user_input}"
-    
-    TASK:
-    - If the response clearly matches ONE non-generic option → return that option EXACTLY
-    - Do NOT map a typed answer to "Other" or "Somewhere else" unless the patient literally says "other" or "somewhere else"
-    - Otherwise return the original response
-    
-    ONLY return one line.
-    """
-
-    try:
-        r = openai_client.chat.completions.create(
-            model="gpt-4.1-mini",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=40,
-            temperature=0
-        )
-        mapped = r.choices[0].message.content.strip()
-
-        if mapped in options and _norm_text(mapped) not in generic_options:
-            return mapped
-
-        return user_input
-
-    except:
-        return user_input
 
 
 def parse_multi_select_typed_input(step: dict, user_input: str):
@@ -1033,16 +999,21 @@ def render_chat_bubble(role: str, content: str):
 
 def _secret(*keys, default=None):
     for k in keys:
-        if k in st.secrets:
-            return st.secrets[k]
+        try:
+            if k in st.secrets:
+                return st.secrets[k]
+        except StreamlitSecretNotFoundError:
+            return default
     return default
 
 
 OPENAI_API_KEY = _secret("openai_api_key", "OPENAI_API_KEY", "openai_key")
-openai_client: Optional[OpenAI] = None
+openai_client: Optional["OpenAI"] = None
 _openai_error: Optional[str] = None
 
-if OPENAI_API_KEY:
+if _openai_import_error:
+    _openai_error = f"OpenAI package unavailable: {_openai_import_error}"
+elif OPENAI_API_KEY:
     try:
         openai_client = OpenAI(api_key=OPENAI_API_KEY)
     except Exception as e:
@@ -1063,12 +1034,20 @@ def _init_sheets():
     global _sheet, _sheet_error
     if _sheet is not None or _sheet_error is not None:
         return
+    if _gspread_import_error:
+        _sheet_error = f"Google Sheets packages unavailable: {_gspread_import_error}"
+        return
     try:
+        service_account_info = _secret("gcp_service_account")
+        gsheet_id = _secret("gsheet_id")
+        if not service_account_info or not gsheet_id:
+            _sheet_error = "Google Sheets secrets are not configured."
+            return
         creds = Credentials.from_service_account_info(
-            _secret("gcp_service_account"),
+            service_account_info,
             scopes=["https://www.googleapis.com/auth/spreadsheets"],
         )
-        book = gspread.authorize(creds).open_by_key(_secret("gsheet_id"))
+        book = gspread.authorize(creds).open_by_key(gsheet_id)
         try:
             ws = book.worksheet("ChatReport")
         except Exception:
@@ -2035,53 +2014,68 @@ def get_topic_progress(topic_key: str, data: dict) -> tuple[int, int]:
     return len(answered), len(applicable)
 
 
+
 # ══════════════════════════════════════════════════════════════════
-# LLM FUNCTIONS
+# MULTI-AGENT CLINICAL SYSTEM
+# ══════════════════════════════════════════════════════════════════
+# Architecture based on the ChatReport agent design:
+#   Agent 1 — Answer Interpreter   : classify patient free-text
+#   Agent 2 — Prior Comparison     : delta from last check-in
+#   Agent 3 — Urgency & Criticality: patient safety monitoring
+#   Agent 4 — Sentiment Monitor    : engagement & emotional state
+#   Agent 5 — Doctor-Relevance     : clinical sufficiency + follow-up
+#   Agent 6 — Next-Move            : author the follow-up question
+#   Orchestrator — coordinates all agents, resolves conflicts
 # ══════════════════════════════════════════════════════════════════
 
-# ── Shared clinical context injected into every LLM call ─────────
-_SYSTEM_CONTEXT = (
-    "You are a compassionate, clinically trained nurse at a head and neck cancer (HNC) center. "
-    "You are conducting a structured symptom check-in with a patient currently receiving "
-    "chemoradiation for head and neck cancer. "
-    "This patient population frequently experiences: severe mucositis, dysphagia, pain, "
-    "significant weight loss, fatigue, depression, and impaired communication. "
-    "Many patients have low health literacy or face barriers to care. "
-    "Your tone is always warm, clear, and non-alarming — even when probing for clinically "
-    "urgent information. Never use medical jargon without explaining it simply. "
-    "Never minimize a patient's reported symptom."
+
+# ── Shared clinical background for HNC patients ───────────────────
+_HNC_CONTEXT = (
+    "Patients are adults receiving treatment for head and neck cancer (HNC) — "
+    "typically chemoradiation or surgery. Common issues: severe mucositis, "
+    "dysphagia, pain, weight loss, fatigue, depression, and impaired communication. "
+    "Many are immunocompromised. Underreporting of severity is common in this population."
 )
 
-# ── Human-readable topic labels for prompt context ───────────────
-_TOPIC_LABELS_LLM = {
-    "pain":      "Pain & Pain Medications",
-    "nutrition": "Nutrition, Fluids & Weight",
-    "oral":      "Oral Symptoms (sticky mucus, thrush, dryness, oral care)",
-    "gi":        "GI Symptoms (nausea, vomiting, diarrhea, constipation)",
-    "fatigue":   "Fatigue & Sleep",
-    "activity":  "Daily Activity & Independence",
-    "mood":      "Emotional Health & Support",
-    "other":     "Other Symptoms (breathing, skin, hearing, etc.)",
-}
-
-# ── Red flag criteria — shared between clarification and report ───
 _RED_FLAGS = (
-    "- Pain severity ≥ 7/10, uncontrolled or worsening despite medication\n"
-    "- Fever ≥ 100.4°F / 38°C or chills with possible infection signs\n"
+    "- Pain ≥ 7/10, uncontrolled or worsening despite medication\n"
+    "- Fever ≥ 100.4 °F / 38 °C or chills with possible infection\n"
     "- Significant unintentional weight loss (> 5 lbs since last visit)\n"
-    "- Complete inability to swallow liquids or take any oral intake\n"
+    "- Complete inability to swallow or take any oral intake\n"
     "- Feeding tube complications: leakage, blockage, site infection\n"
-    "- Breathing difficulty at rest or worsening shortness of breath / wheezing\n"
+    "- Breathing difficulty at rest, wheezing, or worsening dyspnoea\n"
     "- Falls or near-falls, especially with dizziness\n"
-    "- Suicidal ideation or expression of wanting to harm oneself\n"
-    "- Severe depression or distress that is interfering with daily functioning\n"
+    "- Suicidal ideation or self-harm intent\n"
+    "- Severe depression / distress interfering with daily function\n"
     "- New neurological symptoms: sudden weakness, numbness, confusion\n"
-    "- Severe diarrhea, ongoing vomiting, or poor intake causing dehydration risk\n"
-    "- No bowel movement for > 3 days with discomfort\n"
     "- Medication non-adherence affecting symptom control"
 )
 
 
+def _call_agent(system_prompt: str, user_content: dict, max_tokens: int = 500) -> dict:
+    """
+    Call OpenAI with a system + user message pair. All agents use this.
+    Returns parsed JSON dict; returns {} on any error.
+    """
+    if not openai_client:
+        return {}
+    try:
+        resp = openai_client.chat.completions.create(
+            model="gpt-4.1-mini",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user",   "content": json.dumps(user_content, ensure_ascii=False)},
+            ],
+            max_tokens=max_tokens,
+            temperature=0.0,
+        )
+        return _extract_json_object(resp.choices[0].message.content.strip())
+    except Exception as exc:
+        print(f"[_call_agent error] {exc}")
+        return {}
+
+
+# ── Also keep legacy helper for report generation ─────────────────
 def _call_openai(prompt: str, max_tokens: int = 120, temp: float = 0.4) -> str:
     if not openai_client:
         return ""
@@ -2097,109 +2091,939 @@ def _call_openai(prompt: str, max_tokens: int = 120, temp: float = 0.4) -> str:
         return ""
 
 
-def get_llm_topic_turn(
-    topic_key: str,
+# ══════════════════════════════════════════════════════════════════
+# AGENT 1 — ANSWER INTERPRETER
+# ══════════════════════════════════════════════════════════════════
+
+_ANSWER_INTERPRETER_SYS = f"""
+You are the Answer Interpreter Agent for a clinical chatbot serving head and neck
+cancer patients. {_HNC_CONTEXT}
+
+Your ONLY job: classify a patient's free-text answer for the current question.
+
+MATCHING RULES:
+1. EXACT MATCH — case-insensitive, ignore minor punctuation → match_type "exact"
+2. IMPLICIT/SEMANTIC MATCH — use natural language understanding; do NOT use a rigid
+   synonym list. Ask: does the answer clearly and unambiguously imply one option?
+   Exception for severity questions: map numbers to ranges:
+     0 → "0 — No pain/None", 1-3 → Mild, 4-6 → Moderate, 7-9 → Severe/High, 10 → Worst
+3. AMBIGUITY — two or more options equally plausible → match_type "no_match", list candidates
+4. NO MATCH — cannot map reliably → match_type "no_match"
+5. SPECIAL STATES:
+   a) DISTRESS FLAG: any expression of being unable to cope, hopelessness, suicidal
+      ideation → distress_flag true
+   b) URGENCY FLAG: sudden severe pain, breathing difficulty, "worst of my life",
+      fever with chills, bleeding, or any red flag symptom → urgency_flag true
+   c) OFF-TOPIC: unrelated answer → match_type "off_topic"
+   d) INVALID: empty or gibberish → match_type "invalid"
+
+CONFIDENCE: 1.0 exact, 0.7-0.95 strong implicit, <0.7 → no_match instead.
+matched_option MUST be copied VERBATIM from options list, or null.
+
+Return ONLY valid JSON:
+{{
+  "match_type": "exact|implicit|no_match|off_topic|invalid",
+  "matched_option": "..." or null,
+  "confidence": 0.0-1.0,
+  "candidates": [],
+  "distress_flag": false,
+  "urgency_flag": false,
+  "reasoning": "One sentence."
+}}
+"""
+
+
+def run_answer_interpreter(step: dict, patient_answer: str) -> dict:
+    """
+    Agent 1: Classify patient's free-text answer against predefined options.
+    Returns interpreter output dict, or safe default on failure.
+    """
+    default = {
+        "match_type": "no_match", "matched_option": None, "confidence": 0.0,
+        "candidates": [], "distress_flag": False, "urgency_flag": False,
+        "reasoning": "Agent unavailable."
+    }
+    if not patient_answer.strip():
+        return {**default, "match_type": "invalid"}
+
+    result = _call_agent(_ANSWER_INTERPRETER_SYS, {
+        "question_text": step.get("text", ""),
+        "options": step.get("opts", []),
+        "patient_answer": patient_answer,
+    }, max_tokens=200)
+
+    if not result:
+        return default
+
+    # Validate matched_option is actually in the options list
+    mo = result.get("matched_option")
+    if mo and mo not in step.get("opts", []):
+        result["matched_option"] = None
+        result["match_type"] = "no_match"
+
+    return {**default, **result}
+
+
+# ══════════════════════════════════════════════════════════════════
+# AGENT 2 — PRIOR CHECK-IN COMPARISON
+# ══════════════════════════════════════════════════════════════════
+
+_PRIOR_COMPARISON_SYS = """
+You are the Prior Check-in Comparison Agent for a clinical chatbot.
+Compare a patient's current answer to the same question from their last check-in.
+
+change_direction rules:
+  improved       — current answer suggests less pain / better status
+  worsened       — current answer suggests more pain / worse status
+  neutral_change — changed but direction unclear (e.g., location shifted)
+  no_change      — answers are the same or equivalent
+  new_data       — no prior data available for comparison
+
+change_magnitude rules:
+  For numeric severity: large=3+ points difference, moderate=2, small=1, none=0
+  For non-numeric: large if clinically major (e.g., no pain → severe pain),
+    moderate for any other meaningful change, small for minor wording difference.
+
+clinical_note: One sentence, plain English. Include change magnitude and direction.
+If no prior data: "No prior data available for comparison."
+
+Return ONLY valid JSON:
+{
+  "has_prior_data": true/false,
+  "last_answer": "..." or null,
+  "change_detected": true/false,
+  "change_direction": "improved|worsened|neutral_change|no_change|new_data",
+  "change_magnitude": "large|moderate|small|none",
+  "clinical_note": "..."
+}
+"""
+
+
+def run_prior_comparison(step: dict, current_answer: str, last_topic_data: dict) -> dict:
+    """
+    Agent 2: Compare current answer to last check-in answer for this question.
+    Returns comparison dict, or no-prior-data default on failure.
+    """
+    default = {
+        "has_prior_data": False, "last_answer": None,
+        "change_detected": False, "change_direction": "new_data",
+        "change_magnitude": "none", "clinical_note": "No prior data available."
+    }
+    if not last_topic_data:
+        return default
+
+    last_answer = last_topic_data.get(step["id"])
+    if last_answer is None:
+        return default
+
+    result = _call_agent(_PRIOR_COMPARISON_SYS, {
+        "question_text": step.get("text", ""),
+        "last_check_in_answer": str(last_answer),
+        "current_answer": current_answer,
+    }, max_tokens=200)
+
+    return {**default, **result} if result else default
+
+
+# ══════════════════════════════════════════════════════════════════
+# AGENT 3 — URGENCY & CRITICALITY
+# ══════════════════════════════════════════════════════════════════
+
+_URGENCY_SYS = f"""
+You are the Urgency & Criticality Agent for a clinical chatbot serving head and
+neck cancer patients. {_HNC_CONTEXT}
+
+You monitor patient safety. Read ALL raw answers across the session — urgency
+signals often appear in free-text not captured by structured options.
+When in doubt, flag. A false positive is far less harmful than a missed crisis.
+
+RED FLAGS TO DETECT:
+{_RED_FLAGS}
+
+TIER DEFINITIONS:
+  0 — NO URGENCY: Continue normally.
+  1 — WATCH: Notable signal. Log it, elevate in report, continue session.
+  2 — URGENT: Care team must contact patient today. Continue session.
+       Show one care team message to the patient.
+  3 — EMERGENCY: Immediate threat. Terminate session. Patient to emergency services.
+
+SIGNAL RULES:
+  Medical signals → Tier 2 minimum:
+    M1: Severe uncontrolled pain (≥7/10) with nothing helping
+    M2: Sudden new severe pain in head/neck/throat
+    M3: Fever with chills in an HNC patient (immunocompromised)
+    M4: Complete inability to swallow ANY liquids
+    M5: Breathing difficulty at rest / wheezing
+    M6: Prescription medication suddenly stopped
+    M7: Reported falls
+    M8: Significant functional disruption (can't sleep, can't eat for days)
+  
+  Psychological signals:
+    P1: Explicit suicidal ideation or self-harm intent → TIER 3 ALWAYS
+    P2: Passive death wish ("I don't care if I make it") → Tier 2
+    P3: Crisis desperation ("I can't take this anymore" about life, not just pain) → Tier 2
+    P4: Complete isolation ("no one to help me") with high pain → Tier 2
+
+  Accumulation: 3+ Tier 1 signals in same session → escalate to Tier 2.
+
+PATIENT MESSAGES (verbatim — do not modify):
+  Tier 2: "Thank you for sharing this with us. We can see you're having a really
+    difficult time. A member of your care team will be reaching out to you today.
+    Please keep your phone nearby. Your responses have been saved."
+  Tier 3 (medical): "We're concerned about what you've shared. Please call 911 or
+    go to your nearest emergency room immediately. Your care team has been notified."
+  Tier 3 (P1/P2): "We hear you, and we want you to know your safety matters.
+    Please call or text 988 right now — the Suicide & Crisis Lifeline is available
+    24/7. If you are in immediate danger, call 911 or go to your nearest emergency
+    room. Your care team has been notified."
+
+Return ONLY valid JSON:
+{{
+  "session_tier": 0-3,
+  "new_signals": ["M1", "P3"],
+  "escalation_reason": "..." or null,
+  "patient_message": "..." or null,
+  "continue_session": true/false,
+  "clinical_note": "..." or null
+}}
+"""
+
+
+def run_urgency_agent(
     step: dict,
-    answer: str,
-    current_data: dict,
-    last_topic_data: dict,
-    chat_history: list,
-    next_step: Optional[dict],
-) -> dict[str, Any]:
+    current_answer_raw: str,
+    current_answer_matched: Optional[str],
+    session_answers: dict,
+    prior_baseline: dict,
+    active_signals: list,
+    distress_flag: bool,
+    urgency_flag: bool,
+) -> dict:
     """
-    Decide the most natural next assistant move after a patient's free-text answer.
-    Returns a dict with:
-      mode: "continue" or "follow_up"
-      assistant_message: optional supportive/flagging message
-      follow_up_question: optional targeted follow-up question
+    Agent 3: Patient safety monitoring. Returns urgency assessment.
     """
-    if not openai_client or not answer.strip():
-        return {}
+    default = {
+        "session_tier": 0, "new_signals": [], "escalation_reason": None,
+        "patient_message": None, "continue_session": True, "clinical_note": None
+    }
+    result = _call_agent(_URGENCY_SYS, {
+        "current_question": step.get("text", ""),
+        "current_answer_raw": current_answer_raw,
+        "current_answer_matched": current_answer_matched,
+        "distress_flag_from_interpreter": distress_flag,
+        "urgency_flag_from_interpreter": urgency_flag,
+        "all_session_answers_so_far": session_answers,
+        "active_signals_this_session": active_signals,
+        "prior_baseline_summary": prior_baseline,
+    }, max_tokens=300)
 
-    topic_label = _TOPIC_LABELS_LLM.get(topic_key, topic_key)
-    recent = chat_history[-6:] if len(chat_history) > 6 else chat_history
-    history_str = "\n".join(
-        f"{'Nurse' if m['role'] == 'assistant' else 'Patient'}: {m['content']}"
-        for m in recent
-    ) or "(no prior turns in this topic yet)"
+    if not result:
+        return default
 
-    prev_same = _short_prev_answer(last_topic_data.get(step["id"]))
-    prev_topic_summary = _natural_summary(topic_key, last_topic_data) if last_topic_data else ""
-    next_q = next_step["text"] if next_step else ""
+    # Safety: P1 (suicidal ideation) from the distress flag always forces Tier 3
+    if distress_flag and "suicid" in current_answer_raw.lower():
+        result["session_tier"] = 3
+        result["continue_session"] = False
 
-    prompt = (
-        f"{_SYSTEM_CONTEXT}\n\n"
-        f"You are responding inside a symptom-check chatbot for a patient receiving treatment "
-        f"for head and neck cancer between visits. Your job is to sound like a thoughtful, "
-        f"warm oncology nurse, not a form bot.\n\n"
-        f"CURRENT TOPIC: {topic_label}\n"
-        f"QUESTION ASKED: {step['text']}\n"
-        f"PATIENT RESPONSE: {answer}\n\n"
-        f"LAST VISIT ANSWER TO THIS SAME QUESTION: {prev_same or 'None recorded'}\n"
-        f"LAST VISIT TOPIC SUMMARY: {prev_topic_summary or 'None recorded'}\n"
-        f"RECENT TOPIC CHAT:\n{history_str}\n\n"
-        f"CURRENT STRUCTURED DATA:\n{json.dumps(current_data, indent=2)}\n\n"
-        f"NEXT STRUCTURED QUESTION IF YOU DECIDE TO CONTINUE: {next_q or 'No further structured question'}\n\n"
-        f"RED FLAGS TO WATCH FOR:\n{_RED_FLAGS}\n\n"
-        f"YOUR TASK:\n"
-        f"Choose the single best next conversational move.\n"
-        f"- If the patient gave enough detail, write a brief natural response that sounds human and specific.\n"
-        f"- If comparing with the last visit is clearly helpful and accurate, you may briefly mention improvement, worsening, or similarity.\n"
-        f"- If the answer is vague or opens an important clinical thread, ask one short follow-up question.\n"
-        f"- If the patient's answer is very short, unclear, misspelled, or incomplete, ask a gentle clarifying question in natural language.\n"
-        f"- If the patient's answer is unclear, vague, gibberish, or not clinically usable, do NOT thank them or say you've noted it. Just ask a clarification.\n"
-        f"- Do NOT ask a follow-up that simply repeats or paraphrases the original question.\n"
-        f"- If the patient already directly answered with a concrete detail like a body location, symptom trigger, or medication, accept it.\n"
-        f"- If there is a red flag, stay calm, acknowledge it, and say the team will want to know before the visit.\n"
-        f"- Avoid generic repetition. Do not always react the same way.\n"
-        f"- Do not diagnose, prescribe, or give unsafe reassurance.\n"
-        f"- Keep wording plain and supportive.\n\n"
-        f"Return JSON only in this exact shape:\n"
-        f'{{"mode":"continue"|"follow_up","assistant_message":"...","follow_up_question":"..."}}\n\n'
-        f"Rules for the JSON:\n"
-        f"- assistant_message can be empty only if a follow-up question alone is best.\n"
-        f"- follow_up_question must be empty unless mode is follow_up.\n"
-        f"- Keep assistant_message to 1-2 short sentences.\n"
-        f"- Keep follow_up_question to one concise question.\n"
-    )
+    return {**default, **result}
 
-    parsed = _extract_json_object(_call_openai(prompt, max_tokens=220, temp=0.45))
-    mode = parsed.get("mode")
-    assistant_message = str(parsed.get("assistant_message", "")).strip()
-    follow_up_question = str(parsed.get("follow_up_question", "")).strip()
 
-    if mode not in {"continue", "follow_up"}:
-        return {}
-    if mode == "follow_up" and not follow_up_question:
-        return {}
+# ══════════════════════════════════════════════════════════════════
+# AGENT 4 — PATIENT SENTIMENT & ENGAGEMENT MONITOR
+# ══════════════════════════════════════════════════════════════════
 
+_SENTIMENT_SYS = f"""
+You are the Patient Sentiment & Engagement Monitor for a clinical chatbot serving
+head and neck cancer patients. {_HNC_CONTEXT}
+
+You track the patient's emotional state and engagement quality across the session.
+You do NOT classify safety crises — that belongs to the Urgency Agent.
+
+IMPORTANT POPULATION CONTEXT:
+  - Brief answers ≠ disengagement (pain impairs fluency)
+  - Stoicism is common — calibrate against reported pain level
+  - Emotional flooding (long distressed answers) needs acknowledgment before next Q
+
+DIMENSION SCORES:
+  emotional_state: positive|neutral|fatigued|distressed|frustrated|anxious|overwhelmed|resigned
+  engagement_level: high|moderate|low|resistant|confused
+  engagement_trajectory: stable|improving|declining|insufficient_data
+
+SIGNALS TO DETECT (set to true if present):
+  E3_resistance: patient explicitly pushes back ("I already told you", "can we be done")
+  E7_wants_to_stop: "I need to stop", "I'm done", "I can't do this right now"
+  EM1_pain_frustration: venting about their pain situation
+  EM2_sadness_grief: expressing loss or grief about what they can no longer do
+  EM6_emotional_flooding: unusually long, distressed, emotionally dense answer
+
+ADAPTATION SIGNALS:
+  tone_profile: standard|warm|gentle|simplified
+  acknowledgment_required: true if EM1/EM2/EM6 active in current answer
+  acknowledgment_text: ≤25 words, first person chatbot voice, warm but not effusive,
+    reflects what patient shared emotionally (NOT their clinical data back at them).
+    Example: "That sounds really hard to carry. Thank you for sharing that."
+  simplify_next_question: true if patient seems confused or cognitively fatigued
+  reduce_follow_up_depth: true if E3/E7 active or engagement declining
+
+Return ONLY valid JSON:
+{{
+  "emotional_state": "...",
+  "engagement_level": "...",
+  "engagement_trajectory": "...",
+  "signals": {{
+    "E3_resistance": false,
+    "E7_wants_to_stop": false,
+    "EM1_pain_frustration": false,
+    "EM2_sadness_grief": false,
+    "EM6_emotional_flooding": false
+  }},
+  "adaptation": {{
+    "tone_profile": "standard",
+    "acknowledgment_required": false,
+    "acknowledgment_text": null,
+    "simplify_next_question": false,
+    "reduce_follow_up_depth": false
+  }},
+  "engagement_note_for_doctor": null
+}}
+"""
+
+
+def run_sentiment_agent(
+    step: dict,
+    current_answer_raw: str,
+    session_answers: dict,
+    active_signals: list,
+    question_count: int,
+) -> dict:
+    """
+    Agent 4: Track patient sentiment and engagement. Returns adaptation signals.
+    """
+    default = {
+        "emotional_state": "neutral", "engagement_level": "moderate",
+        "engagement_trajectory": "insufficient_data",
+        "signals": {
+            "E3_resistance": False, "E7_wants_to_stop": False,
+            "EM1_pain_frustration": False, "EM2_sadness_grief": False,
+            "EM6_emotional_flooding": False,
+        },
+        "adaptation": {
+            "tone_profile": "standard", "acknowledgment_required": False,
+            "acknowledgment_text": None, "simplify_next_question": False,
+            "reduce_follow_up_depth": False,
+        },
+        "engagement_note_for_doctor": None,
+    }
+    result = _call_agent(_SENTIMENT_SYS, {
+        "current_question": step.get("text", ""),
+        "current_answer": current_answer_raw,
+        "questions_answered_so_far": question_count,
+        "all_session_answers": session_answers,
+        "active_sentiment_signals": active_signals,
+    }, max_tokens=300)
+
+    if not result:
+        return default
+
+    # Merge nested dicts carefully
+    merged = {**default}
+    merged["emotional_state"] = result.get("emotional_state", default["emotional_state"])
+    merged["engagement_level"] = result.get("engagement_level", default["engagement_level"])
+    merged["engagement_trajectory"] = result.get("engagement_trajectory", default["engagement_trajectory"])
+    merged["engagement_note_for_doctor"] = result.get("engagement_note_for_doctor")
+
+    if "signals" in result and isinstance(result["signals"], dict):
+        merged["signals"] = {**default["signals"], **result["signals"]}
+    if "adaptation" in result and isinstance(result["adaptation"], dict):
+        merged["adaptation"] = {**default["adaptation"], **result["adaptation"]}
+
+    return merged
+
+
+# ══════════════════════════════════════════════════════════════════
+# AGENT 5 — DOCTOR-RELEVANCE
+# ══════════════════════════════════════════════════════════════════
+
+_DOCTOR_RELEVANCE_SYS = f"""
+You are the Doctor-Relevance Agent for a clinical chatbot serving head and neck
+cancer patients. {_HNC_CONTEXT}
+
+You evaluate patient answers from the physician's perspective. Your outputs:
+  1. Clinical sufficiency verdict on the current answer
+  2. Follow-up recommendation with a precise information GOAL (not the question itself)
+  3. A compact clinical note (≤35 words, third person) for the doctor's report
+
+FOLLOW-UP RULES:
+  - ONLY recommend follow-up if information_completeness is "partial" or "none"
+    AND follow_up_count is 0 AND the missing info is clinically meaningful
+  - NEVER recommend follow-up if follow_up_count ≥ 1 (absolute limit: 1 per question)
+  - NEVER recommend follow-up if patient showed resistance in their answer
+
+SPECIAL CLINICAL SIGNALS (set if present):
+  trajectory_mismatch: patient says improving but comparison shows worsening (or vice versa)
+  medication_stop_signal: patient stopped taking prescription medication without explanation
+  aggravating_medication_signal: patient reports their medication makes symptoms worse
+  severity_underreporting: patient rates low severity but describes severe functional impact
+
+follow_up_goal: A statement of WHAT information is needed — NOT a question.
+  Example: "Obtain a numeric pain severity score — patient described pain without rating it."
+
+information_completeness:
+  complete — answer fully satisfies the clinical information need
+  partial  — has some value but key information missing
+  none     — no clinically usable information
+
+change_significance:
+  critical — large worsening, urgency flag, new alarming symptom, medication stopped
+  notable  — meaningful change worth highlighting
+  stable   — no meaningful change
+  no_baseline — first session or no prior data
+
+clinical_priority: high | medium | low
+doctor_note: ≤35 words, third person, factual only, include comparison if change is critical/notable.
+
+Return ONLY valid JSON:
+{{
+  "information_completeness": "complete|partial|none",
+  "clinical_value_score": 0.0-1.0,
+  "follow_up_recommended": true/false,
+  "follow_up_goal": "..." or null,
+  "follow_up_urgency": "immediate|routine|none",
+  "change_significance": "critical|notable|stable|no_baseline",
+  "clinical_priority": "high|medium|low",
+  "doctor_note": "..." or null,
+  "special_signals": {{
+    "trajectory_mismatch": false,
+    "medication_stop_signal": false,
+    "aggravating_medication_signal": false,
+    "severity_underreporting": false
+  }}
+}}
+"""
+
+
+def run_doctor_relevance(
+    step: dict,
+    current_answer_raw: str,
+    current_answer_matched: Optional[str],
+    prior_comparison: dict,
+    session_answers: dict,
+    followup_count: int,
+) -> dict:
+    """
+    Agent 5: Assess clinical sufficiency and decide if follow-up is warranted.
+    """
+    default = {
+        "information_completeness": "complete", "clinical_value_score": 0.7,
+        "follow_up_recommended": False, "follow_up_goal": None,
+        "follow_up_urgency": "none", "change_significance": "no_baseline",
+        "clinical_priority": "medium", "doctor_note": None,
+        "special_signals": {
+            "trajectory_mismatch": False, "medication_stop_signal": False,
+            "aggravating_medication_signal": False, "severity_underreporting": False,
+        },
+    }
+    result = _call_agent(_DOCTOR_RELEVANCE_SYS, {
+        "question_text": step.get("text", ""),
+        "question_type": step.get("type", "options"),
+        "options": step.get("opts", []),
+        "current_answer_raw": current_answer_raw,
+        "current_answer_matched": current_answer_matched,
+        "prior_comparison": prior_comparison,
+        "session_answers_so_far": session_answers,
+        "follow_up_count_this_question": followup_count,
+    }, max_tokens=400)
+
+    if not result:
+        return default
+
+    # Hard-enforce the follow-up limit
+    if followup_count >= 1:
+        result["follow_up_recommended"] = False
+        result["follow_up_goal"] = None
+
+    merged = {**default, **result}
+    if "special_signals" in result and isinstance(result["special_signals"], dict):
+        merged["special_signals"] = {**default["special_signals"], **result["special_signals"]}
+
+    return merged
+
+
+# ══════════════════════════════════════════════════════════════════
+# AGENT 6 — NEXT-MOVE (FOLLOW-UP QUESTION AUTHOR)
+# ══════════════════════════════════════════════════════════════════
+
+_NEXT_MOVE_SYS = f"""
+You are the Next-Move Agent for a clinical chatbot serving head and neck cancer patients.
+{_HNC_CONTEXT}
+
+You receive a follow-up GOAL and write the actual follow-up question the patient sees.
+The decision to follow up has already been made. Your job is HOW to ask it.
+
+TONE PROFILES:
+  standard  — professional, warm, clear
+  warm      — add genuine warmth; soften clinical phrasing; sincere, not effusive
+  gentle    — softest possible; avoid anything demanding or clinical
+  simplified — short sentences, very simple words, one idea only
+
+RULES:
+  - Write in second person, conversational language
+  - Never use medical jargon without immediate plain explanation
+  - NEVER ask a multi-part question
+  - NEVER repeat the original question verbatim
+  - Keep the question to ≤25 words
+  - An acknowledgment may be shown BEFORE your question — do not repeat it
+  - If simplify=true: use the shortest phrasing possible
+
+Return ONLY valid JSON:
+{{
+  "follow_up_question": "...",
+  "preamble": "..." or null
+}}
+preamble: ≤10 words transitional phrase if naturally needed, else null.
+"""
+
+
+def run_next_move_agent(
+    step: dict,
+    current_answer_raw: str,
+    followup_goal: str,
+    tone_profile: str,
+    simplify: bool,
+) -> dict:
+    """
+    Agent 6: Author the follow-up question in natural language.
+    """
+    result = _call_agent(_NEXT_MOVE_SYS, {
+        "original_question": step.get("text", ""),
+        "patient_answer": current_answer_raw,
+        "follow_up_goal": followup_goal,
+        "tone_profile": tone_profile,
+        "simplify": simplify,
+    }, max_tokens=120)
+
+    if result and result.get("follow_up_question"):
+        return result
+    # Fallback: derive a question from the goal
     return {
-        "mode": mode,
-        "assistant_message": assistant_message,
-        "follow_up_question": follow_up_question,
+        "follow_up_question": "Could you tell me a bit more about that?",
+        "preamble": None,
     }
 
 
-def _default_chatty_reply(
+# ══════════════════════════════════════════════════════════════════
+# ORCHESTRATOR — coordinates all agents
+# ══════════════════════════════════════════════════════════════════
+
+def _build_session_answers(topic_key: str) -> dict:
+    """Build {question_id: raw_answer} from current session state for the topic."""
+    state = st.session_state.topic_states.get(topic_key, {})
+    data = state.get("data", {})
+    return {k: str(v) for k, v in data.items() if v is not None}
+
+
+def _build_prior_baseline(topic_key: str) -> dict:
+    """Return a compact prior check-in summary for agent context."""
+    last = st.session_state.last_checkin.get(topic_key, {})
+    if not last:
+        return {}
+    # Return key fields only to keep the payload small
+    keys = list(last.keys())[:10]
+    return {k: str(last[k]) for k in keys}
+
+
+def run_agent_pipeline(
     topic_key: str,
-    answer: str,
     step: dict,
+    answer: str,
+    state: dict,
     last_topic_data: dict,
-) -> str:
-    prev_same = _short_prev_answer(last_topic_data.get(step["id"])) if last_topic_data else ""
-    if prev_same and prev_same.lower() != answer.strip().lower():
-        return f"I've noted that. Compared with last time, this sounds a bit different, which is helpful for your team to know."
-    if topic_key == "mood":
-        return "That sounds like a lot to carry. I've made a note of it for your care team."
-    if topic_key == "pain":
-        return "I've noted those pain details so your team can see exactly how it's been feeling."
-    return "I've noted that detail for your care team."
+) -> dict:
+    """
+    Orchestrator: runs all agents in sequence (with parallelism where safe)
+    and returns a unified decision dict consumed by handle_answer.
+
+    Returns:
+    {
+        "matched_option": str|None,
+        "follow_up": bool,
+        "follow_up_question": str,
+        "acknowledgment": str,
+        "assistant_message": str,
+        "urgency_tier": int,
+        "urgency_message": str|None,
+        "reduce_follow_up": bool,
+        "wants_to_stop": bool,
+        "doctor_note": str|None,
+        "clinical_priority": str,
+        "change_significance": str,
+        "change_clinical_note": str,
+        "special_signals": dict,
+        "sentiment_note": str|None,
+    }
+    """
+    if not openai_client:
+        return _pipeline_default()
+
+    question_count = len(state.get("data", {}))
+    session_answers = _build_session_answers(topic_key)
+    prior_baseline  = _build_prior_baseline(topic_key)
+    followup_count  = state.get("followup_counts", {}).get(step["id"], 0)
+
+    # ── STEP 1: Answer Interpreter (must run first) ────────────────
+    interp = run_answer_interpreter(step, answer)
+    matched = interp.get("matched_option")
+    distress = interp.get("distress_flag", False)
+    urgency_flag = interp.get("urgency_flag", False)
+
+    # ── STEP 2: Run three agents in parallel ───────────────────────
+    # Prior Comparison, Urgency, and Sentiment can all run at once.
+    prior_comp = {}
+    urgency_out = {}
+    sentiment_out = {}
+
+    active_urgency_signals = st.session_state.get("urgency_state", {}).get("all_signals", [])
+    active_sentiment_signals = st.session_state.get("sentiment_state", {}).get("all_signals", [])
+
+    def _run_prior():
+        return run_prior_comparison(step, answer, last_topic_data)
+
+    def _run_urgency():
+        return run_urgency_agent(
+            step, answer, matched, session_answers, prior_baseline,
+            active_urgency_signals, distress, urgency_flag
+        )
+
+    def _run_sentiment():
+        return run_sentiment_agent(
+            step, answer, session_answers, active_sentiment_signals, question_count
+        )
+
+    with _futures.ThreadPoolExecutor(max_workers=3) as pool:
+        f_prior     = pool.submit(_run_prior)
+        f_urgency   = pool.submit(_run_urgency)
+        f_sentiment = pool.submit(_run_sentiment)
+        prior_comp   = f_prior.result()
+        urgency_out  = f_urgency.result()
+        sentiment_out = f_sentiment.result()
+
+    # ── STEP 3: Urgency interrupt check ───────────────────────────
+    tier = urgency_out.get("session_tier", 0)
+
+    # Update session-level urgency state
+    _merge_urgency_state(tier, urgency_out)
+
+    if tier == 3:
+        # Emergency — bypass all other agents
+        return {
+            **_pipeline_default(),
+            "matched_option": matched,
+            "urgency_tier": 3,
+            "urgency_message": urgency_out.get("patient_message"),
+            "wants_to_stop": True,
+        }
+
+    # ── STEP 4: Doctor-Relevance ───────────────────────────────────
+    dr_out = run_doctor_relevance(
+        step, answer, matched, prior_comp, session_answers, followup_count
+    )
+
+    # ── STEP 5: Apply follow-up decision logic ─────────────────────
+    adapt = sentiment_out.get("adaptation", {})
+    sigs  = sentiment_out.get("signals", {})
+    reduce = adapt.get("reduce_follow_up_depth", False)
+    wants_to_stop = sigs.get("E7_wants_to_stop", False)
+
+    dr_recommends  = dr_out.get("follow_up_recommended", False)
+    followup_goal  = dr_out.get("follow_up_goal", "")
+    priority       = dr_out.get("clinical_priority", "medium")
+
+    # Override rules (clinical necessity > patient experience)
+    force_followup = False
+    if step.get("type") == "number" and dr_out.get("information_completeness") != "complete":
+        force_followup = True  # Numeric severity is always high priority
+    if dr_out.get("special_signals", {}).get("medication_stop_signal") and followup_count == 0:
+        force_followup = True
+
+    # Suppression rules
+    suppress = False
+    if followup_count >= 1:
+        suppress = True  # Absolute limit
+    if wants_to_stop:
+        suppress = True
+    if interp.get("match_type") in ("off_topic", "invalid"):
+        suppress = True
+    if reduce and priority != "high":
+        suppress = True
+    if sigs.get("E3_resistance") and priority != "high":
+        suppress = True
+
+    do_follow_up = (force_followup or dr_recommends) and not suppress
+
+    # ── STEP 6: Compose follow-up question if needed ───────────────
+    follow_up_question = ""
+    if do_follow_up and followup_goal:
+        tone = adapt.get("tone_profile", "standard")
+        simplify = adapt.get("simplify_next_question", False)
+        nm_out = run_next_move_agent(step, answer, followup_goal, tone, simplify)
+        preamble = nm_out.get("preamble") or ""
+        fq = nm_out.get("follow_up_question", "")
+        follow_up_question = f"{preamble} {fq}".strip() if preamble else fq
+
+    # ── STEP 7: Build assistant message for non-follow-up case ─────
+    assistant_message = ""
+    if not do_follow_up:
+        comp_note    = prior_comp.get("clinical_note", "")
+        change_dir   = prior_comp.get("change_direction", "new_data")
+        prev_answer  = prior_comp.get("last_answer", "")
+        emotional    = sentiment_out.get("emotional_state", "neutral")
+
+        # Build a brief contextual acknowledgment
+        if comp_note and change_dir in ("worsened", "improved") and prev_answer:
+            assistant_message = comp_note
+        elif emotional == "distressed":
+            assistant_message = "That sounds really difficult. I've made a note of this for your care team."
+        elif emotional in ("anxious", "overwhelmed"):
+            assistant_message = "I hear you — I've made a note of that for your care team."
+        elif change_dir == "worsened":
+            assistant_message = "I've noted that, and I can see things have been harder than last time."
+        elif change_dir == "improved":
+            assistant_message = "That's helpful to know, and it sounds like there's been some improvement since last time."
+        else:
+            assistant_message = _default_chatty_reply(topic_key, answer, step, last_topic_data)
+
+    # ── STEP 8: Compose acknowledgment if needed ───────────────────
+    acknowledgment = ""
+    if adapt.get("acknowledgment_required") and adapt.get("acknowledgment_text"):
+        acknowledgment = adapt["acknowledgment_text"]
+
+    # ── STEP 9: Merge urgency and sentiment state ──────────────────
+    _merge_sentiment_state(sentiment_out)
+
+    # ── STEP 10: Tier 2 notice ─────────────────────────────────────
+    urgency_msg = None
+    urg_state = st.session_state.get("urgency_state", {})
+    if tier == 2 and not urg_state.get("escalation_shown", False):
+        urgency_msg = urgency_out.get("patient_message")
+        urg_state["escalation_shown"] = True
+        st.session_state["urgency_state"] = urg_state
+
+    return {
+        "matched_option": matched,
+        "follow_up": do_follow_up,
+        "follow_up_question": follow_up_question,
+        "acknowledgment": acknowledgment,
+        "assistant_message": assistant_message,
+        "urgency_tier": tier,
+        "urgency_message": urgency_msg,
+        "reduce_follow_up": reduce,
+        "wants_to_stop": wants_to_stop,
+        "doctor_note": dr_out.get("doctor_note"),
+        "clinical_priority": priority,
+        "change_significance": dr_out.get("change_significance", "no_baseline"),
+        "change_clinical_note": prior_comp.get("clinical_note", ""),
+        "special_signals": dr_out.get("special_signals", {}),
+        "sentiment_note": sentiment_out.get("engagement_note_for_doctor"),
+    }
+
+
+def _pipeline_default() -> dict:
+    """Safe default when agents are unavailable."""
+    return {
+        "matched_option": None, "follow_up": False, "follow_up_question": "",
+        "acknowledgment": "", "assistant_message": "",
+        "urgency_tier": 0, "urgency_message": None,
+        "reduce_follow_up": False, "wants_to_stop": False,
+        "doctor_note": None, "clinical_priority": "medium",
+        "change_significance": "no_baseline", "change_clinical_note": "",
+        "special_signals": {}, "sentiment_note": None,
+    }
+
+
+def _merge_urgency_state(tier: int, urgency_out: dict):
+    """Merge new urgency signals into session-level urgency state."""
+    state = st.session_state.get("urgency_state", {
+        "current_tier": 0, "all_signals": [], "escalation_shown": False,
+        "emergency_shown": False,
+    })
+    state["current_tier"] = max(state.get("current_tier", 0), tier)
+    new_sigs = urgency_out.get("new_signals", [])
+    existing = state.get("all_signals", [])
+    state["all_signals"] = list(set(existing + new_sigs))
+    st.session_state["urgency_state"] = state
+
+
+def _merge_sentiment_state(sentiment_out: dict):
+    """Merge new sentiment signals into session-level sentiment state."""
+    state = st.session_state.get("sentiment_state", {"all_signals": []})
+    new_sigs = [k for k, v in sentiment_out.get("signals", {}).items() if v]
+    existing = state.get("all_signals", [])
+    state["all_signals"] = list(set(existing + new_sigs))
+    state["engagement_trajectory"] = sentiment_out.get("engagement_trajectory", "insufficient_data")
+    state["emotional_state"] = sentiment_out.get("emotional_state", "neutral")
+    st.session_state["sentiment_state"] = state
+
+
+# ══════════════════════════════════════════════════════════════════
+# LEGACY SUPPORT: keep interpret_user_input_with_options working
+# ══════════════════════════════════════════════════════════════════
+
+def interpret_user_input_with_options(step, user_input):
+    """
+    Legacy wrapper: use the Answer Interpreter Agent to classify text.
+    Returns matched option string if found, else original input.
+    """
+    if not openai_client:
+        return user_input
+    if not step.get("opts"):
+        return user_input
+    result = run_answer_interpreter(step, user_input)
+    matched = result.get("matched_option")
+    if matched and matched in step.get("opts", []):
+        return matched
+    return user_input
+
+
+# ══════════════════════════════════════════════════════════════════
+# URGENCY BANNER RENDERER
+# ══════════════════════════════════════════════════════════════════
+
+def render_urgency_banner():
+    """
+    Render a coloured urgency banner at the top of the main content area.
+    Only shown if urgency_state tier >= 2.
+    """
+    urg = st.session_state.get("urgency_state", {})
+    tier = urg.get("current_tier", 0)
+    if tier == 0:
+        return
+
+    if tier == 1:
+        st.markdown(
+            '<div style="background:#fff8e8;border:1px solid #f9c846;border-radius:14px;'
+            'padding:10px 14px;margin-bottom:12px;font-size:13px;color:#7a5a00;">'
+            '⚠️ <strong>Note for your care team:</strong> Some of your responses have been '
+            'flagged for additional review before your visit.'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+    elif tier == 2:
+        msg = urg.get("patient_message") or (
+            "Thank you for sharing this with us. A member of your care team will be "
+            "reaching out to you today. Please keep your phone nearby."
+        )
+        st.markdown(
+            f'<div style="background:#fff3f3;border:1.5px solid #e87a7a;border-radius:14px;'
+            f'padding:12px 16px;margin-bottom:12px;font-size:13.5px;color:#7a1010;">'
+            f'🔴 <strong>Care team notice:</strong> {msg}'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+    elif tier == 3:
+        msg = urg.get("patient_message") or (
+            "Please call 911 or go to your nearest emergency room immediately. "
+            "Your care team has been notified."
+        )
+        st.markdown(
+            f'<div style="background:#ff0000;border-radius:14px;padding:16px 18px;'
+            f'margin-bottom:16px;font-size:14px;color:white;font-weight:700;">'
+            f'🚨 URGENT: {msg}'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+
+def render_urgency_indicator_html() -> str:
+    """Return a small coloured dot HTML for the sidebar."""
+    tier = st.session_state.get("urgency_state", {}).get("current_tier", 0)
+    colours = {0: "#22c55e", 1: "#f59e0b", 2: "#ef4444", 3: "#991b1b"}
+    labels  = {0: "All clear", 1: "Monitoring", 2: "Urgent", 3: "Emergency"}
+    c = colours.get(tier, "#22c55e")
+    l = labels.get(tier, "")
+    return (
+        f'<span style="display:inline-block;width:10px;height:10px;border-radius:50%;'
+        f'background:{c};margin-right:5px;vertical-align:middle;"></span>'
+        f'<span style="font-size:11px;color:{c};">{l}</span>'
+    )
+
+
+# ══════════════════════════════════════════════════════════════════
+# REPORT GENERATION — Doctor-Facing Report Agent
+# ══════════════════════════════════════════════════════════════════
+
+_REPORT_AGENT_SYS = f"""
+You are the Doctor-Facing Report Agent for ChatReport, a clinical symptom check-in
+chatbot for head and neck cancer (HNC) patients. {_HNC_CONTEXT}
+
+You synthesise all collected session data into a structured clinical pre-visit report
+for the treating physician.
+
+THE DOCTOR'S READING CONTEXT:
+An oncologist or NP reviewing reports before clinic appointments.
+May read multiple reports. They need to:
+  • Know in 10 seconds: is action required today?
+  • Understand patient's current status in 30 seconds.
+  • Have full symptom detail available if needed.
+  • Know what to address or follow up at the visit.
+
+REPORT FORMAT — use this exact structure:
+---
+CHATREPORT — PRE-VISIT CLINICAL SUMMARY
+Patient: [name]  |  Date: [date]
+═══════════════════════════════════════════════════
+
+🔴 FLAGS FOR PROVIDER ATTENTION
+[List ONLY items matching red flag criteria — each as a concise bullet.
+ Include: urgency signals detected, medication stops, crisis signals.
+ If none: "No urgent flags identified."]
+
+📋 CLINICAL OVERVIEW
+[2-3 sentences: current status, most prominent issues, notable changes since last visit.
+ Written for a clinician who has 10 seconds to orient.]
+
+📊 SYMPTOM DETAILS BY DOMAIN
+[One bold subsection per completed topic. Include:
+ - Symptom presence/severity in clinical language
+ - Patient-reported management strategies and medications
+ - Functional impact where reported
+ - Comparison to last visit where available
+ - Clinically meaningful direct quotes in quotation marks]
+
+💊 MEDICATION SUMMARY
+[List all medications mentioned, doses/frequencies if reported, adherence status,
+ and whether they are helping. Note any stops or side effects reported.]
+
+🗣️ PATIENT ENGAGEMENT NOTES
+[Only include if engagement was notable — e.g., declining engagement, distress,
+ stoic underreporting, or patient explicitly shared emotional content.
+ Omit this section if engagement was unremarkable.]
+
+✅ SUGGESTED DISCUSSION POINTS
+[2-4 bullets: items for provider to address or follow up — medication adjustment,
+ referral, patient education need, unresolved concern.
+ Do NOT repeat red flags already listed above.]
+---
+
+CLINICAL LANGUAGE RULES:
+- Convert patient language to clinical terms where appropriate
+  (e.g., "sore in my mouth" → "oral mucositis", "can't swallow" → "dysphagia")
+- Include patient's own words in quotes only when clinically meaningful
+- Omit topics with no data — do not write "N/A"
+- Third person throughout ("Patient reports…")
+- Never write "Unfortunately" or emotional commentary
+
+RED FLAGS TO SCREEN FOR:
+{_RED_FLAGS}
+
+Urgency state will be provided. If emergency_tier >= 2, open with the flags section prominently.
+Write only the completed report. No AI disclaimers or generation notes.
+"""
 
 
 def generate_report(name: str, all_data: dict) -> str:
     """
-    Generate a structured clinical pre-visit report from all collected topic data.
-    Falls back to a plain-text report if OpenAI is unavailable.
+    Doctor-Facing Report Agent: synthesise all session data into a clinical report.
+    Falls back to plain-text summary if OpenAI is unavailable.
     """
     topic_summaries = {}
     for label, key in TOPICS:
@@ -2208,11 +3032,9 @@ def generate_report(name: str, all_data: dict) -> str:
             topic_summaries[label] = d
 
     if not openai_client:
-        # Plain-text fallback
         lines = [
-            "CHATREPORT -- PRE-VISIT CLINICAL SUMMARY",
-            f"Patient: {name}",
-            f"Date: {datetime.now().strftime('%B %d, %Y')}",
+            "CHATREPORT — PRE-VISIT CLINICAL SUMMARY",
+            f"Patient: {name}  |  Date: {datetime.now().strftime('%B %d, %Y')}",
             "=" * 56, "",
         ]
         for label, data in topic_summaries.items():
@@ -2223,53 +3045,88 @@ def generate_report(name: str, all_data: dict) -> str:
             lines.append("")
         return "\n".join(lines)
 
-    data_json = json.dumps(topic_summaries, indent=2)
-    today = datetime.now().strftime("%B %d, %Y")
+    today    = datetime.now().strftime("%B %d, %Y")
+    urg_tier = st.session_state.get("urgency_state", {}).get("current_tier", 0)
+    urg_sigs = st.session_state.get("urgency_state", {}).get("all_signals", [])
 
-    prompt = (
-        f"{_SYSTEM_CONTEXT}\n\n"
-        f"You are now generating a structured pre-visit clinical summary for a provider "
-        f"(oncologist, radiation oncologist, or NP). This report will be reviewed BEFORE "
-        f"the patient's appointment and must be concise, clinically precise, and "
-        f"provider-ready. Providers will skim this in under 2 minutes.\n\n"
-        f"=== PATIENT: {name} ===\n"
-        f"=== DATE: {today} ===\n\n"
-        f"=== PATIENT-REPORTED DATA ===\n"
-        f"{data_json}\n\n"
-        f"=== RED FLAGS TO SCREEN FOR ===\n"
-        f"{_RED_FLAGS}\n\n"
-        f"=== REPORT FORMAT INSTRUCTIONS ===\n"
-        f"Use the EXACT structure below. Use bullet points within each section.\n"
-        f"Convert patient-language answers into accurate clinical language where appropriate "
-        f"(e.g., 'sore in my mouth' -> 'oral mucositis', 'can't swallow' -> 'dysphagia').\n"
-        f"Include the patient's own words in quotes only when clinically meaningful.\n"
-        f"If a topic was not completed or has no data, omit it entirely -- do not write N/A.\n\n"
-        f"---\n"
-        f"CHATREPORT -- PRE-VISIT CLINICAL SUMMARY\n"
-        f"Patient: {name}  |  Date: {today}\n"
-        f"{'=' * 56}\n\n"
-        f"CLINICAL OVERVIEW\n"
-        f"[2-3 sentence high-level summary of the patient's current status, most prominent "
-        f"issues, and any notable changes. Written for a clinician who has 10 seconds to "
-        f"orient before walking into the room.]\n\n"
-        f"FLAGS FOR PROVIDER ATTENTION\n"
-        f"[List ONLY items matching the red flag criteria above, each as a brief bullet. "
-        f"If none, write: No urgent flags identified.]\n\n"
-        f"SYMPTOM DETAILS BY DOMAIN\n"
-        f"[One subsection per completed topic. Use the topic name as a bold header. "
-        f"Bullets should include: symptom presence/severity, patient-reported management "
-        f"strategies, medications mentioned, and functional impact where reported.]\n\n"
-        f"SUGGESTED DISCUSSION POINTS\n"
-        f"[2-4 bullets: items the provider may want to address or follow up on based on "
-        f"the data -- e.g., medication adjustment, referral, patient education need, "
-        f"unresolved concern. Do not repeat red flags already listed above.]\n"
-        f"---\n\n"
-        f"Write only the completed report. Do not include these instructions in your output. "
-        f"Do not add AI disclaimers or notes about report generation."
-    )
+    # Collect doctor notes from topic states
+    doctor_notes = {}
+    for _, key in TOPICS:
+        topic_state = st.session_state.topic_states.get(key, {})
+        notes = [
+            v for k, v in topic_state.items()
+            if k.endswith("_doctor_note") and v
+        ]
+        if notes:
+            doctor_notes[key] = notes
 
-    return _call_openai(prompt, max_tokens=2000, temp=0.2) or \
-        "Report generation failed -- please check your OpenAI API configuration."
+    sentiment_notes = []
+    for _, key in TOPICS:
+        state = st.session_state.topic_states.get(key, {})
+        note = state.get("_sentiment_note")
+        if note:
+            sentiment_notes.append(note)
+
+    result = _call_agent(_REPORT_AGENT_SYS, {
+        "patient_name": name,
+        "report_date": today,
+        "symptom_data_by_topic": topic_summaries,
+        "freeform_notes": all_data.get("freeform_notes", []),
+        "urgency_tier": urg_tier,
+        "urgency_signals_active": urg_sigs,
+        "agent_doctor_notes": doctor_notes,
+        "patient_sentiment_notes": sentiment_notes,
+        "last_checkin_data": st.session_state.get("last_checkin", {}),
+    }, max_tokens=2500)
+
+    # _call_agent returns a dict — for the report we want plain text
+    # Fall back to _call_openai for the report since it's long prose
+    data_json = json.dumps({
+        "patient_name": name,
+        "report_date": today,
+        "symptom_data_by_topic": topic_summaries,
+        "freeform_notes": all_data.get("freeform_notes", []),
+        "urgency_tier": urg_tier,
+        "urgency_signals_active": urg_sigs,
+        "last_checkin_data": st.session_state.get("last_checkin", {}),
+    }, indent=2, ensure_ascii=False)
+
+    report_prompt = f"DATA:\n{data_json}\n\nGenerate the clinical report following the format in your instructions."
+
+    if not openai_client:
+        return "Report generation unavailable — OpenAI API not configured."
+
+    try:
+        resp = openai_client.chat.completions.create(
+            model="gpt-4.1-mini",
+            messages=[
+                {"role": "system", "content": _REPORT_AGENT_SYS},
+                {"role": "user",   "content": report_prompt},
+            ],
+            max_tokens=2500,
+            temperature=0.2,
+        )
+        return resp.choices[0].message.content.strip()
+    except Exception as e:
+        return f"Report generation failed: {e}"
+
+
+def _default_chatty_reply(
+    topic_key: str,
+    answer: str,
+    step: dict,
+    last_topic_data: dict,
+) -> str:
+    """Fallback acknowledgment when agents are unavailable."""
+    prev_same = _short_prev_answer(last_topic_data.get(step["id"])) if last_topic_data else ""
+    if prev_same and prev_same.lower() != answer.strip().lower():
+        return "I've noted that — it sounds a bit different from last time, which is helpful for your team to know."
+    if topic_key == "mood":
+        return "That sounds like a lot to carry. I've made a note of it for your care team."
+    if topic_key == "pain":
+        return "I've noted those pain details so your team can see exactly how it's been feeling."
+    return "I've noted that detail for your care team."
+
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -2282,16 +3139,31 @@ def _init_state():
         "patient_name":        "",
         "selected_topic":      None,
         "topic_states": {
-            key: {"status": "not_started", "data": {}, "chat": []}
+            key: {
+                "status": "not_started",
+                "data": {},
+                "chat": [],
+                "followup_counts": {},
+            }
             for _, key in TOPICS
         },
         "report":              "",
         "report_saved":        False,
-        # ── New: previous check-in data ──
-        "last_checkin":        {},    # {topic_key: {q_id: answer}} from last session
-        "has_prev_checkin":    False, # True if a previous session was found in Sheets
-        # ── New: free-form chat ──
+        "last_checkin":        {},
+        "has_prev_checkin":    False,
         "freeform_chat":       [],
+        "urgency_state": {
+            "current_tier": 0,
+            "all_signals": [],
+            "escalation_shown": False,
+            "emergency_shown": False,
+            "patient_message": None,
+        },
+        "sentiment_state": {
+            "all_signals": [],
+            "engagement_trajectory": "insufficient_data",
+            "emotional_state": "neutral",
+        },
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -2565,8 +3437,18 @@ def _freeform_llm_response(messages: list) -> str:
     }
     prior_context = st.session_state.get("last_checkin", {})
 
+    hnc_context = (
+        "You are a compassionate, clinically trained nurse at a head and neck cancer "
+        "(HNC) center conducting a structured symptom check-in with a patient currently "
+        "receiving chemoradiation or surgery for head and neck cancer. "
+        "This patient population frequently experiences: severe mucositis, dysphagia, "
+        "pain, significant weight loss, fatigue, depression, and impaired communication. "
+        "Many patients have low health literacy or face barriers to care. "
+        "Your tone is always warm, clear, and non-alarming. Never use medical jargon "
+        "without explaining it simply. Never minimize a patient's reported symptom."
+    )
     system = (
-        f"{_SYSTEM_CONTEXT}\n\n"
+        f"{hnc_context}\n\n"
         "You are now in an open conversation with the patient. They may raise anything not "
         "covered by the structured check-in — a new symptom, a question about their treatment, "
         "a concern about a medication, or just something they want their provider to know.\n\n"
@@ -2735,66 +3617,149 @@ def handle_pending_followup(topic_key: str, answer: str, source: str = "typed"):
     return
 
 
-def handle_answer(topic_key: str, step: dict, answer, source: str = "structured", display_override: Optional[str] = None):
+def handle_answer(
+    topic_key: str,
+    step: dict,
+    answer,
+    source: str = "structured",
+    display_override: Optional[str] = None,
+):
+    """
+    Core answer handler — orchestrates all agents and determines next action.
+    For structured button clicks (source='structured') we skip the full agent
+    pipeline and just do a quick comparison + vague-check to keep latency low.
+    For free-text, voice, and typed answers we run the full multi-agent pipeline.
+    """
     state = st.session_state.topic_states[topic_key]
-    display = display_override if display_override is not None else (", ".join(answer) if isinstance(answer, list) else str(answer))
+
+    # ── Ensure followup_counts dict exists (backward compat) ──────
+    if "followup_counts" not in state:
+        state["followup_counts"] = {}
+
+    display = display_override if display_override is not None else (
+        ", ".join(answer) if isinstance(answer, list) else str(answer)
+    )
     state["chat"].append({"role": "user", "content": display})
     answer = _coerce_structured_answer(topic_key, step, answer, state["data"])
     state["data"][step["id"]] = answer
     next_step = get_next_step(topic_key, state["data"])
     state["status"] = "in_progress"
 
-    assistant_message = ""
+    last_topic_data = st.session_state.last_checkin.get(topic_key, {})
+
+    # ══════════════════════════════════════════════════════════════
+    # BRANCH A — Structured button click (fast path, no agents)
+    # ══════════════════════════════════════════════════════════════
+    if source == "structured" and isinstance(answer, (list, int)):
+        if topic_is_complete(topic_key, state["data"]):
+            state["status"] = "completed"
+            state["chat"].append({
+                "role": "assistant",
+                "content": "✅ Thank you — I have everything I need for this topic.",
+            })
+            st.rerun()
+            return
+        _append_next_question(state, next_step)
+        st.rerun()
+        return
+
+    # ══════════════════════════════════════════════════════════════
+    # BRANCH B — Free text / voice / typed — run full agent pipeline
+    # ══════════════════════════════════════════════════════════════
     if isinstance(answer, str):
-        last_topic_data = st.session_state.last_checkin.get(topic_key, {})
         is_vague = _looks_vague_answer(answer)
-        should_use_llm = source in {"typed", "voice", "free_text", "followup"} or is_vague
-        if should_use_llm and openai_client:
-            with st.spinner("Thinking…"):
-                turn = get_llm_topic_turn(
-                    topic_key=topic_key,
-                    step=step,
-                    answer=answer,
-                    current_data=state["data"],
-                    last_topic_data=last_topic_data,
-                    chat_history=state["chat"],
-                    next_step=next_step,
-                )
-            if is_vague and turn.get("assistant_message"):
-                turn["assistant_message"] = ""
-            if turn.get("mode") == "follow_up":
-                followup_question = turn["follow_up_question"]
-                if _is_redundant_followup(step["text"], answer, followup_question):
-                    turn["mode"] = "continue"
-                    turn["follow_up_question"] = ""
-                else:
-                    _store_followup_prompt(
-                        topic_key,
-                        state,
-                        step,
-                        followup_question,
-                        turn.get("assistant_message", ""),
-                    )
-                    st.rerun()
-                    return
 
-            assistant_message = turn.get("assistant_message", "").strip()
-
-        if not assistant_message and is_vague and source in {"typed", "voice", "free_text", "followup"}:
+        # Vague answer with no options to try → ask clarification (no LLM needed)
+        if is_vague and source in {"typed", "voice", "free_text"}:
             _store_followup_prompt(
-                topic_key,
-                state,
-                step,
-                _fallback_clarifying_question(step),
+                topic_key, state, step, _fallback_clarifying_question(step),
             )
             st.rerun()
             return
 
-        if not assistant_message and (len(answer.split()) >= 2 or source in {"typed", "voice", "free_text", "followup"}):
+        if openai_client:
+            with st.spinner("Thinking…"):
+                pipeline = run_agent_pipeline(
+                    topic_key=topic_key,
+                    step=step,
+                    answer=answer,
+                    state=state,
+                    last_topic_data=last_topic_data,
+                )
+
+            # ── Emergency: terminate session ──────────────────────
+            if pipeline.get("urgency_tier", 0) == 3:
+                emergency_msg = pipeline.get("urgency_message") or (
+                    "We are concerned about what you've shared. Please call 911 or "
+                    "go to your nearest emergency room immediately. "
+                    "Your care team has been notified."
+                )
+                state["chat"].append({
+                    "role": "assistant",
+                    "content": f"🚨 {emergency_msg}",
+                })
+                state["status"] = "completed"   # Lock this topic
+                st.session_state["urgency_state"]["emergency_shown"] = True
+                st.rerun()
+                return
+
+            # ── Tier 2: insert care team notice into chat ─────────
+            tier2_msg = pipeline.get("urgency_message")
+            if tier2_msg:
+                state["chat"].append({"role": "assistant", "content": f"🔴 {tier2_msg}"})
+
+            # ── Acknowledgment before follow-up / next question ───
+            ack = pipeline.get("acknowledgment", "").strip()
+
+            # ── Patient wants to stop ─────────────────────────────
+            if pipeline.get("wants_to_stop"):
+                closing = "Of course — we'll pause here. The answers you've shared have been saved for your care team."
+                if ack:
+                    closing = f"{ack}\n\n{closing}"
+                state["chat"].append({"role": "assistant", "content": closing})
+                state["status"] = "completed"
+                st.rerun()
+                return
+
+            # ── Follow-up question ────────────────────────────────
+            if pipeline.get("follow_up") and pipeline.get("follow_up_question"):
+                fq = pipeline["follow_up_question"]
+                # Reject if semantically redundant with original question
+                if _is_redundant_followup(step["text"], answer, fq):
+                    pass   # Fall through to assistant_message + next question
+                else:
+                    # Increment follow-up counter
+                    fc = state["followup_counts"]
+                    fc[step["id"]] = fc.get(step["id"], 0) + 1
+                    _store_followup_prompt(
+                        topic_key, state, step, fq, ack,
+                    )
+                    st.rerun()
+                    return
+
+            # ── Store doctor note and signals for report ──────────
+            if pipeline.get("doctor_note"):
+                state[f"{step['id']}_doctor_note"] = pipeline["doctor_note"]
+            if pipeline.get("sentiment_note"):
+                state["_sentiment_note"] = pipeline["sentiment_note"]
+
+            assistant_message = pipeline.get("assistant_message", "").strip()
+            if ack and assistant_message:
+                assistant_message = f"{ack}\n\n{assistant_message}"
+            elif ack:
+                assistant_message = ack
+
+        else:
+            # No OpenAI — use fallback reply
             assistant_message = _default_chatty_reply(
                 topic_key, answer, step, last_topic_data
             )
 
+    else:
+        # Non-string answer (numeric, list from multi_select on structured path)
+        assistant_message = ""
+
+    # ── Topic complete check ──────────────────────────────────────
     if topic_is_complete(topic_key, state["data"]):
         state["status"] = "completed"
         final_message = "✅ Thank you — I have everything I need for this topic."
@@ -3090,6 +4055,13 @@ def render_topic_detail(topic_label: str, topic_key: str):
     last_data    = st.session_state.last_checkin.get(topic_key, {})
     has_prev     = st.session_state.has_prev_checkin
 
+    # ── Ensure followup_counts exists (backward compat) ────────────
+    if "followup_counts" not in state:
+        state["followup_counts"] = {}
+
+    # ── Urgency banner (Tier 1–3 from multi-agent system) ───────────
+    render_urgency_banner()
+
     # ── Previous check-in summary card ────────────────────────────
     if has_prev:
         if last_data:
@@ -3189,9 +4161,12 @@ def render_topic_detail(topic_label: str, topic_key: str):
 def render_sidebar():
     with st.sidebar:
         # ── Header ───────────────────────────────────────────────
+        _urg_html = render_urgency_indicator_html()
         st.markdown(
-            '<div style="font-size:18px;font-weight:800;color:#10233d;margin:0 0 2px 0;letter-spacing:-0.03em;">🩺 ChatReport</div>'
-            '<div style="font-size:11px;color:#6b7b92;margin-bottom:8px;text-transform:uppercase;letter-spacing:0.08em;">Clinical symptom assistant</div>',
+            f'<div style="font-size:18px;font-weight:800;color:#10233d;margin:0 0 2px 0;letter-spacing:-0.03em;">🩺 ChatReport</div>'
+            f'<div style="font-size:11px;color:#6b7b92;margin-bottom:8px;text-transform:uppercase;letter-spacing:0.08em;">'
+            f'Clinical symptom assistant &nbsp;{_urg_html}'
+            f'</div>',
             unsafe_allow_html=True,
         )
         if st.session_state.patient_name:
