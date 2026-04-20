@@ -1073,7 +1073,7 @@ div[data-baseweb="select"] > div {
 
 .chat-history {
     padding: 14px 14px 8px 14px;
-    min-height: 220px;
+    min-height: 0;
     background:
         linear-gradient(180deg, rgba(250,252,254,0.88) 0%, rgba(244,248,252,0.92) 100%);
 }
