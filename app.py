@@ -929,7 +929,7 @@ div[data-baseweb="select"] > div {
     align-items: center;
     justify-content: space-between;
     gap: 10px;
-    padding: 14px 16px 13px 16px;
+    padding: 10px 12px 10px 12px;
     border-bottom: 1px solid #e2ebf2;
     background: linear-gradient(180deg, rgba(255,255,255,0.92) 0%, rgba(245,249,252,0.9) 100%);
 }
@@ -937,30 +937,30 @@ div[data-baseweb="select"] > div {
 .chat-shell-title {
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 10px;
 }
 
 .chat-shell-avatar {
-    width: 38px;
-    height: 38px;
-    border-radius: 12px;
+    width: 32px;
+    height: 32px;
+    border-radius: 10px;
     background: linear-gradient(135deg, #0f6cbd 0%, #26a69a 100%);
     color: white;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 17px;
-    box-shadow: 0 10px 22px rgba(15,108,189,0.18);
+    font-size: 14px;
+    box-shadow: 0 8px 18px rgba(15,108,189,0.14);
 }
 
 .chat-shell-title-text {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 1px;
 }
 
 .chat-shell-label {
-    font-size: 10px;
+    font-size: 9px;
     font-weight: 800;
     letter-spacing: 0.08em;
     text-transform: uppercase;
@@ -969,19 +969,19 @@ div[data-baseweb="select"] > div {
 
 .chat-shell-name {
     font-family: 'Manrope', sans-serif;
-    font-size: 16px;
+    font-size: 14px;
     font-weight: 800;
     color: #143551;
     letter-spacing: -0.03em;
 }
 
 .chat-shell-note {
-    font-size: 11px;
+    font-size: 10px;
     color: #607589;
     background: #f3f8fb;
-    border: 1px solid #dbe8f1;
+    border: 1px solid #e6eef5;
     border-radius: 999px;
-    padding: 7px 10px;
+    padding: 6px 9px;
 }
 
 .chat-history {
@@ -1026,7 +1026,7 @@ div[data-baseweb="select"] > div {
 }
 
 .chat-row.user .chat-avatar {
-    background: #1f1f1f;
+    background: #20262d;
 }
 
 .chat-entry {
@@ -1063,13 +1063,13 @@ div[data-baseweb="select"] > div {
     max-width: 100%;
     border-radius: 16px;
     padding: 0.62rem 0.75rem;
-    border: 1px solid #edf2f6;
+    border: 1px solid #f4f7fa;
     line-height: 1.6;
     white-space: pre-wrap;
     word-break: break-word;
     font-size: 13.5px;
     box-shadow: none;
-    background: rgba(255,255,255,0.86);
+    background: rgba(255,255,255,0.72);
 }
 
 .chat-row.assistant .chat-bubble {
@@ -1078,7 +1078,7 @@ div[data-baseweb="select"] > div {
 }
 
 .chat-row.user .chat-bubble {
-    color: #1c2730;
+    color: #17324a;
     border-top-left-radius: 6px;
 }
 
@@ -1511,7 +1511,7 @@ div[data-baseweb="select"] > div {
     }
 
     .chat-shell-header {
-        padding: 12px 12px 11px 12px;
+        padding: 9px 10px 9px 10px;
         align-items: flex-start;
         flex-direction: column;
     }
@@ -1669,11 +1669,12 @@ def render_chat_bubble(role: str, content: str):
     role_cls = "user" if role == "user" else "assistant"
     role_label = "You" if role == "user" else "Care Assistant"
     avatar_label = "Y" if role == "user" else "I"
+    timestamp = datetime.now().strftime("%H:%M")
     st.markdown(
         f'<div class="chat-row {role_cls}">'
         f'  <div class="chat-avatar">{avatar_label}</div>'
         f'  <div class="chat-entry">'
-        f'    <div class="chat-meta"><div class="chat-role">{role_label}</div></div>'
+        f'    <div class="chat-meta"><div class="chat-role">{role_label}</div><div class="chat-time">{timestamp}</div></div>'
         f'    <div class="chat-bubble">{safe}</div>'
         f'  </div>'
         f'</div>',
