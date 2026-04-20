@@ -202,7 +202,40 @@ def _match_binary_option(step: dict, user_input: str) -> Optional[str]:
 _FREQUENCY_HINTS = {
     "daily", "everyday", "every day", "nightly", "weekly", "twice", "three times",
     "four times", "once", "morning", "evening", "bedtime", "hour", "hours",
+    "every other day", "every other night", "per day", "per week", "a day", "a week",
     "as needed", "prn",
+}
+
+_NUMBER_WORD_PATTERN = r"(one|two|three|four|five|six|seven|eight|nine|ten|half|couple|few|several)"
+_TIME_UNIT_PATTERN = r"(hour|hours|day|days|night|nights|week|weeks|month|months)"
+_MED_FORM_PATTERN = r"(mg|mcg|g|ml|milligram|milligrams|tablet|tablets|pill|pills|capsule|capsules|teaspoon|teaspoons|tablespoon|tablespoons)"
+_RELATION_TERMS = {
+    "family", "friend", "friends", "caregiver", "caregivers", "wife", "husband",
+    "daughter", "son", "mom", "dad", "mother", "father", "sister", "brother",
+    "partner", "spouse", "neighbor", "roommate", "children", "child",
+}
+_MANAGEMENT_TERMS = {
+    "zofran", "imodium", "miralax", "senna", "gabapentin", "oxycodone", "advil",
+    "tylenol", "motrin", "ibuprofen", "rinse", "mouthwash", "patch", "tube feed",
+    "salt water", "baking soda", "ensure", "boost", "water", "liquids", "soft foods",
+}
+_HELPING_TERMS = {
+    "help", "helping", "helps", "working", "works", "not enough", "doesnt help",
+    "does not help", "no relief", "better", "worse", "relief", "effective", "easier",
+}
+_REASON_TERMS = {
+    "because", "due to", "from", "since", "hard", "difficult", "difficulty", "forget",
+    "forgot", "pain", "fatigue", "tired", "nausea", "dry mouth", "not hungry",
+    "appetite", "schedule", "cost", "insurance", "transportation", "side effect",
+    "busy", "sleep", "swallow", "chew", "taste", "money", "refill",
+}
+_START_TIME_TERMS = {
+    "today", "yesterday", "tonight", "this morning", "last night", "week", "weeks",
+    "month", "months", "day", "days", "ago", "since", "started", "start", "begin",
+    "began", "recently", "suddenly", "after", "before", "during", "monday", "tuesday",
+    "wednesday", "thursday", "friday", "saturday", "sunday", "january", "february",
+    "march", "april", "may", "june", "july", "august", "september", "october",
+    "november", "december", "radiation", "chemo", "chemotherapy", "surgery",
 }
 
 _UNKNOWN_PHRASES = {
@@ -238,7 +271,17 @@ def _has_frequency_info(text: str) -> bool:
         return True
     if re.search(r"\b\d+\s*(x|times?)\b", normalized):
         return True
+    if re.search(rf"\b{_NUMBER_WORD_PATTERN}\s+times?\b", normalized):
+        return True
     if re.search(r"\bevery\s+\d+\s*(hour|hours|day|days)\b", normalized):
+        return True
+    if re.search(rf"\bevery\s+{_NUMBER_WORD_PATTERN}\s*{_TIME_UNIT_PATTERN}?\b", normalized):
+        return True
+    if re.search(r"\b(once|twice)\s+(a|per)?\s*(day|night|week|month)\b", normalized):
+        return True
+    if re.search(rf"\b{_NUMBER_WORD_PATTERN}\s+times?\s+(a|per)?\s*(day|night|week|month)\b", normalized):
+        return True
+    if re.search(r"\b(in the morning|in the evening|at night|before bed|at bedtime|with meals|before meals|after meals)\b", normalized):
         return True
     return False
 
@@ -256,9 +299,11 @@ def _has_dose_info(text: str) -> bool:
     normalized = _norm_text(text)
     if not normalized:
         return False
-    if re.search(r"\b\d+\s*(mg|mcg|g|ml|milligram|milligrams|tablet|tablets|pill|pills|capsule|capsules)\b", normalized):
+    if re.search(rf"\b\d+\s*{_MED_FORM_PATTERN}\b", normalized):
         return True
-    if re.search(r"\b(one|two|three|four)\s+(tablet|tablets|pill|pills|capsule|capsules)\b", normalized):
+    if re.search(rf"\b{_NUMBER_WORD_PATTERN}\s+{_MED_FORM_PATTERN}\b", normalized):
+        return True
+    if re.search(r"\b\d+\b", normalized) and any(term in normalized for term in {"dose", "tablet", "pill", "capsule"}):
         return True
     return False
 
@@ -269,17 +314,16 @@ def _has_amount_info(text: str) -> bool:
         return False
     if re.search(r"\b\d+\b", normalized):
         return True
-    return any(token in normalized for token in {"small", "little", "a lot", "large", "amount", "few", "several"})
+    if re.search(rf"\b{_NUMBER_WORD_PATTERN}\b", normalized):
+        return True
+    return any(token in normalized for token in {"small", "little", "a lot", "large", "amount", "few", "several", "half", "full"})
 
 
 def _has_helping_info(text: str) -> bool:
     normalized = _norm_text(text)
     if not normalized:
         return False
-    return any(
-        phrase in normalized
-        for phrase in {"help", "helping", "helps", "working", "works", "not enough", "doesnt help", "does not help", "no relief", "better", "worse"}
-    )
+    return any(phrase in normalized for phrase in _HELPING_TERMS)
 
 
 def _has_management_info(text: str) -> bool:
@@ -289,7 +333,7 @@ def _has_management_info(text: str) -> bool:
     return bool(
         re.search(r"\b(take|taking|use|using|used|try|trying|on|take|drink|drinking)\b", normalized)
         or re.search(r"\b\d+\s*(mg|mcg|g|ml)\b", normalized)
-        or any(word in normalized for word in {"zofran", "imodium", "miralax", "senna", "gabapentin", "oxycodone", "advil", "tylenol", "motrin", "rinse", "mouthwash"})
+        or any(word in normalized for word in _MANAGEMENT_TERMS)
     )
 
 
@@ -345,32 +389,29 @@ def _has_start_time_info(text: str) -> bool:
     normalized = _norm_text(text)
     if not normalized:
         return False
-    return any(
-        token in normalized
-        for token in {"today", "yesterday", "week", "weeks", "month", "months", "day", "days", "ago", "since", "started", "begin", "began"}
-    )
+    if any(token in normalized for token in _START_TIME_TERMS):
+        return True
+    if re.search(rf"\b\d+\s+{_TIME_UNIT_PATTERN}\s+ago\b", normalized):
+        return True
+    if re.search(rf"\b{_NUMBER_WORD_PATTERN}\s+{_TIME_UNIT_PATTERN}\s+ago\b", normalized):
+        return True
+    return bool(re.search(r"\bsince\s+\w+\b", normalized))
 
 
 def _has_support_info(text: str) -> bool:
     normalized = _norm_text(text)
-    return any(
-        token in normalized
-        for token in {"family", "friend", "caregiver", "wife", "husband", "daughter", "son", "mom", "dad", "sister", "brother", "partner"}
-    )
+    if not normalized:
+        return False
+    return any(token in normalized for token in _RELATION_TERMS)
 
 
 def _has_reason_info(text: str) -> bool:
     normalized = _norm_text(text)
     if not normalized:
         return False
-    return len(normalized.split()) >= 3 or any(
-        token in normalized
-        for token in {
-            "because", "due to", "from", "since", "hard", "difficult", "forget", "forgot", "pain",
-            "fatigue", "tired", "nausea", "dry mouth", "not hungry", "appetite", "schedule",
-            "cost", "insurance", "transportation", "side effect",
-        }
-    )
+    if len(normalized.split()) >= 3:
+        return True
+    return any(token in normalized for token in _REASON_TERMS)
 
 
 def _has_specific_type_info(text: str) -> bool:
@@ -425,9 +466,89 @@ def _dose_is_unknown(text: str) -> bool:
     return ("dose" in normalized and _is_unknown_answer(normalized)) or "no idea" in normalized
 
 
+def _infer_components_from_question(step: dict) -> dict[str, dict[str, Any]]:
+    question = _norm_text(step.get("text", ""))
+    if not question or step.get("type") != "free_text":
+        return {}
+
+    if "how often" in question and ("dose" in question or "how much" in question):
+        return {
+            "frequency": {
+                "detector": "frequency",
+                "question": "How often is that usually?",
+                "unknown_ok": True,
+                "unknown_ack": "That's okay if you're not sure about the timing right now. I've noted what you could tell me.",
+            },
+            "dose": {
+                "detector": "dose",
+                "question": "About how much is it each time?",
+                "unknown_ok": True,
+                "unknown_ack": "That's okay if you don't remember the dose right now. I've noted that for your care team.",
+            },
+        }
+
+    if "what are you using" in question and "helping" in question:
+        return {
+            "management": {"detector": "management", "question": "What have you been using for it?"},
+            "helping": {"detector": "helping", "question": "Has that been helping at all?"},
+        }
+
+    if question.startswith("when did") or "when did it start" in question or "when did this" in question or "when did the" in question:
+        return {
+            "start_time": {
+                "detector": "start_time",
+                "question": "About when did it start?",
+                "unknown_ok": True,
+                "unknown_ack": "That's okay if you're not sure exactly when it started. I've noted that for your care team.",
+            }
+        }
+
+    if question.startswith("where") or "where is" in question or "where are" in question or "where exactly" in question or "which body part" in question:
+        return {
+            "location": {
+                "detector": "location",
+                "question": "Where are you feeling it?",
+                "unknown_ok": True,
+                "unknown_ack": "That's okay if it's hard to describe exactly. I've noted what you could tell me.",
+            }
+        }
+
+    if question.startswith("who ") and ("support" in question or "help" in question):
+        return {
+            "support": {
+                "detector": "support",
+                "question": "Who has been helping you most?",
+                "unknown_ok": True,
+                "unknown_ack": "That's okay if you don't want to name anyone right now.",
+            }
+        }
+
+    if question.startswith("what kind of support") or question.startswith("what is making") or "what s limiting" in question or "tell me more about what s limiting" in question:
+        return {
+            "reason": {
+                "detector": "reason",
+                "question": "What feels like the main thing making that harder right now?",
+                "unknown_ok": True,
+                "unknown_ack": "That's okay if it's hard to pin down exactly. I've noted that this has been difficult.",
+            }
+        }
+
+    if question.startswith("what kind") or question.startswith("what type"):
+        return {
+            "specific_type": {
+                "detector": "specific_type",
+                "question": "What kind is it?",
+                "unknown_ok": True,
+                "unknown_ack": "That's okay if you don't know the exact type right now.",
+            }
+        }
+
+    return {}
+
+
 def _generic_missing_detail_override(step: dict, answer: str, state: dict) -> dict[str, Any]:
     schema = STEP_SCHEMAS.get(step.get("id"), {})
-    components = schema.get("components", {})
+    components = schema.get("components") or _infer_components_from_question(step)
     if components:
         missing = []
         for name, comp in components.items():
@@ -672,6 +793,8 @@ def _auto_capture_following_answers(topic_key: str, state: dict, seed_text: str)
         if next_step["type"] == "multi_select":
             parsed = parse_multi_select_typed_input(next_step, text)
             if parsed:
+                if all(item == "Other" for item in parsed):
+                    return
                 state["data"][next_step["id"]] = parsed
                 state["raw_answers"][next_step["id"]] = text
                 continue
@@ -690,6 +813,7 @@ def parse_multi_select_typed_input(step: dict, user_input: str):
     lowered_map = {opt.lower(): opt for opt in step.get("opts", [])}
     parts = [p.strip() for p in re.split(r",|/|;|\n", user_input) if p.strip()]
     resolved = []
+    has_other = "Other" in step.get("opts", [])
     for part in parts:
         match = lowered_map.get(part.lower())
         if match:
@@ -698,6 +822,8 @@ def parse_multi_select_typed_input(step: dict, user_input: str):
             interpreted = interpret_user_input_with_options(step, part)
             if interpreted in step.get("opts", []):
                 resolved.append(interpreted)
+            elif has_other and not _looks_vague_answer(part):
+                resolved.append("Other")
 
     deduped = []
     for item in resolved:
@@ -4807,6 +4933,14 @@ def handle_answer(
     verbatim = raw_answer if raw_answer is not None else display
     if isinstance(verbatim, str) and verbatim.strip():
         state["raw_answers"][step["id"]] = verbatim.strip()
+    if (
+        step.get("type") == "multi_select"
+        and isinstance(answer, list)
+        and "Other" in answer
+        and isinstance(verbatim, str)
+        and verbatim.strip()
+    ):
+        state["data"][f"{step['id']}_other_detail"] = verbatim.strip()
     answer = _coerce_structured_answer(topic_key, step, answer, state["data"], raw_answer=raw_answer)
     state["data"][step["id"]] = answer
     if isinstance(verbatim, str):
@@ -5042,7 +5176,7 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
             parsed = parse_multi_select_typed_input(step, user_text)
             if parsed:
                 handle_answer(topic_key, step, parsed, source="structured",
-                              display_override=user_text)
+                              display_override=user_text, raw_answer=user_text)
             else:
                 _request_retry_for_step(topic_key, step, user_text, source="typed")
                 return
@@ -5053,7 +5187,7 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
             parsed = parse_multi_select_typed_input(step, voice_text)
             if parsed:
                 handle_answer(topic_key, step, parsed, source="structured",
-                              display_override=voice_text)
+                              display_override=voice_text, raw_answer=voice_text)
             else:
                 _request_retry_for_step(topic_key, step, voice_text, source="voice")
                 return
