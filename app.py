@@ -399,12 +399,20 @@ def _prior_visit_context_text(topic_key: Optional[str], step: dict, question_tex
         return question_text
 
     lower = _norm_text(question_text)
+    prior_norm = _norm_text(prior_text)
+    is_binary_prior = prior_norm in {"yes", "no"}
+
+    if is_binary_prior:
+        return question_text
+
     if "since your last visit" in lower:
         return f"Last visit you reported {prior_text}. How has that been since then?"
     if "compared to your last visit" in lower:
         return f"Last visit you reported {prior_text}. How has that changed since then?"
     if step.get("type") == "number":
         return f"Last visit this was about {prior_text}. {question_text}"
+    if step.get("type") == "options":
+        return question_text
     return f"Last visit you reported {prior_text}. {question_text}"
 
 
@@ -869,6 +877,11 @@ def _auto_capture_following_answers(topic_key: str, state: dict, seed_text: str)
     if not text or _looks_vague_answer(text):
         return
 
+    normalized = _norm_text(text)
+    word_count = len(normalized.split())
+    if _has_plain_yes_no_signal(text) and word_count <= 3:
+        return
+
     for _ in range(3):
         next_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
         if not next_step or next_step.get("type") not in {"options", "multi_select"}:
@@ -876,6 +889,8 @@ def _auto_capture_following_answers(topic_key: str, state: dict, seed_text: str)
 
         inferred = None
         if next_step["type"] == "options":
+            if len(next_step.get("opts", [])) == 2 and {"yes", "no"} == {_norm_text(opt) for opt in next_step.get("opts", [])} and word_count <= 3:
+                return
             inferred = _infer_option_from_text(next_step, text)
             if not inferred and len(_norm_text(text).split()) >= 3:
                 maybe = interpret_user_input_with_options(next_step, text)
