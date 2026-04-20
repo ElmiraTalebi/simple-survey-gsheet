@@ -36,42 +36,18 @@ def _extract_json_object(text: str) -> dict[str, Any]:
         return {}
 
 
-def _short_prev_answer(value: Any) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, list):
-        value = ", ".join(str(v) for v in value)
-    text = str(value).strip()
-    if len(text) > 160:
-        text = text[:157] + "..."
-    return text
-
-
 def _norm_text(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).strip()
 
 
 def _is_redundant_followup(original_question: str, answer: str, followup_question: str) -> bool:
     oq = _norm_text(original_question)
-    aq = _norm_text(answer)
     fq = _norm_text(followup_question)
     if not fq:
         return True
     if fq == oq or fq in oq or oq in fq:
         return True
-
-    answer_words = set(aq.split())
-    follow_words = set(fq.split())
-
-    location_terms = {
-        "hand", "hands", "jaw", "ear", "ears", "tongue", "throat", "mouth",
-        "neck", "face", "lip", "lips", "gum", "gums", "shoulder", "chest",
-        "arm", "arms", "leg", "legs", "back", "head",
-    }
-    if answer_words & location_terms and ("where" in follow_words or "located" in follow_words):
-        return True
-
-    return False
+    return _is_semantically_redundant_question(original_question, followup_question)
 
 
 def _is_semantically_redundant_question(text_a: str, text_b: str) -> bool:
@@ -81,19 +57,10 @@ def _is_semantically_redundant_question(text_a: str, text_b: str) -> bool:
         return False
     if a == b or a in b or b in a:
         return True
-
-    stop = {
-        "are", "you", "having", "have", "had", "any", "right", "now", "can",
-        "could", "tell", "me", "about", "before", "please", "noticed", "notice",
-        "your", "the", "do", "did", "is", "it", "feels", "feel",
-    }
-    a_words = {w for w in a.split() if w not in stop}
-    b_words = {w for w in b.split() if w not in stop}
-    if not a_words or not b_words:
+    if not openai_client:
         return False
-    overlap = len(a_words & b_words)
-    smallest = min(len(a_words), len(b_words))
-    return overlap >= 2 and overlap >= smallest - 1
+    relation = run_question_relation_agent(text_a, text_b)
+    return bool(relation.get("same_intent"))
 
 
 def _coerce_structured_answer(
@@ -110,225 +77,13 @@ def _coerce_structured_answer(
     if not raw:
         return answer
 
-    if topic_key == "pain" and step["id"] == "pain_location":
-        normalized = _norm_text(raw)
-        # Specific HNC locations — match broadly (not just exact phrases)
-        if any(w in normalized for w in ("throat", "pharynx", "larynx", "voice box")):
-            return "Throat"
-        if any(w in normalized for w in ("tongue", "lingual")):
-            return "Tongue"
-        # Already a clean option value — pass through unchanged
-        if answer in ("Throat", "Tongue", "Somewhere else"):
-            if answer == "Somewhere else" and raw not in ("Somewhere else", "somewhere else"):
-                current_data["pain_location_raw"] = raw
-                current_data["other_pain_desc"] = raw
-            return answer
-        # Everything else: it's a real location the patient named → preserve it
-        # and classify as "Somewhere else" so the flowchart continues correctly
-        current_data["pain_location_raw"] = raw
-        current_data["other_pain_desc"] = raw
-        return "Somewhere else"
+    if topic_key == "pain" and step["id"] == "pain_location" and answer == "Somewhere else":
+        if raw not in ("Somewhere else", "somewhere else"):
+            current_data["pain_location_raw"] = raw
+            current_data["other_pain_desc"] = raw
+        return answer
 
     return answer
-
-
-YES_SYNONYMS = {
-    "yes", "yeah", "yep", "yup", "sure", "okay", "ok", "of course", "i do",
-    "i am", "it is", "there is", "correct", "right",
-}
-
-NO_SYNONYMS = {
-    "no", "nope", "nah", "not really", "i dont", "i do not", "none", "negative",
-}
-
-BODY_LOCATION_TERMS = {
-    "head", "scalp", "face", "jaw", "chin", "ear", "ears", "neck", "throat", "tongue",
-    "mouth", "lip", "lips", "gum", "gums", "tooth", "teeth", "cheek", "palate",
-    "shoulder", "chest", "arm", "arms", "elbow", "wrist", "hand", "hands", "finger",
-    "fingers", "back", "side", "rib", "ribs", "stomach", "abdomen", "belly", "hip",
-    "leg", "legs", "knee", "knees", "ankle", "ankles", "foot", "feet", "toe", "toes",
-}
-
-HEAD_NECK_LOCATION_TERMS = {
-    "face", "jaw", "chin", "ear", "ears", "throat", "tongue",
-    "mouth", "lip", "lips", "gum", "gums", "tooth", "teeth", "cheek", "palate",
-}
-
-
-def _looks_like_body_location(text: str) -> bool:
-    normalized = _norm_text(text)
-    if not normalized:
-        return False
-    words = set(normalized.split())
-    return bool(words & BODY_LOCATION_TERMS)
-
-
-def _is_head_neck_location(text: str) -> bool:
-    normalized = _norm_text(text)
-    if not normalized:
-        return False
-    words = set(normalized.split())
-    return bool(words & HEAD_NECK_LOCATION_TERMS)
-
-
-def _needs_head_neck_followup(text: str) -> bool:
-    normalized = _norm_text(text)
-    if not normalized:
-        return False
-    words = set(normalized.split())
-    focused_terms = {
-        "ear", "ears", "jaw", "chin", "mouth", "lip", "lips", "gum", "gums",
-        "tooth", "teeth", "cheek", "palate", "tongue", "throat",
-    }
-    return bool(words & focused_terms)
-
-
-def _match_binary_option(step: dict, user_input: str) -> Optional[str]:
-    opts = step.get("opts", [])
-    if len(opts) != 2:
-        return None
-    normalized = _norm_text(user_input)
-    option_map = {_norm_text(opt): opt for opt in opts}
-    yes_opt = option_map.get("yes")
-    no_opt = option_map.get("no")
-    if yes_opt and normalized in YES_SYNONYMS:
-        return yes_opt
-    if no_opt and normalized in NO_SYNONYMS:
-        return no_opt
-    return None
-
-
-def _is_unknown_answer(text: str) -> bool:
-    normalized = _norm_text(text)
-    if not normalized:
-        return False
-    generic_unknown_patterns = {
-        "dont remember", "do not remember", "not sure", "unsure",
-        "no idea", "unknown", "cant remember", "cannot remember", "dont know",
-        "do not know", "not sure exactly", "i forget", "forgot",
-    }
-    if normalized in generic_unknown_patterns:
-        return True
-    return any(phrase in normalized for phrase in generic_unknown_patterns)
-
-
-def _previous_step_in_flow(topic_key: str, step_id: str) -> Optional[dict]:
-    flow = FLOWS.get(topic_key, [])
-    prev = None
-    for step in flow:
-        if step["id"] == step_id:
-            return prev
-        prev = step
-    return None
-
-
-def _contextualize_raw_phrase(text: str, max_words: int = 8) -> str:
-    normalized = " ".join(str(text or "").strip().split())
-    if not normalized:
-        return ""
-    words = normalized.split()
-    if len(words) > max_words:
-        normalized = " ".join(words[:max_words]) + "..."
-    return normalized
-
-
-def _prompt_value_text(step_id: str, value: Any, topic_key: Optional[str] = None, topic_data: Optional[dict] = None) -> str:
-    if value is None:
-        return ""
-
-    if isinstance(value, list):
-        items = []
-        for item in value:
-            if item == "Other" and topic_data and topic_data.get(f"{step_id}_other_detail"):
-                items.append(str(topic_data.get(f"{step_id}_other_detail")))
-            elif item not in {None, ""}:
-                items.append(str(item))
-        text = ", ".join(items)
-    else:
-        text = str(value)
-
-    text = " ".join(text.strip().split())
-    if len(text) > 80:
-        text = text[:77] + "..."
-    return text
-
-
-def _prior_visit_context_text(topic_key: Optional[str], step: dict, question_text: str, state: Optional[dict]) -> str:
-    if not state or not topic_key:
-        return question_text
-
-    last_topic_data = st.session_state.get("last_checkin", {}).get(topic_key, {})
-    if not last_topic_data:
-        return question_text
-
-    step_id = step.get("id")
-    if not step_id:
-        return question_text
-
-    prior_value = last_topic_data.get(step_id)
-    if prior_value is None:
-        return question_text
-
-    prior_text = _prompt_value_text(step_id, prior_value, topic_key=topic_key, topic_data=last_topic_data)
-    if not prior_text:
-        return question_text
-
-    lower = _norm_text(question_text)
-    prior_norm = _norm_text(prior_text)
-    is_binary_prior = prior_norm in {"yes", "no"}
-
-    if is_binary_prior:
-        return question_text
-
-    if "since your last visit" in lower:
-        return f"Last visit you reported {prior_text}. How has that been since then?"
-    if "compared to your last visit" in lower:
-        return f"Last visit you reported {prior_text}. How has that changed since then?"
-    if step.get("type") == "number":
-        return f"Last visit this was about {prior_text}. {question_text}"
-    if step.get("type") == "options":
-        return question_text
-    return f"Last visit you reported {prior_text}. {question_text}"
-
-
-def _infer_option_from_text(step: dict, user_input: str) -> Optional[str]:
-    binary = _match_binary_option(step, user_input)
-    if binary:
-        return binary
-
-    normalized = _norm_text(user_input)
-    if not normalized or not step.get("opts"):
-        return None
-
-    normalized_words = {w for w in normalized.split() if len(w) > 2}
-    scored = []
-    for opt in step.get("opts", []):
-        opt_norm = _norm_text(opt)
-        if not opt_norm:
-            continue
-        if opt_norm == normalized or opt_norm in normalized:
-            return opt
-        opt_words = {w for w in opt_norm.split() if len(w) > 2}
-        overlap = len(normalized_words & opt_words)
-        if overlap:
-            scored.append((overlap / max(1, len(opt_words)), opt))
-    if scored:
-        scored.sort(reverse=True)
-        top_score, top_opt = scored[0]
-        if top_score >= 0.34:
-            return top_opt
-    return None
-
-
-def _is_negative_screening_answer(text: str) -> bool:
-    normalized = _norm_text(text)
-    if not normalized:
-        return False
-    if _match_binary_option({"opts": ["Yes", "No"]}, text) == "No":
-        return True
-    return normalized in {
-        "none", "nothing", "not really", "im okay", "i am okay", "okay", "fine", "good", "all good",
-    }
 
 _DETAIL_COVERAGE_SYS = """
 You are the Detail-Coverage Agent for a clinical chatbot serving head and neck
@@ -392,57 +147,24 @@ def run_detail_coverage_agent(step: dict, answer: str, topic_history: list[dict[
     return {**default, **result}
 
 
-def _looks_vague_answer(answer: Any) -> bool:
-    if not isinstance(answer, str):
-        return False
-    text = _norm_text(answer)
-    if not text:
-        return True
-
-    vague_phrases = {
-        "idk", "i dont know", "dont know", "not sure", "unsure", "maybe",
-        "kinda", "kind of", "sort of", "ugh", "stuff", "things", "whatever",
-    }
-    if text in vague_phrases:
-        return True
-
-    words = text.split()
-    if len(words) >= 1:
-        unique_chars = set(text.replace(" ", ""))
-        if len(unique_chars) <= 2 and len(text.replace(" ", "")) >= 4:
-            return True
-        if re.fullmatch(r"[a-zA-Z]{1,2,}", text):
-            return True
-    return False
-
-
 def _fallback_clarifying_question(step: dict) -> str:
     text = step.get("text", "").strip()
-    if not text:
-        return "Could you tell me a little more about that so I can capture it accurately for your care team?"
-    lower = _norm_text(text)
-    if "where" in lower and "pain" in lower:
-        return "Could you tell me where the pain is located?"
-    if "pain" in lower:
-        return "Could you tell me a bit more about the pain you're having right now?"
-    return "Could you tell me a little more about that?"
+    if text:
+        return f"I didn't quite catch that. Could you answer this part again: {text}"
+    return "I didn't quite catch that. Could you tell me a little more about that?"
 
 
-def _build_retry_prompt(step: dict, user_input: str) -> str:
-    schema = STEP_SCHEMAS.get(step.get("id"), {})
-    if schema.get("unmatched_followup") and not _looks_vague_answer(user_input):
-        return schema["unmatched_followup"]
-
-    if _looks_vague_answer(user_input):
-        return "I didn’t quite catch that. Could you please say it again?"
-
-    if "Other" in step.get("opts", []):
-        return (
-            "I didn’t find a clear match in the quick options. "
-            "Please type it again, and if it’s a different medication I’ll record it as another one."
+def _build_retry_prompt(step: dict, user_input: str, topic_history: Optional[list[dict[str, str]]] = None) -> str:
+    if openai_client:
+        result = run_clarification_writer_agent(
+            step,
+            user_input,
+            topic_history=topic_history or [],
         )
-
-    return "I didn’t find a clear match there. Could you please say it again or choose the closest option?"
+        clarification = str(result.get("clarification_question") or "").strip()
+        if clarification:
+            return clarification
+    return _fallback_clarifying_question(step)
 
 
 def _auto_capture_following_answers(topic_key: str, state: dict, seed_text: str):
@@ -472,7 +194,7 @@ def parse_multi_select_typed_input(step: dict, user_input: str):
             interpreted = interpret_user_input_with_options(step, part)
             if interpreted in step.get("opts", []):
                 resolved.append(interpreted)
-            elif has_other and not _looks_vague_answer(part):
+            elif has_other and part.strip():
                 resolved.append("Other")
 
     deduped = []
@@ -1355,74 +1077,26 @@ def render_active_question(question: str, label: str = "Current question"):
     )
 
 
-CONVERSATIONAL_QUESTION_BANK = {
-    "has_pain": "Are you having any pain today?",
-    "throat_timing": "Is that throat pain there all the time, or mainly when you swallow or eat?",
-    "tongue_type": "Does it feel like a sore on your tongue, or more like general tongue pain?",
-    "pain_medications": "What are you taking for pain right now?",
-    "taking_as_prescribed": "Have you been able to take your medications the way they were prescribed?",
-    "eating_ability": "How has eating been going since your last visit?",
-    "swallowing_difficulty": "Any trouble swallowing food, liquids, or pills?",
-    "mouth_sores": "Have you noticed any mouth sores, ulcers, or white patches lately?",
-    "dry_mouth": "Has dry mouth been bothering you?",
-    "fatigue": "Have you been feeling more tired or weaker than usual?",
-    "activity_level": "How are your usual day-to-day activities going right now?",
-    "emotional_state": "How have you been feeling emotionally lately?",
-}
-
-
 def _dynamic_step_text(topic_key: Optional[str], step: dict, state: Optional[dict] = None) -> str:
-    question_text = CONVERSATIONAL_QUESTION_BANK.get(step["id"], step["text"])
-    if not state:
+    question_text = step["text"]
+    if not state or not topic_key or not openai_client:
         return question_text
 
-    raw_answers = state.get("raw_answers", {})
-    prev_step = _previous_step_in_flow(topic_key or "", step.get("id", ""))
-    prev_raw = str(raw_answers.get(prev_step["id"], "")).strip() if prev_step else ""
-    prev_phrase = _contextualize_raw_phrase(prev_raw)
-    schema = STEP_SCHEMAS.get(step.get("id"), {})
+    prompt_cache = state.setdefault("generated_prompts", {})
+    cached = prompt_cache.get(step["id"])
+    if cached:
+        return cached
 
-    if schema.get("components") and prev_phrase:
-        first_component = next(iter(schema["components"].values()))
-        detector_name = first_component.get("detector")
-        if detector_name == "helping":
-            return first_component.get("question", "Has that been helping at all?")
-        if detector_name == "specific_type":
-            return first_component.get("question", question_text)
-
-    if topic_key == "pain" and step.get("id") == "med_adherence_issue":
-        prior = _norm_text(str(raw_answers.get("taking_as_prescribed", "")))
-        if any(token in prior for token in {"forget", "forgot", "late", "on time", "timing", "schedule"}):
-            return "Is the main issue remembering to take them on time, or is something else getting in the way?"
-        if any(token in prior for token in {"side effect", "makes me sick", "too sleepy", "drowsy", "nausea"}):
-            return "Are the side effects the main reason it has been hard to take them, or is something else also part of it?"
-        if prior:
-            return "What has been getting in the way of taking them the way you planned?"
-
-    lower = _norm_text(question_text)
-    if prev_phrase:
-        if "what is stopping you" in lower:
-            return f"You mentioned {prev_phrase}. What feels like the biggest reason that's limiting you?"
-        if "what s making it hard" in lower or "what's making it hard" in lower:
-            return f"You mentioned {prev_phrase}. What's making that hardest right now?"
-        if "what activities are most difficult" in lower:
-            return f"From what you shared, what daily activities feel hardest right now?"
-        if "what kind of support would be most helpful" in lower:
-            return "What kind of help would feel most useful for you right now?"
-        if lower.startswith("is it helping"):
-            return "Has that been helping at all?"
-        if "where is the skin issue located" in lower:
-            return "Where on your body are you noticing that skin problem?"
-        if "who is supporting you" in lower:
-            return "Who has been helping support you between visits?"
-        if "what type are you using" in lower:
-            return "What kind have you been using?"
-        if "what is making it difficult to take your medications" in lower:
-            return "What has been making it hardest to take them regularly?"
-        if "is it painful to swallow, or just mechanically difficult" in lower:
-            return "Does swallowing feel painful, or does it feel like things just don't go down well?"
-
-    return question_text
+    last_visit_same_question_answer = st.session_state.get("last_checkin", {}).get(topic_key, {}).get(step.get("id"))
+    result = run_question_writer_agent(
+        step,
+        topic_history=_recent_topic_history(state),
+        recent_questions=_recent_topic_questions(state),
+        last_visit_same_question_answer=last_visit_same_question_answer,
+    )
+    rewritten = str(result.get("question_text") or question_text).strip() or question_text
+    prompt_cache[step["id"]] = rewritten
+    return rewritten
 
 
 def _step_prompt_text(step: dict, topic_key: Optional[str] = None, state: Optional[dict] = None) -> str:
@@ -1762,14 +1436,14 @@ FLOW_PAIN = [
        opts=["Yes", "No"],
        when=lambda d: (
            d.get("pain_location") == "Somewhere else"
-           and _needs_head_neck_followup(d.get("other_pain_desc", ""))
+           and bool(d.get("other_pain_head_neck_focused"))
        )),
 
     _q("jaw_swelling", "Do you feel any swelling near your jaw?",
        opts=["Yes", "No"],
        when=lambda d: (
            d.get("pain_location") == "Somewhere else"
-           and _needs_head_neck_followup(d.get("other_pain_desc", ""))
+           and bool(d.get("other_pain_head_neck_focused"))
        )),
 
     _q("pain_with_chewing",
@@ -1777,7 +1451,7 @@ FLOW_PAIN = [
        opts=["Yes", "No"],
        when=lambda d: (
            d.get("pain_location") == "Somewhere else"
-           and _needs_head_neck_followup(d.get("other_pain_desc", ""))
+           and bool(d.get("other_pain_head_neck_focused"))
        )),
 
     _q("pain_start",                        # ← added (Main 3, Somewhere else branch)
@@ -2514,182 +2188,11 @@ STEP_BY_ID = {
 }
 
 
-STEP_SCHEMAS = {
-    "eating_ability": {
-        "unmatched_followup": "Could you tell me which sounds closest: eating normally, eating less than usual, mostly liquids, or tube feeds only?",
-    },
-    "activity_level": {
-        "unmatched_followup": "Would you say you're doing your usual activities, doing less than usual, or really struggling with daily tasks?",
-    },
-    "sleep_quality": {
-        "unmatched_followup": "Are you mostly sleeping through the night, or are you waking up a lot?",
-    },
-    "support_adequate": {
-        "unmatched_followup": "Would you say you have enough support between visits, or not really?",
-    },
-    "social_support_quality": {
-        "unmatched_followup": "Would you say you have good support, some support, or not much support right now?",
-    },
-    "med_dose_freq": {
-        "components": {
-            "frequency": {
-                "detector": "frequency",
-                "question": "How often do you usually take it?",
-                "unknown_ok": True,
-                "unknown_ack": "That's okay if you're not sure about the timing right now. I've noted what you could tell me.",
-            },
-            "dose": {
-                "detector": "dose",
-                "question": "About how much do you usually take each time?",
-                "unknown_ok": True,
-                "unknown_ack": "That's okay if you don't remember the dose right now. I've noted that for your care team.",
-            },
-        },
-    },
-    "nausea_management": {
-        "components": {
-            "management": {"detector": "management", "question": "What have you been using for the nausea?"},
-            "helping": {"detector": "helping", "question": "Has that been helping at all?"},
-        },
-    },
-    "vomiting_management": {
-        "components": {
-            "management": {"detector": "management", "question": "What have you been doing to manage the vomiting?"},
-            "helping": {"detector": "helping", "question": "Has that been helping at all?"},
-        },
-    },
-    "diarrhea_management": {
-        "components": {
-            "management": {"detector": "management", "question": "What have you been taking or doing for the diarrhea?"},
-            "helping": {"detector": "helping", "question": "Has that been helping at all?"},
-        },
-    },
-    "magic_mouthwash": {
-        "components": {
-            "management": {"detector": "management", "question": "What have you been using for that?"},
-            "helping": {"detector": "helping", "question": "Has it been helping enough?"},
-        },
-    },
-    "mucus_management": {
-        "components": {
-            "management": {"detector": "management", "question": "What have you been using for the mucus?"},
-            "helping": {"detector": "helping", "question": "Has that been helping at all?"},
-        },
-    },
-    "oral_rinse_type": {
-        "components": {
-            "specific_type": {
-                "detector": "specific_type",
-                "question": "What kind of rinse have you been using?",
-                "unknown_ok": True,
-                "unknown_ack": "That's okay if you don't remember the exact name right now.",
-            },
-        },
-    },
-    "iv_frequency": {
-        "components": {
-            "frequency": {
-                "detector": "frequency",
-                "question": "How often have you been getting the IV fluids?",
-                "unknown_ok": True,
-                "unknown_ack": "That's okay if you don't remember the exact schedule right now.",
-            },
-        },
-    },
-    "sleep_wake_reason": {
-        "components": {
-            "reason": {"detector": "reason", "question": "What tends to wake you up at night?"},
-        },
-    },
-    "difficult_activities": {
-        "components": {
-            "reason": {"detector": "reason", "question": "Which daily activities feel hardest right now?"},
-        },
-    },
-    "who_supports": {
-        "components": {
-            "support": {"detector": "support", "question": "Who has been helping support you?"},
-        },
-    },
-    "needed_support": {
-        "components": {
-            "reason": {"detector": "reason", "question": "What kind of help would feel most useful right now?"},
-        },
-    },
-    "other_pain_desc": {
-        "components": {
-            "location": {
-                "detector": "location",
-                "question": "Which body part is hurting?",
-                "unknown_ok": False,
-            },
-        },
-    },
-    "pain_start": {
-        "components": {
-            "start_time": {
-                "detector": "start_time",
-                "question": "About when did that pain start?",
-                "unknown_ok": True,
-                "unknown_ack": "That's okay if you're not sure exactly when it started.",
-            },
-        },
-    },
-    "skin_location": {
-        "components": {
-            "location": {
-                "detector": "location",
-                "question": "Where on your body are you noticing that skin problem?",
-                "unknown_ok": False,
-            },
-        },
-    },
-    "skin_start": {
-        "components": {
-            "start_time": {
-                "detector": "start_time",
-                "question": "About when did you first notice it?",
-                "unknown_ok": True,
-                "unknown_ack": "That's okay if you're not sure exactly when it started.",
-            },
-        },
-    },
-    "fever_start": {
-        "components": {
-            "start_time": {
-                "detector": "start_time",
-                "question": "About when did the fever or chills begin?",
-                "unknown_ok": True,
-                "unknown_ack": "That's okay if you're not sure exactly when it started.",
-            },
-        },
-    },
-    "bp_reading": {
-        "components": {
-            "amount": {
-                "detector": "amount",
-                "question": "Do you remember roughly what the reading has been?",
-                "unknown_ok": True,
-                "unknown_ack": "That's okay if you don't remember the exact blood pressure reading right now.",
-            },
-        },
-    },
-}
-
-
-
 # ══════════════════════════════════════════════════════════════════
 # FLOW ENGINE
 # ══════════════════════════════════════════════════════════════════
 
 def _step_is_relevant(topic_key: str, step: dict, data: dict, raw_answers: Optional[dict] = None) -> bool:
-    raw_answers = raw_answers or {}
-    step_id = step.get("id")
-
-    if topic_key == "pain":
-        if step_id in {"ear_pain", "jaw_swelling", "pain_with_chewing"}:
-            return _needs_head_neck_followup(data.get("other_pain_desc", "")) or _needs_head_neck_followup(raw_answers.get("other_pain_desc", ""))
-
     return True
 
 
@@ -2796,6 +2299,176 @@ def _call_openai(prompt: str, max_tokens: int = 120, temp: float = 0.4) -> str:
         return r.choices[0].message.content.strip()
     except Exception:
         return ""
+
+
+_QUESTION_RELATION_SYS = """
+You decide whether two patient-facing questions are asking essentially the same thing.
+
+Return ONLY valid JSON:
+{
+  "same_intent": true/false
+}
+
+Rules:
+- Treat paraphrases as the same intent.
+- If one question is only a softer or more natural wording of the other, mark true.
+- If one asks for a different detail, mark false.
+- Be especially sensitive to duplicate symptom questions in clinical chat.
+"""
+
+
+def run_question_relation_agent(question_a: str, question_b: str) -> dict:
+    default = {"same_intent": False}
+    if not openai_client:
+        return default
+    result = _call_agent(_QUESTION_RELATION_SYS, {
+        "question_a": question_a,
+        "question_b": question_b,
+    }, max_tokens=80)
+    return {**default, **result} if result else default
+
+
+_PAIN_LOCATION_FOCUS_SYS = """
+You classify whether a patient-described pain location should trigger the focused
+head-and-neck follow-up branch in a clinical chatbot.
+
+Return ONLY valid JSON:
+{
+  "head_neck_focused": true/false
+}
+
+Mark true only when the described location is specifically in or very near the
+ear, jaw, mouth, lips, gums, teeth, cheek, palate, tongue, or throat.
+Mark false for broad or nonspecific areas like head, face, neck, arm, back, chest,
+or anything outside that focused region.
+"""
+
+
+def run_pain_location_focus_agent(location_text: str) -> dict:
+    default = {"head_neck_focused": False}
+    if not openai_client or not str(location_text or "").strip():
+        return default
+    result = _call_agent(_PAIN_LOCATION_FOCUS_SYS, {
+        "location_text": location_text,
+    }, max_tokens=80)
+    return {**default, **result} if result else default
+
+
+_QUESTION_WRITER_SYS = """
+You rewrite the next patient-facing question for a clinical chatbot.
+
+You will receive:
+  - base_question_text
+  - question_type
+  - options
+  - recent_topic_history
+  - recent_question_texts
+  - last_visit_same_question_answer
+
+Rules:
+  - The form question is a question bank hint, not fixed wording.
+  - Write one natural nurse-like question that asks for the same clinical detail.
+  - Use topic history so the question feels like a direct continuation of the conversation.
+  - Avoid repeating a recent question from this topic.
+  - Mention last-visit history only when it genuinely helps orient the patient.
+  - Never prepend awkward phrases like "Last visit you reported yes."
+  - Do not imply symptoms the patient has not endorsed.
+  - Keep the question concise and conversational.
+
+Return ONLY valid JSON:
+{
+  "question_text": "..."
+}
+"""
+
+
+def run_question_writer_agent(
+    step: dict,
+    topic_history: list[dict[str, str]],
+    recent_questions: list[str],
+    last_visit_same_question_answer: Any = None,
+) -> dict:
+    default = {"question_text": step.get("text", "")}
+    if not openai_client:
+        return default
+
+    result = _call_agent(_QUESTION_WRITER_SYS, {
+        "base_question_text": step.get("text", ""),
+        "question_type": step.get("type", "options"),
+        "options": step.get("opts", []),
+        "recent_topic_history": topic_history,
+        "recent_question_texts": recent_questions,
+        "last_visit_same_question_answer": last_visit_same_question_answer,
+    }, max_tokens=140)
+    return {**default, **result} if result else default
+
+
+_CLARIFICATION_WRITER_SYS = """
+You write a short clarification question for a clinical chatbot when the patient's
+reply did not clearly answer the current question.
+
+You will receive:
+  - original_question
+  - question_type
+  - options
+  - patient_reply
+  - recent_topic_history
+
+Rules:
+  - Ask for the same missing information more clearly, not a different detail.
+  - Be warm and brief.
+  - If options exist, you may gently restate the kind of answer needed.
+  - Do not sound robotic or blame the patient.
+  - Do not repeat the original question verbatim.
+
+Return ONLY valid JSON:
+{
+  "clarification_question": "..."
+}
+"""
+
+
+def run_clarification_writer_agent(step: dict, patient_reply: str, topic_history: list[dict[str, str]]) -> dict:
+    default = {"clarification_question": "Could you tell me a little more about that?"}
+    if not openai_client:
+        return default
+    result = _call_agent(_CLARIFICATION_WRITER_SYS, {
+        "original_question": step.get("text", ""),
+        "question_type": step.get("type", "options"),
+        "options": step.get("opts", []),
+        "patient_reply": patient_reply,
+        "recent_topic_history": topic_history,
+    }, max_tokens=120)
+    return {**default, **result} if result else default
+
+
+_TOPIC_SUMMARY_SYS = """
+You write a one-sentence human summary of the patient's last check-in for a single topic.
+
+Rules:
+  - Write one natural sentence, not bullet points.
+  - Focus on the most clinically relevant details.
+  - Prefer plain language.
+  - If the data is sparse, write a modest summary instead of inventing detail.
+  - Do not mention internal field names.
+  - Keep it under 20 words.
+
+Return ONLY valid JSON:
+{
+  "summary": "..."
+}
+"""
+
+
+def run_topic_summary_agent(topic_label: str, topic_data: dict) -> dict:
+    default = {"summary": "Information was recorded for this topic."}
+    if not openai_client:
+        return default
+    result = _call_agent(_TOPIC_SUMMARY_SYS, {
+        "topic_label": topic_label,
+        "topic_data": topic_data,
+    }, max_tokens=100)
+    return {**default, **result} if result else default
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -3789,58 +3462,6 @@ def _merge_sentiment_state(sentiment_out: dict):
 # LEGACY SUPPORT: keep interpret_user_input_with_options working
 # ══════════════════════════════════════════════════════════════════
 
-# Keywords that identify a catch-all option in any question
-_CATCHALL_KEYWORDS = {"somewhere else", "other", "none of these", "something else"}
-
-
-# Timing/pattern words that are never valid body-location answers
-_TIMING_WORDS = {
-    "all the time", "comes and goes", "comes and go", "sometimes", "occasionally",
-    "only when", "always", "never", "constant", "intermittent", "at night",
-    "in the morning", "after eating", "when swallowing", "when i eat",
-    "only at night", "mostly", "often", "rarely", "every day", "all day",
-}
-
-
-def _is_timing_answer(text: str) -> bool:
-    """Return True if the text looks like a timing/frequency answer, not a location."""
-    normalized = _norm_text(text)
-    return any(phrase in normalized for phrase in _TIMING_WORDS)
-
-
-def _catchall_fallback(step: dict, user_input: str) -> str:
-    """
-    If the step has a catch-all option (Somewhere else / Other / None of these),
-    return it for any answer that looks like a genuine (non-vague) response.
-    This is the last-resort safety net so patients never get stuck in a retry loop
-    when they name something real that just isn't one of the specific listed options.
-
-    Exception: if the question is asking for a location but the patient answered
-    with a timing/pattern description, we do NOT use the catch-all — instead we
-    return the raw input unchanged so the chatbot retries with a clearer prompt.
-    """
-    opts = step.get("opts", [])
-    question_lower = _norm_text(step.get("text", ""))
-
-    # Detect location questions by their wording
-    is_location_question = any(
-        w in question_lower
-        for w in ("where", "location", "located", "which part", "which area")
-    )
-
-    for opt in opts:
-        if any(kw in opt.lower() for kw in _CATCHALL_KEYWORDS):
-            # Only use catch-all if the answer is not empty/gibberish
-            if not user_input.strip() or _looks_vague_answer(user_input):
-                break
-            # Don't use catch-all if it's a location question and the answer
-            # describes timing — that's a type mismatch, not a location
-            if is_location_question and _is_timing_answer(user_input):
-                break
-            return opt
-    return user_input
-
-
 def interpret_user_input_with_options(step, user_input, topic_history: Optional[list[dict[str, str]]] = None):
     """
     Use the Answer Interpreter Agent to classify free-text against question options.
@@ -3857,30 +3478,15 @@ def interpret_user_input_with_options(step, user_input, topic_history: Optional[
             return opt
 
     if not openai_client:
-        binary_match = _match_binary_option(step, user_input)
-        if binary_match:
-            return binary_match
-        if step.get("id") == "pain_location":
-            if any(w in normalized for w in ("throat", "pharynx", "larynx", "voice box")):
-                return "Throat"
-            if any(w in normalized for w in ("tongue", "lingual")):
-                return "Tongue"
-            if _looks_like_body_location(user_input) and not _is_timing_answer(user_input):
-                return "Somewhere else"
-        alias_match = _infer_option_from_text(step, user_input)
-        if alias_match:
-            return alias_match
-        return _catchall_fallback(step, user_input)
+        return user_input
 
     result = run_answer_interpreter(step, user_input, topic_history=topic_history)
     matched = result.get("matched_option")
 
-    # Agent found a valid specific match
     if matched and matched in step.get("opts", []):
         return matched
 
-    # Agent returned no_match — apply catch-all safety net
-    return _catchall_fallback(step, user_input)
+    return user_input
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -4104,22 +3710,6 @@ def _default_chatty_reply(
     last_topic_data: dict,
 ) -> str:
     """Fallback acknowledgment when agents are unavailable."""
-    prev_same = _short_prev_answer(last_topic_data.get(step["id"])) if last_topic_data else ""
-    normalized = answer.strip().lower()
-    if prev_same and prev_same.lower() != normalized:
-        try:
-            prev_num = float(str(last_topic_data.get(step["id"])))
-            cur_num = float(str(answer))
-            if cur_num > prev_num:
-                return "I've noted that — this looks a bit higher than last time, which is helpful for your care team to know."
-            if cur_num < prev_num:
-                return "I've noted that — this looks a bit lower than last time, which is helpful for your care team to know."
-        except (TypeError, ValueError):
-            return "I've noted that — it sounds a bit different from last time, which is helpful for your team to know."
-
-    if _is_negative_screening_answer(answer):
-        return "Thanks for sharing that. I've noted that for your care team."
-
     return "I've noted that for your care team."
 
 
@@ -4142,6 +3732,7 @@ def _init_state():
                 "raw_answers": {},
                 "last_prompted_step_id": None,
                 "last_prompted_text": "",
+                "generated_prompts": {},
             }
             for _, key in TOPICS
         },
@@ -4312,108 +3903,15 @@ def _checkin_summary_html(topic_key: str, data: dict) -> str:
 
 def _natural_summary(topic_key: str, data: dict) -> str:
     """Return a short natural-language sentence summarising a topic's previous answers."""
-
-    def v(field):
-        val = data.get(field)
-        if isinstance(val, list):
-            return val if val else None
-        return val if val is not None else None
-
-    def yn(field):
-        return v(field) == "Yes"
-
-    if topic_key == "pain":
-        if v("has_pain") == "No":
-            return "No pain"
-        loc  = (v("pain_location") or "").lower()
-        sev  = v("throat_severity") or v("tongue_severity")
-        meds = v("pain_medications")
-        other_med = v("pain_medications_other_detail")
-        med_str = ""
-        if isinstance(meds, list) and "No pain medication" not in meds:
-            meds = [other_med if item == "Other" and other_med else item for item in meds]
-            med_str = f", on {meds[0]}" if len(meds) == 1 else f", on {meds[0]} + {len(meds)-1} more"
-        if loc and sev is not None:
-            return f"{loc.capitalize()} pain ({sev}/10){med_str}"
-        elif loc:
-            return f"{loc.capitalize()} pain{med_str}"
-        return f"Pain reported{med_str}"
-
-    elif topic_key == "nutrition":
-        eating = v("eating_ability") or ""
-        weight = v("weight")
-        w_str  = f", {weight} lbs" if weight else ""
-        if "normally" in eating:
-            return f"Eating normally{w_str}"
-        elif "less" in eating:
-            return f"Eating less than usual{w_str}"
-        elif "Struggling" in eating:
-            return f"Struggling, liquids only{w_str}"
-        elif "tube" in eating.lower():
-            return f"On feeding tube{w_str}"
-        return f"Nutrition assessed{w_str}"
-
-    elif topic_key == "oral":
-        syms = []
-        if yn("mouth_sores"):      syms.append("mouth sores or thrush")
-        if yn("dry_mouth"):        syms.append("dry mouth")
-        if yn("mucus_issues"):     syms.append("sticky mucus")
-        if yn("teeth_gum_issues"): syms.append("gum problems")
-        return ", ".join(syms).capitalize() if syms else "No oral symptoms"
-
-    elif topic_key == "gi":
-        syms = []
-        nv = v("nausea_vomiting") or []
-        if "Nausea" in nv:              syms.append("nausea")
-        if "Vomiting" in nv:            syms.append("vomiting")
-        if "Diarrhea" in nv:            syms.append("diarrhea")
-        if yn("constipation"):          syms.append("constipation")
-        return ", ".join(syms).capitalize() if syms else "No GI symptoms"
-
-    elif topic_key == "fatigue":
-        fatigue = v("fatigue")
-        sleep   = v("sleep_quality")
-        if fatigue == "No" and sleep == "Yes":
-            return "No fatigue, sleeping well"
-        elif fatigue == "Yes" and sleep == "No":
-            return "Fatigued, trouble sleeping"
-        elif fatigue == "Yes":
-            return "Feeling fatigued"
-        elif sleep == "No":
-            return "Trouble sleeping"
-        return "Fatigue assessed"
-
-    elif topic_key == "activity":
-        level = v("activity_level") or ""
-        if "normally" in level:
-            return "Fully active"
-        elif "less" in level:
-            cause = (v("activity_limiting_factor") or "").lower()
-            return f"Less active — {cause}" if cause else "Less active than usual"
-        elif "Struggling" in level:
-            return "Struggling with daily tasks"
-        return "Activity assessed"
-
-    elif topic_key == "mood":
-        parts = []
-        if v("feeling_down") == "Yes":       parts.append("feeling depressed")
-        if v("support_adequate") == "No":    parts.append("limited support")
-        elif v("support_adequate") == "Yes": parts.append("good support")
-        if v("anxiety_impact") == "Yes":     parts.append("anxiety affecting daily life")
-        return ", ".join(parts[:2]).capitalize() if parts else "Mood assessed"
-
-    elif topic_key == "other":
-        syms = []
-        if yn("breathing_issues"): syms.append("breathing difficulty")
-        if yn("hearing_changes"):  syms.append("hearing changes")
-        if yn("dizziness"):        syms.append("dizziness")
-        if yn("fever_chills"):     syms.append("fever/chills")
-        if yn("skin_issues"):      syms.append("skin issues")
-        if v("voice_hoarseness") == "Yes, problems with my voice":
-            syms.append("voice changes")
-        return ", ".join(syms[:3]).capitalize() if syms else "No other symptoms"
-
-    return ""
+    if not data:
+        return ""
+    topic_label = next((label for label, key in TOPICS if key == topic_key), topic_key.replace("_", " ").title())
+    result = run_topic_summary_agent(topic_label, data)
+    summary = str(result.get("summary") or "").strip()
+    if summary:
+        return summary
+    answered = len([k for k, v in data.items() if v not in (None, "", [], {}) and not str(k).endswith("_other_detail")])
+    return f"{answered} details were recorded last visit." if answered else ""
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -4555,8 +4053,6 @@ def _store_followup_prompt(
     retry_current_step: bool = False,
     allow_other_detail: bool = False,
 ):
-    if _looks_vague_answer(state["data"].get(step["id"], "")):
-        assistant_message = ""
     state["waiting_for_followup"] = True
     state["pending_followup"] = {
         "source_step_id": step["id"],
@@ -4575,11 +4071,12 @@ def _request_retry_for_step(topic_key: str, step: dict, raw_input: str, source: 
     text = (raw_input or "").strip()
     if text:
         state["chat"].append({"role": "user", "content": text})
+    retry_question = _build_retry_prompt(step, text, topic_history=_recent_topic_history(state))
     _store_followup_prompt(
         topic_key,
         state,
         step,
-        _build_retry_prompt(step, text),
+        retry_question,
         retry_current_step=True,
         allow_other_detail=("Other" in step.get("opts", [])),
     )
@@ -4678,7 +4175,7 @@ def handle_pending_followup(topic_key: str, answer: str, source: str = "typed"):
                     display_override=retry_text,
                 )
                 return
-            if pending.get("allow_other_detail") and retry_text and not _looks_vague_answer(retry_text):
+            if pending.get("allow_other_detail") and retry_text:
                 state["data"][f"{source_step['id']}_other_detail"] = retry_text
                 handle_answer(
                     topic_key,
@@ -4751,6 +4248,8 @@ def handle_answer(
         state["last_prompted_step_id"] = None
     if "last_prompted_text" not in state:
         state["last_prompted_text"] = ""
+    if "generated_prompts" not in state:
+        state["generated_prompts"] = {}
     if state.get("last_prompted_step_id") == step.get("id"):
         _remember_prompted_step(state, None, "")
     _clear_step_inputs(topic_key, step)
@@ -4772,6 +4271,9 @@ def handle_answer(
         state["data"][f"{step['id']}_other_detail"] = verbatim.strip()
     answer = _coerce_structured_answer(topic_key, step, answer, state["data"], raw_answer=raw_answer)
     state["data"][step["id"]] = answer
+    if step.get("id") == "other_pain_desc":
+        focus = run_pain_location_focus_agent(verbatim if isinstance(verbatim, str) else str(answer))
+        state["data"]["other_pain_head_neck_focused"] = bool(focus.get("head_neck_focused"))
     if isinstance(verbatim, str) and not openai_client:
         _auto_capture_following_answers(topic_key, state, verbatim)
     next_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
@@ -4802,10 +4304,7 @@ def handle_answer(
     # BRANCH B — Free text / voice / typed — run full agent pipeline
     # ══════════════════════════════════════════════════════════════
     if isinstance(answer, str):
-        is_vague = _looks_vague_answer(answer)
-
-        # Vague answer with no options to try → ask clarification (no LLM needed)
-        if is_vague and source in {"typed", "voice", "free_text"} and not openai_client:
+        if source in {"typed", "voice", "free_text"} and not openai_client and not answer.strip():
             _store_followup_prompt(
                 topic_key, state, step, _fallback_clarifying_question(step),
             )
