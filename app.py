@@ -3249,6 +3249,15 @@ SIGNAL RULES:
 
   Accumulation: 3+ Tier 1 signals in same session → escalate to Tier 2.
 
+IMPORTANT NON-ESCALATION GUARDRAILS:
+  - Do NOT escalate just because an answer is brief, partial, or missing one detail.
+  - Do NOT escalate just because the patient does not remember a dose, timing, or exact amount.
+  - Do NOT escalate just because a patient reports PRN or non-daily use without saying it is prescribed daily.
+  - Do NOT treat "every 2 days", "sometimes", or similar medication-use frequency by itself as urgent.
+  - Medication adherence becomes urgent only if the patient clearly reports they stopped an important prescribed medication,
+    cannot access it, or their symptoms are uncontrolled because they are missing it.
+  - If the patient gives usable but incomplete information, continue normally unless another red flag is clearly present.
+
 PATIENT MESSAGES (verbatim — do not modify):
   Tier 2: "Thank you for sharing this with us. We can see you're having a really
     difficult time. A member of your care team will be reaching out to you today.
@@ -3439,6 +3448,11 @@ You evaluate patient answers from the physician's perspective. Your outputs:
 FOLLOW-UP RULES:
   - The question list is a question bank, not a rigid script. Judge the current answer
     like a clinician deciding whether anything important is still missing.
+  - A meaningful free-text answer in the patient's own words is clinically usable even if it does not match the option wording.
+  - If the patient gave a broad but meaningful answer, break down what is missing conceptually; do NOT treat it as meaningless.
+  - If the patient already explained the reason in their own words, do NOT recommend a generic "what is making this difficult" follow-up.
+  - If the patient supplies one detail and explicitly does not know another, accept the known detail and only ask for the missing one if it is truly necessary.
+  - If the missing detail is something the patient reasonably may not know right now, prefer no follow-up over repetitive questioning.
   - ONLY recommend follow-up if information_completeness is "partial" or "none"
     AND follow_up_count is 0 AND the missing info is clinically meaningful
   - NEVER recommend follow-up if follow_up_count ≥ 1 (absolute limit: 1 per question)
@@ -3554,6 +3568,10 @@ TONE PROFILES:
 RULES:
   - Treat the original form question as background only; you are not tied to its exact wording
   - Ask the most clinically useful next single question, as a doctor or nurse naturally would
+  - Stay anchored to the patient's last answer; the follow-up should feel like a direct continuation of what they just said
+  - If the patient used plain-language wording, mirror that wording naturally instead of switching back to rigid form language
+  - Ask only for the single missing detail; never restate details the patient already provided
+  - If the patient said they do not know a detail, do not challenge that or sound repetitive
   - Write in second person, conversational language
   - Never use medical jargon without immediate plain explanation
   - NEVER ask a multi-part question
@@ -4728,11 +4746,10 @@ def handle_pending_followup(topic_key: str, answer: str, source: str = "typed"):
     state["chat"].append({"role": "user", "content": answer})
     state["data"][answer_key] = answer
     pending_key = f"pending_followup_{topic_key}_{pending.get('answer_key', 'pending')}"
-    if pending_key in st.session_state:
-        st.session_state[pending_key] = ""
+    st.session_state.pop(pending_key, None)
     submitted_pending_key = f"{pending_key}_submitted"
-    if submitted_pending_key in st.session_state:
-        st.session_state[submitted_pending_key] = ""
+    st.session_state.pop(submitted_pending_key, None)
+    st.session_state.pop(f"{pending_key}_voice_sync", None)
     state["waiting_for_followup"] = False
     state.pop("pending_followup", None)
 
@@ -4871,6 +4888,16 @@ def handle_answer(
                 if ack:
                     closing = f"{ack}\n\n{closing}"
                 state["chat"].append({"role": "assistant", "content": closing})
+                state["status"] = "completed"
+                st.rerun()
+                return
+
+            # ── Tier 2: avoid detached follow-ups in the same turn ─
+            if tier2_msg:
+                state["chat"].append({
+                    "role": "assistant",
+                    "content": "We'll pause this topic here for now so your care team can follow up directly.",
+                })
                 state["status"] = "completed"
                 st.rerun()
                 return
@@ -5086,8 +5113,10 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
         with st.container():
             voice_text = voice_widget(f"{topic_key}_{sid}", label="Mic")
         if voice_text and voice_text != st.session_state.get(f"{widget_key}_voice_sync"):
-            st.session_state[widget_key] = voice_text
             st.session_state[f"{widget_key}_voice_sync"] = voice_text
+            st.session_state[submit_key] = voice_text
+            handle_answer(topic_key, step, voice_text, source="voice")
+            return
 
         if free_text and st.session_state.get(submit_key) != free_text:
             st.session_state[submit_key] = free_text
@@ -5299,8 +5328,10 @@ def render_topic_detail(topic_label: str, topic_key: str):
         with st.container():
             pending_voice = voice_widget(f"pending_{topic_key}_{pending_suffix}", label="Mic")
         if pending_voice and pending_voice != st.session_state.get(f"{pending_key}_voice_sync"):
-            st.session_state[pending_key] = pending_voice
             st.session_state[f"{pending_key}_voice_sync"] = pending_voice
+            st.session_state[pending_submit_key] = pending_voice
+            handle_pending_followup(topic_key, pending_voice, source="voice")
+            return
 
         if pending_text and st.session_state.get(pending_submit_key) != pending_text:
             st.session_state[pending_submit_key] = pending_text
