@@ -4348,23 +4348,16 @@ def _render_report_topic_detail(insight: dict, all_data: dict):
     topic_key = insight["topic_key"]
     last_topic_data = st.session_state.get("last_checkin", {}).get(topic_key, {}) or {}
     current_topic_data = all_data.get(topic_key, {}) or {}
-    topic_name = insight.get("topic_label", "")
-
-    st.markdown(
-        '<div class="report-detail-shell inline">'
-        '  <div class="report-detail-header">'
-        f'    <div style="font-size:12px;font-weight:800;letter-spacing:0.08em;text-transform:uppercase;color:#6b7b92;">Topic comparison</div>'
-        f'    <div style="font-size:24px;font-weight:800;letter-spacing:-0.03em;color:#10233d;margin-top:4px;">{_html.escape(topic_name)}</div>'
-        '  </div>'
-        '  <div class="report-detail-grid">'
-        f'    <div class="report-detail-panel"><div class="report-detail-label">Last Check-In</div><div class="report-detail-text">{_html.escape(str(insight.get("last_summary") or "No prior details recorded."))}</div></div>'
-        f'    <div class="report-detail-panel"><div class="report-detail-label">Current Check-In</div><div class="report-detail-text">{_html.escape(str(insight.get("current_summary") or "Not answered this visit."))}</div></div>'
-        '  </div>'
-        '</div>',
-        unsafe_allow_html=True,
-    )
 
     with st.expander("More details", expanded=False):
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("**Last check-in**")
+            st.markdown(str(insight.get("last_summary") or "No prior details recorded."))
+        with col2:
+            st.markdown("**Current check-in**")
+            st.markdown(str(insight.get("current_summary") or "Not answered this visit."))
+
         if insight.get("attention_lines"):
             st.markdown("**Key points**")
             for line in insight["attention_lines"]:
