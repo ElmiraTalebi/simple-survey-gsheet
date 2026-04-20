@@ -1053,74 +1053,22 @@ div[data-baseweb="select"] > div {
 .chat-shell-header {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-    padding: 10px 12px 10px 12px;
+    padding: 10px 14px;
     border-bottom: 1px solid #e2ebf2;
     background: linear-gradient(180deg, rgba(255,255,255,0.92) 0%, rgba(245,249,252,0.9) 100%);
 }
 
 .chat-shell-title {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-}
-
-.chat-shell-avatar {
-    width: 32px;
-    height: 32px;
-    border-radius: 10px;
-    background: linear-gradient(135deg, #0f6cbd 0%, #26a69a 100%);
-    color: white;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 14px;
-    box-shadow: 0 8px 18px rgba(15,108,189,0.14);
-}
-
-.chat-shell-title-text {
-    display: flex;
-    flex-direction: column;
-    gap: 1px;
-}
-
-.chat-shell-label {
-    font-size: 9px;
-    font-weight: 800;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: #6e8497;
+    display: block;
+    width: 100%;
 }
 
 .chat-shell-name {
     font-family: 'Manrope', sans-serif;
-    font-size: 14px;
+    font-size: 15px;
     font-weight: 800;
     color: #143551;
     letter-spacing: -0.03em;
-}
-
-.chat-shell-note {
-    font-size: 10px;
-    color: #607589;
-    background: #f3f8fb;
-    border: 1px solid #e6eef5;
-    border-radius: 999px;
-    padding: 6px 9px;
-}
-
-.chat-shell-summary {
-    padding: 10px 12px;
-    border-bottom: 1px solid #e8eef4;
-    background: rgba(247, 251, 254, 0.72);
-    font-size: 12px;
-    line-height: 1.55;
-    color: #5a7085;
-}
-
-.chat-shell-summary strong {
-    color: #17324a;
 }
 
 .chat-history {
@@ -5279,13 +5227,8 @@ def render_freeform_chat():
         '<div class="chat-shell">'
         '  <div class="chat-shell-header">'
         '    <div class="chat-shell-title">'
-        '      <div class="chat-shell-avatar">💬</div>'
-        '      <div class="chat-shell-title-text">'
-        '        <div class="chat-shell-label">Open Conversation</div>'
-        '        <div class="chat-shell-name">Anything else you’d like to share?</div>'
-        '      </div>'
+        '      <div class="chat-shell-name">Anything else you’d like to share?</div>'
         '    </div>'
-        '    <div class="chat-shell-note">Share symptoms, concerns, or questions for your team</div>'
         '  </div>'
         '  <div class="chat-history">',
         unsafe_allow_html=True,
@@ -5391,27 +5334,14 @@ def render_topic_detail(topic_label: str, topic_key: str):
             _append_assistant_message(state, _step_prompt_text(first_step, topic_key=topic_key, state=state))
 
     # ── Header with progress bar ─────────────────────────────────
-    answered, applicable = get_topic_progress(topic_key, state["data"], state.get("raw_answers"))
-    progress_note = f"{answered}/{applicable} answered" if applicable > 0 else "Getting started"
-    last_visit_summary = _natural_summary(topic_key, last_data) if last_data else ""
     header_html = (
         '<div class="chat-shell">'
         '  <div class="chat-shell-header">'
         '    <div class="chat-shell-title">'
-        '      <div class="chat-shell-avatar">🩺</div>'
-        '      <div class="chat-shell-title-text">'
-        f'        <div class="chat-shell-label">Topic Check-In</div>'
-        f'        <div class="chat-shell-name">{_html.escape(topic_label)}</div>'
-        '      </div>'
+        f'      <div class="chat-shell-name">{_html.escape(topic_label)}</div>'
         '    </div>'
-        f'    <div class="chat-shell-note">{_html.escape(progress_note)}</div>'
         '  </div>'
-        + (
-            f'<div class="chat-shell-summary"><strong>Last visit:</strong> {_html.escape(last_visit_summary)}</div>'
-            if last_visit_summary else
-            '<div class="chat-shell-summary"><strong>Last visit:</strong> No prior summary recorded for this topic.</div>'
-        )
-        + '  <div class="chat-history">'
+        '  <div class="chat-history">'
     )
     st.markdown(
         header_html,
