@@ -659,6 +659,188 @@ div[data-baseweb="select"] > div {
     box-shadow: var(--shadow);
 }
 
+.report-dashboard {
+    background:
+        linear-gradient(180deg, rgba(255,255,255,0.98) 0%, rgba(247,250,253,0.98) 100%);
+    border: 1px solid #d8e4ee;
+    border-radius: 28px;
+    padding: 24px 24px 20px 24px;
+    box-shadow: var(--shadow);
+}
+
+.report-summary-banner {
+    background: linear-gradient(180deg, #fff4cf 0%, #fff8e7 100%);
+    border: 1px solid #ebd28a;
+    border-radius: 22px;
+    padding: 18px 20px;
+    margin: 14px 0 18px 0;
+    display: grid;
+    grid-template-columns: 88px 1fr;
+    gap: 16px;
+    align-items: center;
+}
+
+.report-summary-avatar {
+    width: 76px;
+    height: 76px;
+    border-radius: 18px;
+    border: 1px solid #dfc26b;
+    background: linear-gradient(180deg, #fffdf7 0%, #fff4d2 100%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 34px;
+}
+
+.report-summary-copy {
+    color: #5e4a12;
+    font-size: 13px;
+    line-height: 1.65;
+}
+
+.report-summary-title {
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #8b6c1b;
+    margin-bottom: 4px;
+}
+
+.report-topic-card {
+    border-radius: 18px;
+    padding: 0;
+    overflow: hidden;
+    border: 1px solid #d7e1eb;
+    background: #ffffff;
+    min-height: 164px;
+    box-shadow: 0 8px 18px rgba(23, 50, 74, 0.05);
+    margin-bottom: 10px;
+}
+
+.report-topic-card.red {
+    border-color: #ef9c9c;
+    background: linear-gradient(180deg, #fff7f7 0%, #fff1f1 100%);
+}
+
+.report-topic-card.green {
+    border-color: #9fd1a8;
+    background: linear-gradient(180deg, #f6fff7 0%, #effbf1 100%);
+}
+
+.report-topic-strip {
+    padding: 8px 12px;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: white;
+    background: #9aa8b7;
+}
+
+.report-topic-card.red .report-topic-strip {
+    background: #d84c43;
+}
+
+.report-topic-card.green .report-topic-strip {
+    background: #3f8f49;
+}
+
+.report-topic-body {
+    padding: 12px;
+}
+
+.report-topic-name {
+    font-size: 13px;
+    font-weight: 800;
+    color: #16324b;
+    margin-bottom: 8px;
+}
+
+.report-topic-compare {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 8px;
+}
+
+.report-topic-compare-row {
+    border: 1px solid #e4ebf2;
+    border-radius: 14px;
+    padding: 8px 9px;
+    background: rgba(255,255,255,0.86);
+}
+
+.report-topic-compare-label {
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: #8295a9;
+    margin-bottom: 2px;
+}
+
+.report-topic-compare-value {
+    font-size: 12px;
+    line-height: 1.45;
+    color: #18344d;
+}
+
+.report-topic-open {
+    margin-top: -4px;
+    margin-bottom: 12px;
+}
+
+.report-detail-shell {
+    margin-top: 10px;
+    border: 1px solid #d7e2eb;
+    border-radius: 24px;
+    background: linear-gradient(180deg, #ffffff 0%, #f9fbfd 100%);
+    box-shadow: var(--shadow-sm);
+    overflow: hidden;
+}
+
+.report-detail-header {
+    padding: 16px 18px;
+    border-bottom: 1px solid #e5edf4;
+    background: rgba(255,255,255,0.88);
+}
+
+.report-detail-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+    padding: 16px 18px 6px 18px;
+}
+
+.report-detail-panel {
+    border: 1px solid #e2eaf1;
+    border-radius: 18px;
+    padding: 14px;
+    background: #ffffff;
+}
+
+.report-detail-label {
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #7d90a3;
+    margin-bottom: 6px;
+}
+
+.report-detail-text {
+    font-size: 14px;
+    line-height: 1.6;
+    color: #17324a;
+}
+
+@media (max-width: 900px) {
+    .report-summary-banner,
+    .report-detail-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
 /* ── Progress / completion ── */
 .prog-label {
     font-size: 12px;
@@ -2487,6 +2669,84 @@ def run_topic_summary_agent(topic_label: str, topic_data: dict) -> dict:
     return {**default, **result} if result else default
 
 
+_REPORT_TOPIC_INSIGHT_SYS = """
+You compare one topic from a patient's current check-in against their last check-in.
+
+Return ONLY valid JSON:
+{
+  "status": "worsened|new_issue|improved|stable|unanswered",
+  "status_label": "...",
+  "last_summary": "..." or null,
+  "current_summary": "..." or null,
+  "detail_lines": ["...", "..."],
+  "attention_lines": ["...", "..."]
+}
+
+Rules:
+  - worsened: same issue but clearly more severe, broader, or more disruptive now
+  - new_issue: a clinically meaningful issue is present now but was absent or not reported last visit
+  - improved: clearly better now than last visit
+  - stable: same overall, unchanged, or no meaningful difference
+  - unanswered: current topic has essentially no usable answer
+  - Keep summaries patient/clinician-readable, plain language, and concise.
+  - detail_lines should be short factual lines that help a clinician compare last vs now.
+  - attention_lines should include only the most clinically relevant items.
+"""
+
+
+def run_report_topic_insight_agent(topic_label: str, last_topic_data: dict, current_topic_data: dict) -> dict:
+    default = {
+        "status": "unanswered" if not current_topic_data else "stable",
+        "status_label": "Not answered" if not current_topic_data else "Stable",
+        "last_summary": None,
+        "current_summary": None,
+        "detail_lines": [],
+        "attention_lines": [],
+    }
+    if not openai_client:
+        return default
+    result = _call_agent(_REPORT_TOPIC_INSIGHT_SYS, {
+        "topic_label": topic_label,
+        "last_topic_data": last_topic_data,
+        "current_topic_data": current_topic_data,
+    }, max_tokens=220)
+    return {**default, **result} if result else default
+
+
+_REPORT_OVERVIEW_SYS = """
+You write a short patient-summary banner for a clinical topic dashboard.
+
+Return ONLY valid JSON:
+{
+  "main_issue": "..." or null,
+  "new_issues": ["...", "..."],
+  "improvements": ["...", "..."],
+  "needs_attention": ["...", "..."]
+}
+
+Rules:
+  - Use the provided topic insight summaries.
+  - Keep each item short.
+  - Mention only the most meaningful changes.
+  - If a category has nothing meaningful, return an empty list or null.
+"""
+
+
+def run_report_overview_agent(topic_insights: list[dict]) -> dict:
+    default = {
+        "main_issue": None,
+        "new_issues": [],
+        "improvements": [],
+        "needs_attention": [],
+    }
+    if not openai_client:
+        return default
+    result = _call_agent(_REPORT_OVERVIEW_SYS, {
+        "topic_insights": topic_insights,
+    }, max_tokens=180)
+    return {**default, **result} if result else default
+
+
 # ══════════════════════════════════════════════════════════════════
 # AGENT 1 — ANSWER INTERPRETER
 # ══════════════════════════════════════════════════════════════════
@@ -3779,6 +4039,7 @@ def _init_state():
         },
         "report":              "",
         "report_saved":        False,
+        "report_selected_topic": None,
         "last_checkin":        {},
         "has_prev_checkin":    False,
         "freeform_chat":       [],
@@ -3953,6 +4214,148 @@ def _natural_summary(topic_key: str, data: dict) -> str:
         return summary
     answered = len([k for k, v in data.items() if v not in (None, "", [], {}) and not str(k).endswith("_other_detail")])
     return f"{answered} details were recorded last visit." if answered else ""
+
+
+def _report_topic_fallback(topic_key: str, topic_label: str, last_topic_data: dict, current_topic_data: dict) -> dict:
+    last_summary = _natural_summary(topic_key, last_topic_data) if last_topic_data else "No prior details recorded."
+    current_summary = _natural_summary(topic_key, current_topic_data) if current_topic_data else "Not answered this visit."
+    if not current_topic_data:
+        status = "unanswered"
+    elif not last_topic_data:
+        status = "new_issue"
+    else:
+        status = "stable"
+    status_label = {
+        "worsened": "Worsened",
+        "new_issue": "New issue",
+        "improved": "Improved",
+        "stable": "Stable",
+        "unanswered": "Not answered",
+    }.get(status, "Stable")
+    return {
+        "topic_key": topic_key,
+        "topic_label": topic_label,
+        "status": status,
+        "status_label": status_label,
+        "last_summary": last_summary,
+        "current_summary": current_summary,
+        "detail_lines": [],
+        "attention_lines": [],
+    }
+
+
+def _report_topic_insights(all_data: dict) -> list[dict]:
+    insights = []
+    last_ck = st.session_state.get("last_checkin", {})
+    for label, key in TOPICS:
+        current_topic_data = all_data.get(key, {}) or {}
+        last_topic_data = last_ck.get(key, {}) or {}
+        fallback = _report_topic_fallback(key, label, last_topic_data, current_topic_data)
+        result = run_report_topic_insight_agent(label, last_topic_data, current_topic_data)
+        merged = {**fallback, **result}
+        merged["topic_key"] = key
+        merged["topic_label"] = label
+        if not merged.get("last_summary"):
+            merged["last_summary"] = fallback["last_summary"]
+        if not merged.get("current_summary"):
+            merged["current_summary"] = fallback["current_summary"]
+        merged["detail_lines"] = merged.get("detail_lines") or []
+        merged["attention_lines"] = merged.get("attention_lines") or []
+        insights.append(merged)
+    return insights
+
+
+def _report_status_class(status: str) -> str:
+    if status in {"worsened", "new_issue"}:
+        return "red"
+    if status == "improved":
+        return "green"
+    return ""
+
+
+def _render_report_summary_banner(topic_insights: list[dict]):
+    overview = run_report_overview_agent(topic_insights)
+    main_issue = overview.get("main_issue") or "Clinical check-in summary ready for review."
+    new_issues = overview.get("new_issues") or []
+    improvements = overview.get("improvements") or []
+    needs_attention = overview.get("needs_attention") or []
+
+    parts = [
+        '<div class="report-summary-banner">',
+        '<div class="report-summary-avatar">🧑</div>',
+        '<div class="report-summary-copy">',
+        '<div class="report-summary-title">Patient Summary</div>',
+        f'<div><strong>Main issue:</strong> {_html.escape(str(main_issue))}</div>',
+    ]
+    if new_issues:
+        parts.append(f'<div><strong>New issues:</strong> {_html.escape("; ".join(str(x) for x in new_issues[:3]))}</div>')
+    if improvements:
+        parts.append(f'<div><strong>Improvement:</strong> {_html.escape("; ".join(str(x) for x in improvements[:3]))}</div>')
+    if needs_attention:
+        parts.append(f'<div><strong>Needs attention:</strong> {_html.escape("; ".join(str(x) for x in needs_attention[:4]))}</div>')
+    parts.extend(['</div>', '</div>'])
+    st.markdown("".join(parts), unsafe_allow_html=True)
+
+
+def _render_report_topic_card(insight: dict):
+    status_class = _report_status_class(insight.get("status", "stable"))
+    status_label = insight.get("status_label") or "Stable"
+    topic_name = insight.get("topic_label", "").split(" ", 1)[1] if " " in insight.get("topic_label", "") else insight.get("topic_label", "")
+    st.markdown(
+        f'<div class="report-topic-card {status_class}">'
+        f'  <div class="report-topic-strip">{_html.escape(status_label)}</div>'
+        f'  <div class="report-topic-body">'
+        f'    <div class="report-topic-name">{_html.escape(topic_name)}</div>'
+        f'    <div class="report-topic-compare">'
+        f'      <div class="report-topic-compare-row"><div class="report-topic-compare-label">Last</div><div class="report-topic-compare-value">{_html.escape(str(insight.get("last_summary") or "No prior details recorded."))}</div></div>'
+        f'      <div class="report-topic-compare-row"><div class="report-topic-compare-label">Now</div><div class="report-topic-compare-value">{_html.escape(str(insight.get("current_summary") or "Not answered this visit."))}</div></div>'
+        f'    </div>'
+        f'  </div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def _render_report_topic_detail(insight: dict, all_data: dict):
+    topic_key = insight["topic_key"]
+    last_topic_data = st.session_state.get("last_checkin", {}).get(topic_key, {}) or {}
+    current_topic_data = all_data.get(topic_key, {}) or {}
+    topic_name = insight.get("topic_label", "")
+
+    st.markdown(
+        '<div class="report-detail-shell">'
+        '  <div class="report-detail-header">'
+        f'    <div style="font-size:12px;font-weight:800;letter-spacing:0.08em;text-transform:uppercase;color:#6b7b92;">Selected topic</div>'
+        f'    <div style="font-size:24px;font-weight:800;letter-spacing:-0.03em;color:#10233d;margin-top:4px;">{_html.escape(topic_name)}</div>'
+        '  </div>'
+        '  <div class="report-detail-grid">'
+        f'    <div class="report-detail-panel"><div class="report-detail-label">Last Check-In</div><div class="report-detail-text">{_html.escape(str(insight.get("last_summary") or "No prior details recorded."))}</div></div>'
+        f'    <div class="report-detail-panel"><div class="report-detail-label">Current Check-In</div><div class="report-detail-text">{_html.escape(str(insight.get("current_summary") or "Not answered this visit."))}</div></div>'
+        '  </div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    with st.expander("More details", expanded=False):
+        if insight.get("attention_lines"):
+            st.markdown("**Key points**")
+            for line in insight["attention_lines"]:
+                st.markdown(f"- {line}")
+        if insight.get("detail_lines"):
+            st.markdown("**Comparison details**")
+            for line in insight["detail_lines"]:
+                st.markdown(f"- {line}")
+
+        last_html = _checkin_summary_html(topic_key, last_topic_data)
+        now_html = _checkin_summary_html(topic_key, current_topic_data)
+        if last_html or now_html:
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown("**Last visit details**")
+                st.markdown(last_html or '<div style="color:#7a8ea4;">No prior details recorded.</div>', unsafe_allow_html=True)
+            with col2:
+                st.markdown("**Current visit details**")
+                st.markdown(now_html or '<div style="color:#7a8ea4;">No current details recorded.</div>', unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -5126,20 +5529,6 @@ def screen_main():
 def screen_report():
     render_sidebar()
 
-    st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.markdown("### 📄 Clinical Check-In Report")
-    st.markdown(
-        f"**Patient:** {st.session_state.patient_name} &nbsp;|&nbsp; "
-        f"**Date:** {datetime.now().strftime('%B %d, %Y')}"
-    )
-    st.markdown(
-        '<div style="font-size:13px;color:#627287;line-height:1.7;">'
-        'This report is formatted for quick clinical review before the appointment.'
-        '</div>',
-        unsafe_allow_html=True,
-    )
-    st.markdown('</div>', unsafe_allow_html=True)
-
     all_data = _build_all_topic_data()
     ff_msgs  = [m for m in st.session_state.freeform_chat if m["role"] == "user"]
     if ff_msgs:
@@ -5150,9 +5539,42 @@ def screen_report():
             st.session_state.report = generate_report(
                 st.session_state.patient_name, all_data
             )
+    topic_insights = _report_topic_insights(all_data)
+    if st.session_state.get("report_selected_topic") not in {item["topic_key"] for item in topic_insights}:
+        first_answered = next((item["topic_key"] for item in topic_insights if item.get("status") != "unanswered"), None)
+        st.session_state.report_selected_topic = first_answered or (topic_insights[0]["topic_key"] if topic_insights else None)
 
-    st.markdown('<div class="report-box">', unsafe_allow_html=True)
-    st.markdown(st.session_state.report)
+    st.markdown('<div class="report-dashboard">', unsafe_allow_html=True)
+    st.markdown(
+        f'<div style="font-size:28px;font-weight:800;letter-spacing:-0.04em;color:#10233d;">📄 Clinical Check-In Report</div>'
+        f'<div style="font-size:13px;color:#627287;line-height:1.7;margin-top:6px;"><strong>Patient:</strong> {_html.escape(st.session_state.patient_name)} &nbsp;|&nbsp; <strong>Date:</strong> {datetime.now().strftime("%B %d, %Y")}</div>',
+        unsafe_allow_html=True,
+    )
+    _render_report_summary_banner(topic_insights)
+
+    for row_start in range(0, len(topic_insights), 4):
+        row_items = topic_insights[row_start:row_start + 4]
+        cols = st.columns(len(row_items))
+        for col, insight in zip(cols, row_items):
+            with col:
+                _render_report_topic_card(insight)
+                if st.button(
+                    "Open topic",
+                    key=f"report_topic_{insight['topic_key']}",
+                    use_container_width=True,
+                ):
+                    st.session_state.report_selected_topic = insight["topic_key"]
+                    st.rerun()
+
+    selected_key = st.session_state.get("report_selected_topic")
+    selected_insight = next((item for item in topic_insights if item["topic_key"] == selected_key), None)
+    if selected_insight:
+        _render_report_topic_detail(selected_insight, all_data)
+
+    with st.expander("Full clinical narrative report", expanded=False):
+        st.markdown('<div class="report-box">', unsafe_allow_html=True)
+        st.markdown(st.session_state.report)
+        st.markdown('</div>', unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
     st.markdown("---")
