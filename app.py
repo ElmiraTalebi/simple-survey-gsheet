@@ -1974,6 +1974,164 @@ TOPIC_INTROS = {
     "other":     "Finally, let's cover any other symptoms — breathing, skin, hearing, and more.",
 }
 
+TOPIC_SCENARIO_PASSES = {
+    "pain": {
+        "title": "Breakthrough throat pain with swallowing",
+        "why_it_matters": "Shows free-text interpretation, targeted follow-up, and escalation when pain is worsening.",
+        "conversation": [
+            ("Assistant", "Do you have any pain today?"),
+            ("Patient", "Yes, mostly in my throat when I swallow."),
+            ("Assistant", "On a scale of 0-10, how bad is the throat pain at its worst?"),
+            ("Patient", "About an 8. It's definitely worse than last week."),
+            ("Assistant", "What pain medications are you using right now?"),
+            ("Patient", "Oxycodone and gabapentin."),
+            ("Assistant", "Are you taking them as prescribed, and are they helping enough?"),
+            ("Patient", "I'm taking them, but the oxycodone only helps for a couple of hours."),
+        ],
+        "agent_pass": [
+            "Answer Interpreter: maps 'mostly in my throat when I swallow' to the throat branch without forcing the patient to use menu wording.",
+            "Prior Comparison: flags a likely worsening trend when the patient says the pain is worse than last week.",
+            "Urgency Agent: treats 8/10 pain with incomplete relief as a higher-priority symptom for same-visit review.",
+            "Doctor-Relevance Agent: confirms the note is clinically useful because it captures location, severity, medications, and response.",
+            "Next-Move Agent: asks a focused follow-up about medication timing or swallowing impact instead of repeating the pain question.",
+        ],
+    },
+    "nutrition": {
+        "title": "Eating less, weight loss, and dehydration risk",
+        "why_it_matters": "Shows nutrition decline with swallowing barriers and fluid support needs.",
+        "conversation": [
+            ("Assistant", "How has eating been going since your last visit?"),
+            ("Patient", "I'm eating less than usual. Mostly soft foods and shakes."),
+            ("Assistant", "What has your weight been recently?"),
+            ("Patient", "I was 156 last visit and I'm 149 now."),
+            ("Assistant", "Are you having trouble swallowing?"),
+            ("Patient", "Yes, solids feel stuck and it hurts."),
+            ("Assistant", "Are you getting any feeding tube support or IV fluids?"),
+            ("Patient", "No feeding tube, but I had IV fluids twice this week because I got dehydrated."),
+        ],
+        "agent_pass": [
+            "Answer Interpreter: preserves the patient's natural description while still mapping to structured fields like 'eating less than usual' and swallowing difficulty.",
+            "Urgency Agent: marks weight loss plus dehydration support as clinically important even if the patient sounds calm.",
+            "Doctor-Relevance Agent: recognizes that oral intake, weight change, and hydration support together are enough to surface in the report.",
+            "Next-Move Agent: can ask whether pain medicine timing is affecting meals, which matches the existing nutrition logic.",
+        ],
+    },
+    "oral": {
+        "title": "Dry mouth, sores, and thick mucus",
+        "why_it_matters": "Shows how the bot separates several oral symptoms without making the patient repeat themselves.",
+        "conversation": [
+            ("Assistant", "Do you have any mouth sores, ulcers, or white patches right now?"),
+            ("Patient", "Yes, I have a sore on the side of my tongue."),
+            ("Assistant", "Is it affecting your ability to eat or drink?"),
+            ("Patient", "A little. Spicy food really burns."),
+            ("Assistant", "Are you having dryness in your mouth?"),
+            ("Patient", "Yes, all day, and it's waking me up at night."),
+            ("Assistant", "Are you having problems with thick mucus in your throat too?"),
+            ("Patient", "Yes, especially in the morning. I've been using salt and baking soda rinses and they help some."),
+        ],
+        "agent_pass": [
+            "Answer Interpreter: captures tongue soreness, dry mouth timing, and mucus management from natural phrasing.",
+            "Sentiment Agent: detects frustration and symptom burden even without explicit distress language.",
+            "Doctor-Relevance Agent: keeps the detail because the conversation covers symptom type, location, daily impact, and what the patient is already trying.",
+            "Next-Move Agent: avoids redundant questions if the patient already volunteered that rinses help some.",
+        ],
+    },
+    "gi": {
+        "title": "Nausea with partial medication relief",
+        "why_it_matters": "Shows targeted follow-up when a free-text answer contains some, but not all, clinically needed details.",
+        "conversation": [
+            ("Assistant", "Have you had any nausea, vomiting, or diarrhea since your last visit?"),
+            ("Patient", "Mostly nausea, and I threw up once yesterday."),
+            ("Assistant", "How often are you feeling nauseated?"),
+            ("Patient", "A few times a day, usually after I try to eat."),
+            ("Assistant", "What are you using for nausea, and is it helping?"),
+            ("Patient", "Zofran twice a day. It helps a little but not enough."),
+            ("Assistant", "How often are you vomiting and how much?"),
+            ("Patient", "Just once yesterday, small amount."),
+        ],
+        "agent_pass": [
+            "Answer Interpreter: correctly splits the patient's first answer into nausea and vomiting rather than forcing one label.",
+            "Doctor-Relevance Agent: notices when management is present but relief is incomplete, which makes the symptom more actionable.",
+            "Next-Move Agent: asks only for the missing vomiting frequency and amount because the nausea management answer was already sufficient.",
+        ],
+    },
+    "fatigue": {
+        "title": "Fatigue affecting function and sleep",
+        "why_it_matters": "Shows how symptom burden can span weakness, daytime function, and medication-related drowsiness.",
+        "conversation": [
+            ("Assistant", "Are you feeling more tired or weak than usual?"),
+            ("Patient", "Yes, very tired. My legs also feel weak."),
+            ("Assistant", "Is the fatigue affecting your daily activities?"),
+            ("Patient", "Yes, I need help showering and I rest most of the day."),
+            ("Assistant", "Are your pain medications making you feel drowsy?"),
+            ("Patient", "Sometimes, especially after the afternoon dose."),
+            ("Assistant", "Are you able to sleep through the night?"),
+            ("Patient", "No, I wake up because of dry mouth and coughing."),
+        ],
+        "agent_pass": [
+            "Answer Interpreter: handles mixed fatigue plus focal weakness in one reply.",
+            "Urgency Agent: increases concern when weakness is affecting basic daily function.",
+            "Doctor-Relevance Agent: links drowsiness, poor sleep, and daytime impairment into a clinically coherent summary.",
+            "Next-Move Agent: asks what is waking the patient at night, which lines up with the sleep follow-up rule.",
+        ],
+    },
+    "activity": {
+        "title": "Reduced activity from pain and fatigue",
+        "why_it_matters": "Shows a functional-status conversation rather than a symptom-only conversation.",
+        "conversation": [
+            ("Assistant", "How is your daily life? Are you able to do your usual activities?"),
+            ("Patient", "I'm doing less than usual."),
+            ("Assistant", "What activities are most difficult right now?"),
+            ("Patient", "Cooking, grocery shopping, and climbing stairs."),
+            ("Assistant", "Is the difficulty mainly due to pain, fatigue, or something else?"),
+            ("Patient", "Both. I get tired fast and my throat pain makes meals a project."),
+        ],
+        "agent_pass": [
+            "Answer Interpreter: maps the patient's free-text answer to the activity branch and keeps the concrete examples.",
+            "Prior Comparison: can highlight a decline if the patient was previously doing normal activities.",
+            "Doctor-Relevance Agent: preserves specific functional losses because they are more useful than a generic 'doing worse' label.",
+        ],
+    },
+    "mood": {
+        "title": "Anxiety, low mood, and limited support",
+        "why_it_matters": "Shows empathic handling of emotional symptoms while still collecting actionable support needs.",
+        "conversation": [
+            ("Assistant", "How are you feeling emotionally? Are you feeling anxious or worried about anything?"),
+            ("Patient", "I've been pretty overwhelmed and worried about treatment not working."),
+            ("Assistant", "Is anxiety or worry affecting your sleep, eating, or daily activities?"),
+            ("Patient", "Yes, mostly my sleep and appetite."),
+            ("Assistant", "Have you been feeling down or depressed?"),
+            ("Patient", "Yes, on and off most days."),
+            ("Assistant", "Do you feel you have enough support between visits?"),
+            ("Patient", "Not really. My daughter works and I'm alone a lot."),
+        ],
+        "agent_pass": [
+            "Sentiment Agent: picks up emotional strain and possible disengagement risk from the patient's wording.",
+            "Doctor-Relevance Agent: treats low support plus depressed mood as a meaningful care-coordination issue.",
+            "Next-Move Agent: follows with a supportive question about what kind of help would be most useful right now.",
+        ],
+    },
+    "other": {
+        "title": "Mixed red-flag symptoms outside the core tracks",
+        "why_it_matters": "Shows how the catch-all topic still supports fast safety escalation.",
+        "conversation": [
+            ("Assistant", "Are you having any difficulty breathing or shortness of breath?"),
+            ("Patient", "A little short of breath when I walk across the room."),
+            ("Assistant", "Have you had any fever or chills recently?"),
+            ("Patient", "Yes, I had chills last night and my temperature was 100.8."),
+            ("Assistant", "Have you been feeling dizzy or lightheaded?"),
+            ("Patient", "Yes, mostly when I stand up, and I almost fell this morning."),
+            ("Assistant", "Have you had any skin problems like irritation, wounds, or redness?"),
+            ("Patient", "The skin on my neck is raw from radiation and looks worse this week."),
+        ],
+        "agent_pass": [
+            "Urgency Agent: identifies fever, near-fall, and exertional shortness of breath as same-day review signals.",
+            "Doctor-Relevance Agent: keeps the temperature, timing, near-fall, and skin progression because those specifics drive triage.",
+            "Orchestrator: prioritizes the safety-sensitive follow-up path over lower-priority symptom details.",
+        ],
+    },
+}
+
 TOPIC_MAIN_RULES = {
     "pain":      ["Main2", "Main3", "Main12", "Main38"],
     "nutrition": ["Main5", "Main6", "Main8", "Main25", "Main26", "Main27", "Main34"],
@@ -4647,6 +4805,38 @@ def _natural_summary(topic_key: str, data: dict) -> str:
     return ""
 
 
+def _scenario_conversation_markdown(lines: list[tuple[str, str]]) -> str:
+    rendered = []
+    for speaker, text in lines:
+        rendered.append(f"**{speaker}:** {text}")
+    return "\n\n".join(rendered)
+
+
+def _render_topic_scenario_pass(topic_key: str):
+    scenario = TOPIC_SCENARIO_PASSES.get(topic_key)
+    if not scenario:
+        st.caption("No scenario pass has been added for this topic yet.")
+        return
+
+    st.markdown(f"**Scenario:** {scenario['title']}")
+    st.caption(scenario["why_it_matters"])
+    st.markdown(_scenario_conversation_markdown(scenario["conversation"]))
+    st.markdown("**Agent workflow pass**")
+    for item in scenario["agent_pass"]:
+        st.markdown(f"- {item}")
+
+
+def _render_scenario_library():
+    st.markdown("### Multi-Agent Scenario Pass")
+    st.caption(
+        "These realistic sample conversations show how each topic should behave across interpretation, triage, and next-step questioning."
+    )
+    for _, topic_key in TOPICS:
+        label = TOPIC_LABELS.get(topic_key, topic_key)
+        with st.expander(label, expanded=False):
+            _render_topic_scenario_pass(topic_key)
+
+
 # ══════════════════════════════════════════════════════════════════
 # FREE-FORM CHAT LLM
 # ══════════════════════════════════════════════════════════════════
@@ -5381,6 +5571,9 @@ def render_topic_detail(topic_label: str, topic_key: str):
         else:
             st.caption("No information from your last visit was recorded for this section.")
 
+    with st.expander("Sample conversation for this topic", expanded=False):
+        _render_topic_scenario_pass(topic_key)
+
     # ── Initialize topic on first visit ─────────────────────────
     if state["status"] == "not_started":
         state["status"] = "in_progress"
@@ -5711,6 +5904,9 @@ def screen_overview():
         )
 
     st.markdown('</div>', unsafe_allow_html=True)
+
+    with st.expander("Review sample multi-agent scenario passes", expanded=False):
+        _render_scenario_library()
 
     _, col, _ = st.columns([1, 2, 1])
     with col:
