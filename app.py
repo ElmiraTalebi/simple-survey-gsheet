@@ -4056,7 +4056,6 @@ def _init_state():
         },
         "report":              "",
         "report_saved":        False,
-        "report_open_topic":   None,
         "last_checkin":        {},
         "has_prev_checkin":    False,
         "freeform_chat":       [],
@@ -4377,12 +4376,6 @@ def _render_report_topic_detail(insight: dict, all_data: dict):
             with col2:
                 st.markdown("**Current visit details**")
                 st.markdown(now_html or '<div style="color:#7a8ea4;">No current details recorded.</div>', unsafe_allow_html=True)
-
-
-def _toggle_report_topic(topic_key: str):
-    current = st.session_state.get("report_open_topic")
-    st.session_state.report_open_topic = None if current == topic_key else topic_key
-
 
 # ══════════════════════════════════════════════════════════════════
 # FREE-FORM CHAT LLM
@@ -5566,8 +5559,6 @@ def screen_report():
                 st.session_state.patient_name, all_data
             )
     topic_insights = _report_topic_insights(all_data)
-    if st.session_state.get("report_open_topic") not in {item["topic_key"] for item in topic_insights}:
-        st.session_state.report_open_topic = None
 
     st.markdown('<div class="report-dashboard">', unsafe_allow_html=True)
     st.markdown(
@@ -5583,15 +5574,7 @@ def screen_report():
         for col, insight in zip(cols, row_items):
             with col:
                 _render_report_topic_card(insight)
-                if st.button(
-                    "Close topic" if st.session_state.get("report_open_topic") == insight["topic_key"] else "Open topic",
-                    key=f"report_topic_{insight['topic_key']}",
-                    use_container_width=True,
-                ):
-                    _toggle_report_topic(insight["topic_key"])
-                    st.rerun()
-                if st.session_state.get("report_open_topic") == insight["topic_key"]:
-                    _render_report_topic_detail(insight, all_data)
+                _render_report_topic_detail(insight, all_data)
 
     with st.expander("Full clinical narrative report", expanded=False):
         st.markdown('<div class="report-box">', unsafe_allow_html=True)
