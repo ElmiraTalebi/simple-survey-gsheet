@@ -97,11 +97,17 @@ def _is_semantically_redundant_question(text_a: str, text_b: str) -> bool:
     return overlap >= 2 and overlap >= smallest - 1
 
 
-def _coerce_structured_answer(topic_key: str, step: dict, answer: Any, current_data: dict) -> Any:
+def _coerce_structured_answer(
+    topic_key: str,
+    step: dict,
+    answer: Any,
+    current_data: dict,
+    raw_answer: Any = None,
+) -> Any:
     if not isinstance(answer, str):
         return answer
 
-    raw = answer.strip()
+    raw = str(raw_answer if raw_answer is not None else answer).strip()
     if not raw:
         return answer
 
@@ -113,14 +119,72 @@ def _coerce_structured_answer(topic_key: str, step: dict, answer: Any, current_d
         if any(w in normalized for w in ("tongue", "lingual")):
             return "Tongue"
         # Already a clean option value — pass through unchanged
-        if raw in ("Throat", "Tongue", "Somewhere else"):
-            return raw
+        if answer in ("Throat", "Tongue", "Somewhere else"):
+            if answer == "Somewhere else" and raw not in ("Somewhere else", "somewhere else"):
+                current_data["pain_location_raw"] = raw
+                current_data["other_pain_desc"] = raw
+            return answer
         # Everything else: it's a real location the patient named → preserve it
         # and classify as "Somewhere else" so the flowchart continues correctly
+        current_data["pain_location_raw"] = raw
         current_data["other_pain_desc"] = raw
         return "Somewhere else"
 
     return answer
+
+
+YES_SYNONYMS = {
+    "yes", "yeah", "yep", "yup", "sure", "okay", "ok", "of course", "i do",
+    "i am", "it is", "there is", "correct", "right",
+}
+
+NO_SYNONYMS = {
+    "no", "nope", "nah", "not really", "i dont", "i do not", "none", "negative",
+}
+
+BODY_LOCATION_TERMS = {
+    "head", "scalp", "face", "jaw", "chin", "ear", "ears", "neck", "throat", "tongue",
+    "mouth", "lip", "lips", "gum", "gums", "tooth", "teeth", "cheek", "palate",
+    "shoulder", "chest", "arm", "arms", "elbow", "wrist", "hand", "hands", "finger",
+    "fingers", "back", "side", "rib", "ribs", "stomach", "abdomen", "belly", "hip",
+    "leg", "legs", "knee", "knees", "ankle", "ankles", "foot", "feet", "toe", "toes",
+}
+
+HEAD_NECK_LOCATION_TERMS = {
+    "head", "face", "jaw", "chin", "ear", "ears", "neck", "throat", "tongue",
+    "mouth", "lip", "lips", "gum", "gums", "tooth", "teeth", "cheek", "palate", "scalp",
+}
+
+
+def _looks_like_body_location(text: str) -> bool:
+    normalized = _norm_text(text)
+    if not normalized:
+        return False
+    words = set(normalized.split())
+    return bool(words & BODY_LOCATION_TERMS)
+
+
+def _is_head_neck_location(text: str) -> bool:
+    normalized = _norm_text(text)
+    if not normalized:
+        return False
+    words = set(normalized.split())
+    return bool(words & HEAD_NECK_LOCATION_TERMS)
+
+
+def _match_binary_option(step: dict, user_input: str) -> Optional[str]:
+    opts = step.get("opts", [])
+    if len(opts) != 2:
+        return None
+    normalized = _norm_text(user_input)
+    option_map = {_norm_text(opt): opt for opt in opts}
+    yes_opt = option_map.get("yes")
+    no_opt = option_map.get("no")
+    if yes_opt and normalized in YES_SYNONYMS:
+        return yes_opt
+    if no_opt and normalized in NO_SYNONYMS:
+        return no_opt
+    return None
 
 
 def _looks_vague_answer(answer: Any) -> bool:
@@ -960,8 +1024,24 @@ def render_active_question(question: str, label: str = "Current question"):
     )
 
 
+CONVERSATIONAL_QUESTION_BANK = {
+    "has_pain": "Are you having any pain today?",
+    "throat_timing": "Is that throat pain there all the time, or mainly when you swallow or eat?",
+    "tongue_type": "Does it feel like a sore on your tongue, or more like general tongue pain?",
+    "pain_medications": "What are you taking for pain right now?",
+    "taking_as_prescribed": "Have you been able to take your medications the way they were prescribed?",
+    "eating_ability": "How has eating been going since your last visit?",
+    "swallowing_difficulty": "Any trouble swallowing food, liquids, or pills?",
+    "mouth_sores": "Have you noticed any mouth sores, ulcers, or white patches lately?",
+    "dry_mouth": "Has dry mouth been bothering you?",
+    "fatigue": "Have you been feeling more tired or weaker than usual?",
+    "activity_level": "How are your usual day-to-day activities going right now?",
+    "emotional_state": "How have you been feeling emotionally lately?",
+}
+
+
 def _step_prompt_text(step: dict) -> str:
-    question_text = step["text"]
+    question_text = CONVERSATIONAL_QUESTION_BANK.get(step["id"], step["text"])
     if step.get("type") == "options":
         question_text += " (Choose an option below, or answer in your own words if that fits better.)"
     return question_text
@@ -1174,7 +1254,7 @@ FLOW_PAIN = [
     _q("has_pain", "Do you have any pain today?", opts=["Yes", "No"]),
 
     # Main 3 — location
-    _q("pain_location", "Where exactly is the pain?",
+    _q("pain_location", "Where are you feeling the pain?",
        opts=["Throat", "Tongue", "Somewhere else"],
        when=lambda d: d.get("has_pain") == "Yes"),
 
@@ -1214,22 +1294,36 @@ FLOW_PAIN = [
 
     # ── Somewhere else branch ──
     _q("other_pain_desc",
-       "Can you describe where the pain is?",
+       "Which body part is hurting?",
        type="free_text", placeholder="e.g., near my jaw and ear…",
+       when=lambda d: d.get("pain_location") == "Somewhere else"),
+
+    _q("other_pain_severity",
+       "How bad is that pain at its worst on a 0 to 10 scale?",
+       type="number", min_v=0, max_v=10, default_v=5,
        when=lambda d: d.get("pain_location") == "Somewhere else"),
 
     _q("ear_pain", "Do you have ear pain or hearing changes?",
        opts=["Yes", "No"],
-       when=lambda d: d.get("pain_location") == "Somewhere else"),
+       when=lambda d: (
+           d.get("pain_location") == "Somewhere else"
+           and _is_head_neck_location(d.get("other_pain_desc", ""))
+       )),
 
     _q("jaw_swelling", "Do you feel any swelling near your jaw?",
        opts=["Yes", "No"],
-       when=lambda d: d.get("pain_location") == "Somewhere else"),
+       when=lambda d: (
+           d.get("pain_location") == "Somewhere else"
+           and _is_head_neck_location(d.get("other_pain_desc", ""))
+       )),
 
     _q("pain_with_chewing",
        "Does the pain worsen when chewing or opening your mouth?",
        opts=["Yes", "No"],
-       when=lambda d: d.get("pain_location") == "Somewhere else"),
+       when=lambda d: (
+           d.get("pain_location") == "Somewhere else"
+           and _is_head_neck_location(d.get("other_pain_desc", ""))
+       )),
 
     _q("pain_start",                        # ← added (Main 3, Somewhere else branch)
        "When did this pain start?",
@@ -2087,6 +2181,12 @@ MATCHING RULES:
    answer clearly and unambiguously implies one specific option.
    Exception for severity questions: map numbers to ranges:
      0 → "0 — No pain/None", 1-3 → Mild, 4-6 → Moderate, 7-9 → Severe/High, 10 → Worst
+   - Treat natural conversational yes/no language as valid yes/no:
+     "yeah", "yep", "yup", "sure" → Yes
+     "nope", "nah", "not really" → No
+   - When a question asks for a body location, any real body part is a meaningful answer.
+     Do NOT reject "hand", "head", "jaw", "neck", "arm", etc. just because it is not
+     one of the named specific options.
 
 3. CATCH-ALL OPTION RULE (CRITICAL) — if the options list contains a catch-all such
    as "Somewhere else", "Other", "None of these", or "Something else", AND the
@@ -2483,6 +2583,8 @@ You evaluate patient answers from the physician's perspective. Your outputs:
   3. A compact clinical note (≤35 words, third person) for the doctor's report
 
 FOLLOW-UP RULES:
+  - The question list is a question bank, not a rigid script. Judge the current answer
+    like a clinician deciding whether anything important is still missing.
   - ONLY recommend follow-up if information_completeness is "partial" or "none"
     AND follow_up_count is 0 AND the missing info is clinically meaningful
   - NEVER recommend follow-up if follow_up_count ≥ 1 (absolute limit: 1 per question)
@@ -2596,6 +2698,8 @@ TONE PROFILES:
   simplified — short sentences, very simple words, one idea only
 
 RULES:
+  - Treat the original form question as background only; you are not tied to its exact wording
+  - Ask the most clinically useful next single question, as a doctor or nurse naturally would
   - Write in second person, conversational language
   - Never use medical jargon without immediate plain explanation
   - NEVER ask a multi-part question
@@ -2659,6 +2763,18 @@ def _build_prior_baseline(topic_key: str) -> dict:
     # Return key fields only to keep the payload small
     keys = list(last.keys())[:10]
     return {k: str(last[k]) for k in keys}
+
+
+def _build_all_topic_data() -> dict:
+    payload = {}
+    for _, key in TOPICS:
+        topic_state = st.session_state.topic_states[key]
+        topic_data = dict(topic_state.get("data", {}))
+        raw_answers = topic_state.get("raw_answers", {})
+        if raw_answers:
+            topic_data["_verbatim_answers"] = dict(raw_answers)
+        payload[key] = topic_data
+    return payload
 
 
 def run_agent_pipeline(
@@ -2956,6 +3072,19 @@ def interpret_user_input_with_options(step, user_input):
     no_match but a catch-all exists and the answer is a real, meaningful response.
     Returns matched option string if found, else original input.
     """
+    binary_match = _match_binary_option(step, user_input)
+    if binary_match:
+        return binary_match
+
+    if step.get("id") == "pain_location":
+        normalized = _norm_text(user_input)
+        if any(w in normalized for w in ("throat", "pharynx", "larynx", "voice box")):
+            return "Throat"
+        if any(w in normalized for w in ("tongue", "lingual")):
+            return "Tongue"
+        if _looks_like_body_location(user_input) and not _is_timing_answer(user_input):
+            return "Somewhere else"
+
     if not openai_client:
         # No LLM available — still try catch-all fallback for valid answers
         return _catchall_fallback(step, user_input)
@@ -3221,6 +3350,7 @@ def _init_state():
                 "data": {},
                 "chat": [],
                 "followup_counts": {},
+                "raw_answers": {},
             }
             for _, key in TOPICS
         },
@@ -3642,7 +3772,13 @@ def handle_pending_followup(topic_key: str, answer: str, source: str = "typed"):
         if source_step["type"] == "options":
             interpreted = interpret_user_input_with_options(source_step, retry_text)
             if interpreted in source_step.get("opts", []):
-                handle_answer(topic_key, source_step, interpreted, source=source)
+                handle_answer(
+                    topic_key,
+                    source_step,
+                    interpreted,
+                    source=source,
+                    raw_answer=retry_text,
+                )
                 return
             _request_retry_for_step(topic_key, source_step, retry_text, source=source)
             return
@@ -3700,6 +3836,7 @@ def handle_answer(
     answer,
     source: str = "structured",
     display_override: Optional[str] = None,
+    raw_answer: Any = None,
 ):
     """
     Core answer handler — orchestrates all agents and determines next action.
@@ -3712,12 +3849,17 @@ def handle_answer(
     # ── Ensure followup_counts dict exists (backward compat) ──────
     if "followup_counts" not in state:
         state["followup_counts"] = {}
+    if "raw_answers" not in state:
+        state["raw_answers"] = {}
 
     display = display_override if display_override is not None else (
         ", ".join(answer) if isinstance(answer, list) else str(answer)
     )
     state["chat"].append({"role": "user", "content": display})
-    answer = _coerce_structured_answer(topic_key, step, answer, state["data"])
+    verbatim = raw_answer if raw_answer is not None else display
+    if isinstance(verbatim, str) and verbatim.strip():
+        state["raw_answers"][step["id"]] = verbatim.strip()
+    answer = _coerce_structured_answer(topic_key, step, answer, state["data"], raw_answer=raw_answer)
     state["data"][step["id"]] = answer
     next_step = get_next_step(topic_key, state["data"])
     state["status"] = "in_progress"
@@ -3908,7 +4050,7 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
                 if interpreted in step.get("opts", []):
                     # Use fast-path (no agents) but show the patient's raw text in chat
                     handle_answer(topic_key, step, interpreted, source="structured",
-                                  display_override=user_text)
+                                  display_override=user_text, raw_answer=user_text)
                 else:
                     _request_retry_for_step(topic_key, step, user_text, source="typed")
                     return
@@ -3919,7 +4061,7 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
                 interpreted = interpret_user_input_with_options(step, voice_text)
                 if interpreted in step.get("opts", []):
                     handle_answer(topic_key, step, interpreted, source="structured",
-                                  display_override=voice_text)
+                                  display_override=voice_text, raw_answer=voice_text)
                 else:
                     _request_retry_for_step(topic_key, step, voice_text, source="voice")
                     return
@@ -4325,8 +4467,7 @@ def render_sidebar():
         if any_started:
             if st.button("📤 Submit Check-In", use_container_width=True,
                          type="primary", key="sidebar_submit"):
-                all_data = {k: st.session_state.topic_states[k]["data"]
-                            for _, k in TOPICS}
+                all_data = _build_all_topic_data()
                 if ff_msgs:
                     all_data["freeform_notes"] = [
                         m["content"] for m in st.session_state.freeform_chat
@@ -4506,7 +4647,7 @@ def screen_report():
     )
     st.markdown('</div>', unsafe_allow_html=True)
 
-    all_data = {key: st.session_state.topic_states[key]["data"] for _, key in TOPICS}
+    all_data = _build_all_topic_data()
     ff_msgs  = [m for m in st.session_state.freeform_chat if m["role"] == "user"]
     if ff_msgs:
         all_data["freeform_notes"] = [m["content"] for m in ff_msgs]
