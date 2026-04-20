@@ -905,19 +905,19 @@ div[data-baseweb="select"] > div {
         radial-gradient(circle at top right, rgba(15,108,189,0.07), transparent 32%),
         linear-gradient(180deg, rgba(255,255,255,0.96) 0%, rgba(248,251,254,0.98) 100%);
     border: 1px solid #d9e6f0;
-    border-radius: 30px;
+    border-radius: 26px;
     padding: 0;
     overflow: hidden;
     box-shadow: 0 24px 60px rgba(23, 50, 74, 0.09);
-    margin-top: 8px;
+    margin-top: 6px;
 }
 
 .chat-shell-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 12px;
-    padding: 18px 20px 16px 20px;
+    gap: 10px;
+    padding: 14px 16px 13px 16px;
     border-bottom: 1px solid #e2ebf2;
     background: linear-gradient(180deg, rgba(255,255,255,0.92) 0%, rgba(245,249,252,0.9) 100%);
 }
@@ -929,16 +929,16 @@ div[data-baseweb="select"] > div {
 }
 
 .chat-shell-avatar {
-    width: 44px;
-    height: 44px;
-    border-radius: 14px;
+    width: 38px;
+    height: 38px;
+    border-radius: 12px;
     background: linear-gradient(135deg, #0f6cbd 0%, #26a69a 100%);
     color: white;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 20px;
-    box-shadow: 0 12px 28px rgba(15,108,189,0.22);
+    font-size: 17px;
+    box-shadow: 0 10px 22px rgba(15,108,189,0.18);
 }
 
 .chat-shell-title-text {
@@ -948,7 +948,7 @@ div[data-baseweb="select"] > div {
 }
 
 .chat-shell-label {
-    font-size: 11px;
+    font-size: 10px;
     font-weight: 800;
     letter-spacing: 0.08em;
     text-transform: uppercase;
@@ -957,37 +957,37 @@ div[data-baseweb="select"] > div {
 
 .chat-shell-name {
     font-family: 'Manrope', sans-serif;
-    font-size: 18px;
+    font-size: 16px;
     font-weight: 800;
     color: #143551;
     letter-spacing: -0.03em;
 }
 
 .chat-shell-note {
-    font-size: 12px;
+    font-size: 11px;
     color: #607589;
     background: #f3f8fb;
     border: 1px solid #dbe8f1;
     border-radius: 999px;
-    padding: 8px 12px;
+    padding: 7px 10px;
 }
 
 .chat-history {
-    padding: 18px 18px 12px 18px;
-    min-height: 420px;
+    padding: 14px 14px 8px 14px;
+    min-height: 220px;
     background:
         linear-gradient(180deg, rgba(250,252,254,0.88) 0%, rgba(244,248,252,0.92) 100%);
 }
 
 .composer-wrap {
-    padding: 0 16px 16px 16px;
+    padding: 0 12px 12px 12px;
     background: transparent;
 }
 
 .chat-row {
     display: flex !important;
     width: 100% !important;
-    margin-bottom: 14px;
+    margin-bottom: 12px;
     align-items: flex-end;
 }
 
@@ -1004,8 +1004,8 @@ div[data-baseweb="select"] > div {
 .chat-bubble-wrap {
     display: flex;
     flex-direction: column;
-    gap: 6px;
-    max-width: min(78%, 720px);
+    gap: 4px;
+    max-width: min(74%, 680px);
 }
 
 .chat-row.user .chat-bubble-wrap {
@@ -1017,11 +1017,11 @@ div[data-baseweb="select"] > div {
 }
 
 .chat-role {
-    font-size: 11px;
+    font-size: 10px;
     font-weight: 800;
     letter-spacing: 0.08em;
     text-transform: uppercase;
-    color: #70889d;
+    color: #7d92a7;
     padding: 0 6px;
 }
 
@@ -1029,14 +1029,14 @@ div[data-baseweb="select"] > div {
     display: inline-block;
     width: auto !important;
     max-width: 100%;
-    border-radius: 22px;
-    padding: 0.92rem 1.02rem;
+    border-radius: 20px;
+    padding: 0.8rem 0.95rem;
     border: 1px solid rgba(215, 228, 239, 0.95);
     line-height: 1.68;
     white-space: pre-wrap;
     word-break: break-word;
-    font-size: 14.5px;
-    box-shadow: 0 12px 28px rgba(23, 50, 74, 0.06);
+    font-size: 14px;
+    box-shadow: 0 10px 24px rgba(23, 50, 74, 0.05);
 }
 
 .chat-row.assistant .chat-bubble {
@@ -1046,11 +1046,15 @@ div[data-baseweb="select"] > div {
 }
 
 .chat-row.user .chat-bubble {
-    background: linear-gradient(135deg, #0f6cbd 0%, #167ac7 100%);
-    color: #ffffff;
-    border-color: rgba(15, 108, 189, 0.35);
+    background: linear-gradient(135deg, #e9f4ff 0%, #dbeefe 100%);
+    color: #103a5d;
+    border-color: #bed9ef;
     border-top-right-radius: 10px;
-    box-shadow: 0 16px 30px rgba(15,108,189,0.18);
+    box-shadow: 0 12px 24px rgba(15,108,189,0.08);
+}
+
+.chat-row.user .chat-role {
+    color: #6a89a4;
 }
 
 /* ── Topic status pills ── */
@@ -1478,22 +1482,22 @@ div[data-baseweb="select"] > div {
 
 @media (max-width: 768px) {
     .chat-shell {
-        border-radius: 24px;
+        border-radius: 22px;
     }
 
     .chat-shell-header {
-        padding: 15px 14px 13px 14px;
+        padding: 12px 12px 11px 12px;
         align-items: flex-start;
         flex-direction: column;
     }
 
     .chat-history {
-        padding: 14px 12px 10px 12px;
-        min-height: 360px;
+        padding: 12px 10px 8px 10px;
+        min-height: 180px;
     }
 
     .composer-wrap {
-        padding: 0 12px 12px 12px;
+        padding: 0 10px 10px 10px;
     }
 
     .chat-row.assistant {
@@ -1505,7 +1509,7 @@ div[data-baseweb="select"] > div {
     }
 
     .chat-bubble-wrap {
-        max-width: 92%;
+        max-width: 90%;
     }
 }
 
@@ -1646,11 +1650,12 @@ def _append_assistant_message(state: dict, text: str):
 def render_chat_bubble(role: str, content: str):
     safe = _html.escape(content or "").replace("\n", "<br>")
     role_cls = "user" if role == "user" else "assistant"
-    role_label = "You" if role == "user" else "Care Assistant"
+    role_label = "" if role == "user" else "Care Assistant"
+    role_html = f'<div class="chat-role">{role_label}</div>' if role_label else ""
     st.markdown(
         f'<div class="chat-row {role_cls}">'
         f'  <div class="chat-bubble-wrap">'
-        f'    <div class="chat-role">{role_label}</div>'
+        f'    {role_html}'
         f'    <div class="chat-bubble">{safe}</div>'
         f'  </div>'
         f'</div>',
