@@ -799,6 +799,12 @@ div[data-baseweb="select"] > div {
     overflow: hidden;
 }
 
+.report-detail-shell.inline {
+    margin-top: 10px;
+    margin-bottom: 18px;
+    animation: reportSlideDown 180ms ease-out;
+}
+
 .report-detail-header {
     padding: 16px 18px;
     border-bottom: 1px solid #e5edf4;
@@ -838,6 +844,17 @@ div[data-baseweb="select"] > div {
     .report-summary-banner,
     .report-detail-grid {
         grid-template-columns: 1fr;
+    }
+}
+
+@keyframes reportSlideDown {
+    from {
+        opacity: 0;
+        transform: translateY(-6px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
     }
 }
 
@@ -4039,7 +4056,7 @@ def _init_state():
         },
         "report":              "",
         "report_saved":        False,
-        "report_selected_topic": None,
+        "report_open_topic":   None,
         "last_checkin":        {},
         "has_prev_checkin":    False,
         "freeform_chat":       [],
@@ -4273,6 +4290,17 @@ def _report_status_class(status: str) -> str:
     return ""
 
 
+def _report_status_text(status: str) -> str:
+    mapping = {
+        "improved": "Improved",
+        "worsened": "Worsened",
+        "new_issue": "New issue",
+        "stable": "No meaningful change",
+        "unanswered": "No current information",
+    }
+    return mapping.get(status, "No meaningful change")
+
+
 def _render_report_summary_banner(topic_insights: list[dict]):
     overview = run_report_overview_agent(topic_insights)
     main_issue = overview.get("main_issue") or "Clinical check-in summary ready for review."
@@ -4299,7 +4327,7 @@ def _render_report_summary_banner(topic_insights: list[dict]):
 
 def _render_report_topic_card(insight: dict):
     status_class = _report_status_class(insight.get("status", "stable"))
-    status_label = insight.get("status_label") or "Stable"
+    status_label = _report_status_text(insight.get("status", "stable"))
     topic_name = insight.get("topic_label", "").split(" ", 1)[1] if " " in insight.get("topic_label", "") else insight.get("topic_label", "")
     st.markdown(
         f'<div class="report-topic-card {status_class}">'
@@ -4323,9 +4351,9 @@ def _render_report_topic_detail(insight: dict, all_data: dict):
     topic_name = insight.get("topic_label", "")
 
     st.markdown(
-        '<div class="report-detail-shell">'
+        '<div class="report-detail-shell inline">'
         '  <div class="report-detail-header">'
-        f'    <div style="font-size:12px;font-weight:800;letter-spacing:0.08em;text-transform:uppercase;color:#6b7b92;">Selected topic</div>'
+        f'    <div style="font-size:12px;font-weight:800;letter-spacing:0.08em;text-transform:uppercase;color:#6b7b92;">Topic comparison</div>'
         f'    <div style="font-size:24px;font-weight:800;letter-spacing:-0.03em;color:#10233d;margin-top:4px;">{_html.escape(topic_name)}</div>'
         '  </div>'
         '  <div class="report-detail-grid">'
@@ -4356,6 +4384,11 @@ def _render_report_topic_detail(insight: dict, all_data: dict):
             with col2:
                 st.markdown("**Current visit details**")
                 st.markdown(now_html or '<div style="color:#7a8ea4;">No current details recorded.</div>', unsafe_allow_html=True)
+
+
+def _toggle_report_topic(topic_key: str):
+    current = st.session_state.get("report_open_topic")
+    st.session_state.report_open_topic = None if current == topic_key else topic_key
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -5540,9 +5573,8 @@ def screen_report():
                 st.session_state.patient_name, all_data
             )
     topic_insights = _report_topic_insights(all_data)
-    if st.session_state.get("report_selected_topic") not in {item["topic_key"] for item in topic_insights}:
-        first_answered = next((item["topic_key"] for item in topic_insights if item.get("status") != "unanswered"), None)
-        st.session_state.report_selected_topic = first_answered or (topic_insights[0]["topic_key"] if topic_insights else None)
+    if st.session_state.get("report_open_topic") not in {item["topic_key"] for item in topic_insights}:
+        st.session_state.report_open_topic = None
 
     st.markdown('<div class="report-dashboard">', unsafe_allow_html=True)
     st.markdown(
@@ -5559,17 +5591,14 @@ def screen_report():
             with col:
                 _render_report_topic_card(insight)
                 if st.button(
-                    "Open topic",
+                    "Close topic" if st.session_state.get("report_open_topic") == insight["topic_key"] else "Open topic",
                     key=f"report_topic_{insight['topic_key']}",
                     use_container_width=True,
                 ):
-                    st.session_state.report_selected_topic = insight["topic_key"]
+                    _toggle_report_topic(insight["topic_key"])
                     st.rerun()
-
-    selected_key = st.session_state.get("report_selected_topic")
-    selected_insight = next((item for item in topic_insights if item["topic_key"] == selected_key), None)
-    if selected_insight:
-        _render_report_topic_detail(selected_insight, all_data)
+                if st.session_state.get("report_open_topic") == insight["topic_key"]:
+                    _render_report_topic_detail(insight, all_data)
 
     with st.expander("Full clinical narrative report", expanded=False):
         st.markdown('<div class="report-box">', unsafe_allow_html=True)
