@@ -4,7 +4,6 @@ import io
 import json
 import re
 import concurrent.futures as _futures
-from difflib import get_close_matches
 from datetime import datetime
 from typing import Any, Optional
 
@@ -199,144 +198,18 @@ def _match_binary_option(step: dict, user_input: str) -> Optional[str]:
     return None
 
 
-_FREQUENCY_HINTS = {
-    "daily", "everyday", "every day", "nightly", "weekly", "twice", "three times",
-    "four times", "once", "morning", "evening", "bedtime", "hour", "hours",
-    "every other day", "every other night", "per day", "per week", "a day", "a week",
-    "as needed", "prn",
-}
-
-_NUMBER_WORD_PATTERN = r"(one|two|three|four|five|six|seven|eight|nine|ten|half|couple|few|several)"
-_TIME_UNIT_PATTERN = r"(hour|hours|day|days|night|nights|week|weeks|month|months)"
-_MED_FORM_PATTERN = r"(mg|mcg|g|ml|milligram|milligrams|tablet|tablets|pill|pills|capsule|capsules|teaspoon|teaspoons|tablespoon|tablespoons)"
-_RELATION_TERMS = {
-    "family", "friend", "friends", "caregiver", "caregivers", "wife", "husband",
-    "daughter", "son", "mom", "dad", "mother", "father", "sister", "brother",
-    "partner", "spouse", "neighbor", "roommate", "children", "child",
-}
-_MANAGEMENT_TERMS = {
-    "zofran", "imodium", "miralax", "senna", "gabapentin", "oxycodone", "advil",
-    "tylenol", "motrin", "ibuprofen", "rinse", "mouthwash", "patch", "tube feed",
-    "salt water", "baking soda", "ensure", "boost", "water", "liquids", "soft foods",
-}
-_HELPING_TERMS = {
-    "help", "helping", "helps", "working", "works", "not enough", "doesnt help",
-    "does not help", "no relief", "better", "worse", "relief", "effective", "easier",
-}
-_REASON_TERMS = {
-    "because", "due to", "from", "since", "hard", "difficult", "difficulty", "forget",
-    "forgot", "pain", "fatigue", "tired", "nausea", "dry mouth", "not hungry",
-    "appetite", "schedule", "cost", "insurance", "transportation", "side effect",
-    "busy", "sleep", "swallow", "chew", "taste", "money", "refill",
-}
-_START_TIME_TERMS = {
-    "today", "yesterday", "tonight", "this morning", "last night", "week", "weeks",
-    "month", "months", "day", "days", "ago", "since", "started", "start", "begin",
-    "began", "recently", "suddenly", "after", "before", "during", "monday", "tuesday",
-    "wednesday", "thursday", "friday", "saturday", "sunday", "january", "february",
-    "march", "april", "may", "june", "july", "august", "september", "october",
-    "november", "december", "radiation", "chemo", "chemotherapy", "surgery",
-}
-
-_UNKNOWN_PHRASES = {
-    "dont remember", "i dont remember", "do not remember", "not sure", "unsure",
-    "no idea", "unknown", "cant remember", "cannot remember", "dont know",
-    "i dont know", "not sure about", "not sure exactly", "i forget", "forgot",
-}
-
-_OPTION_ALIAS_HINTS = {
-    "schedule": ["forget", "forgot", "late", "on time", "timing", "routine", "remember"],
-    "side effects": ["side effect", "nausea", "drowsy", "sleepy", "constipated", "makes me sick", "dizzy"],
-    "access issues": ["cost", "insurance", "refill", "pharmacy", "ran out", "couldnt get", "could not get"],
-    "no appetite": ["no appetite", "not hungry", "appetite"],
-    "nausea": ["nausea", "nauseous", "sick to my stomach"],
-    "too tired to prepare food": ["too tired", "no energy", "too exhausted"],
-    "soft foods only yogurt soup pudding": ["soup", "soups", "yogurt", "pudding", "mashed", "soft food", "soft foods", "applesauce", "oatmeal"],
-    "mainly liquids": ["liquid", "liquids", "broth", "shake", "shakes", "smoothie", "smoothies", "juice", "water only"],
-    "pain when eating/swallowing": ["pain when swallowing", "hurts to swallow", "hurts to eat", "pain eating"],
-    "dry mouth": ["dry mouth", "mouth is dry"],
-    "pain": ["pain", "hurts", "ache", "aching", "sore"],
-    "fatigue": ["fatigue", "tired", "exhausted", "worn out", "weak"],
-    "treatment side effects": ["treatment", "radiation", "chemo", "chemotherapy", "side effect"],
-    "energy levels": ["energy", "tired", "fatigue", "exhausted"],
-    "family, friends, or caregivers": ["family", "friend", "caregiver", "wife", "husband", "daughter", "son", "mom", "dad"],
-    "yes, it helps": ["helps", "working", "better"],
-    "yes, but it's not enough": ["not enough", "barely helps", "helps a little", "still hurts", "still not enough"],
-}
-
-
-def _has_frequency_info(text: str) -> bool:
-    normalized = _norm_text(text)
-    if not normalized:
-        return False
-    if any(phrase in normalized for phrase in _FREQUENCY_HINTS):
-        return True
-    if re.search(r"\b\d+\s*(x|times?)\b", normalized):
-        return True
-    if re.search(rf"\b{_NUMBER_WORD_PATTERN}\s+times?\b", normalized):
-        return True
-    if re.search(r"\bevery\s+\d+\s*(hour|hours|day|days)\b", normalized):
-        return True
-    if re.search(rf"\bevery\s+{_NUMBER_WORD_PATTERN}\s*{_TIME_UNIT_PATTERN}?\b", normalized):
-        return True
-    if re.search(r"\b(once|twice)\s+(a|per)?\s*(day|night|week|month)\b", normalized):
-        return True
-    if re.search(rf"\b{_NUMBER_WORD_PATTERN}\s+times?\s+(a|per)?\s*(day|night|week|month)\b", normalized):
-        return True
-    if re.search(r"\b(in the morning|in the evening|at night|before bed|at bedtime|with meals|before meals|after meals)\b", normalized):
-        return True
-    return False
-
-
 def _is_unknown_answer(text: str) -> bool:
     normalized = _norm_text(text)
     if not normalized:
         return False
-    if normalized in _UNKNOWN_PHRASES:
+    generic_unknown_patterns = {
+        "dont remember", "do not remember", "not sure", "unsure",
+        "no idea", "unknown", "cant remember", "cannot remember", "dont know",
+        "do not know", "not sure exactly", "i forget", "forgot",
+    }
+    if normalized in generic_unknown_patterns:
         return True
-    return any(phrase in normalized for phrase in _UNKNOWN_PHRASES)
-
-
-def _has_dose_info(text: str) -> bool:
-    normalized = _norm_text(text)
-    if not normalized:
-        return False
-    if re.search(rf"\b\d+\s*{_MED_FORM_PATTERN}\b", normalized):
-        return True
-    if re.search(rf"\b{_NUMBER_WORD_PATTERN}\s+{_MED_FORM_PATTERN}\b", normalized):
-        return True
-    if re.search(r"\b\d+\b", normalized) and any(term in normalized for term in {"dose", "tablet", "pill", "capsule"}):
-        return True
-    return False
-
-
-def _has_amount_info(text: str) -> bool:
-    normalized = _norm_text(text)
-    if not normalized:
-        return False
-    if re.search(r"\b\d+\b", normalized):
-        return True
-    if re.search(rf"\b{_NUMBER_WORD_PATTERN}\b", normalized):
-        return True
-    return any(token in normalized for token in {"small", "little", "a lot", "large", "amount", "few", "several", "half", "full"})
-
-
-def _has_helping_info(text: str) -> bool:
-    normalized = _norm_text(text)
-    if not normalized:
-        return False
-    return any(phrase in normalized for phrase in _HELPING_TERMS)
-
-
-def _has_management_info(text: str) -> bool:
-    normalized = _norm_text(text)
-    if not normalized:
-        return False
-    return bool(
-        re.search(r"\b(take|taking|use|using|used|try|trying|on|take|drink|drinking)\b", normalized)
-        or re.search(r"\b\d+\s*(mg|mcg|g|ml)\b", normalized)
-        or any(word in normalized for word in _MANAGEMENT_TERMS)
-    )
+    return any(phrase in normalized for phrase in generic_unknown_patterns)
 
 
 def _previous_step_in_flow(topic_key: str, step_id: str) -> Optional[dict]:
@@ -427,61 +300,24 @@ def _infer_option_from_text(step: dict, user_input: str) -> Optional[str]:
     if not normalized or not step.get("opts"):
         return None
 
+    normalized_words = {w for w in normalized.split() if len(w) > 2}
+    scored = []
     for opt in step.get("opts", []):
         opt_norm = _norm_text(opt)
         if not opt_norm:
             continue
-        if opt_norm in normalized:
+        if opt_norm == normalized or opt_norm in normalized:
             return opt
-        aliases = _OPTION_ALIAS_HINTS.get(opt_norm, [])
-        if any(alias in normalized for alias in aliases):
-            return opt
+        opt_words = {w for w in opt_norm.split() if len(w) > 2}
+        overlap = len(normalized_words & opt_words)
+        if overlap:
+            scored.append((overlap / max(1, len(opt_words)), opt))
+    if scored:
+        scored.sort(reverse=True)
+        top_score, top_opt = scored[0]
+        if top_score >= 0.34:
+            return top_opt
     return None
-
-
-def _has_location_info(text: str) -> bool:
-    normalized = _norm_text(text)
-    return bool(normalized) and (_looks_like_body_location(text) or any(
-        token in normalized for token in {"inside", "outside", "left", "right", "back", "front", "near", "around"}
-    ))
-
-
-def _has_start_time_info(text: str) -> bool:
-    normalized = _norm_text(text)
-    if not normalized:
-        return False
-    if any(token in normalized for token in _START_TIME_TERMS):
-        return True
-    if re.search(rf"\b\d+\s+{_TIME_UNIT_PATTERN}\s+ago\b", normalized):
-        return True
-    if re.search(rf"\b{_NUMBER_WORD_PATTERN}\s+{_TIME_UNIT_PATTERN}\s+ago\b", normalized):
-        return True
-    return bool(re.search(r"\bsince\s+\w+\b", normalized))
-
-
-def _has_support_info(text: str) -> bool:
-    normalized = _norm_text(text)
-    if not normalized:
-        return False
-    return any(token in normalized for token in _RELATION_TERMS)
-
-
-def _has_reason_info(text: str) -> bool:
-    normalized = _norm_text(text)
-    if not normalized:
-        return False
-    if len(normalized.split()) >= 3:
-        return True
-    return any(token in normalized for token in _REASON_TERMS)
-
-
-def _has_specific_type_info(text: str) -> bool:
-    normalized = _norm_text(text)
-    return len(normalized.split()) >= 2 and not _is_unknown_answer(text)
-
-
-def _has_plain_yes_no_signal(text: str) -> bool:
-    return _match_binary_option({"opts": ["Yes", "No"]}, text) is not None
 
 
 def _is_negative_screening_answer(text: str) -> bool:
@@ -494,257 +330,66 @@ def _is_negative_screening_answer(text: str) -> bool:
         "none", "nothing", "not really", "im okay", "i am okay", "okay", "fine", "good", "all good",
     }
 
+_DETAIL_COVERAGE_SYS = """
+You are the Detail-Coverage Agent for a clinical chatbot serving head and neck
+cancer patients.
 
-DETECTORS_BY_KIND = {
-    "frequency": _has_frequency_info,
-    "dose": _has_dose_info,
-    "amount": _has_amount_info,
-    "helping": _has_helping_info,
-    "management": _has_management_info,
-    "location": _has_location_info,
-    "start_time": _has_start_time_info,
-    "support": _has_support_info,
-    "reason": _has_reason_info,
-    "specific_type": _has_specific_type_info,
-    "yes_no_signal": _has_plain_yes_no_signal,
-}
+Your task is to judge whether the patient's answer already contains the clinically
+important detail(s) requested by the current question.
 
+You will receive:
+  - question_text
+  - question_type
+  - options
+  - patient_answer
+  - recent_topic_history: recent assistant questions and patient answers from this topic
+  - recent_question_texts: recent assistant question texts from this topic
 
-def _best_known_pain_medication_label(state: dict) -> str:
-    raw_answers = state.get("raw_answers", {})
-    raw_text = str(raw_answers.get("pain_medications", "")).strip()
-    if raw_text:
-        cleaned = raw_text.strip(" .")
-        cleaned = re.sub(r"\b(nothing else|and nothing else|only|just)\b", " ", cleaned, flags=re.IGNORECASE)
-        cleaned = re.sub(r"[,.]+", " ", cleaned)
-        cleaned = re.sub(r"\s+", " ", cleaned).strip()
-        if cleaned:
-            first_part = cleaned.split(" and ")[0].split(" but ")[0].strip()
-            if first_part:
-                return first_part.title()
+RULES:
+  - Work semantically, not by keyword matching.
+  - Treat natural patient language as valid clinical information.
+  - Infer from the question what kind of detail is being asked for.
+  - If the patient provided some but not all of that detail, mark it as partial and describe the single missing detail in plain language.
+  - If the patient explicitly says they do not know a detail, treat that as usable uncertainty rather than pushing repeatedly.
+  - Do not ask for details the patient already provided in plain language.
+  - Do not recommend a follow-up that repeats a recent question from this topic.
+  - Be conservative about follow-up: only recommend it when a meaningful detail is actually still missing.
 
-    meds = state.get("data", {}).get("pain_medications") or []
-    if isinstance(meds, list):
-        meds = [m for m in meds if m not in {"Other", "No pain medication"}]
-        if meds:
-            return meds[0]
-    return "that medication"
-
-
-def _dose_is_unknown(text: str) -> bool:
-    normalized = _norm_text(text)
-    if not normalized:
-        return False
-    return ("dose" in normalized and _is_unknown_answer(normalized)) or "no idea" in normalized
+Return ONLY valid JSON:
+{{
+  "information_completeness": "complete|partial|none",
+  "follow_up_recommended": true/false,
+  "follow_up_goal": "..." or null,
+  "patient_acknowledgment": "..." or null,
+  "answered_with_uncertainty": false
+}}
+"""
 
 
-def _infer_components_from_question(step: dict) -> dict[str, dict[str, Any]]:
-    question = _norm_text(step.get("text", ""))
-    if not question or step.get("type") != "free_text":
-        return {}
+def run_detail_coverage_agent(step: dict, answer: str, topic_history: list[dict[str, str]], recent_questions: list[str]) -> dict:
+    default = {
+        "information_completeness": "complete",
+        "follow_up_recommended": False,
+        "follow_up_goal": None,
+        "patient_acknowledgment": None,
+        "answered_with_uncertainty": False,
+    }
+    if not openai_client:
+        return default
 
-    if "how often" in question and ("dose" in question or "how much" in question):
-        return {
-            "frequency": {
-                "detector": "frequency",
-                "question": "How often is that usually?",
-                "unknown_ok": True,
-                "unknown_ack": "That's okay if you're not sure about the timing right now. I've noted what you could tell me.",
-            },
-            "dose": {
-                "detector": "dose",
-                "question": "About how much is it each time?",
-                "unknown_ok": True,
-                "unknown_ack": "That's okay if you don't remember the dose right now. I've noted that for your care team.",
-            },
-        }
+    result = _call_agent(_DETAIL_COVERAGE_SYS, {
+        "question_text": step.get("text", ""),
+        "question_type": step.get("type", "free_text"),
+        "options": step.get("opts", []),
+        "patient_answer": answer,
+        "recent_topic_history": topic_history,
+        "recent_question_texts": recent_questions,
+    }, max_tokens=250)
 
-    if "what are you using" in question and "helping" in question:
-        return {
-            "management": {"detector": "management", "question": "What have you been using for it?"},
-            "helping": {"detector": "helping", "question": "Has that been helping at all?"},
-        }
+    if not result:
+        return default
 
-    if question.startswith("when did") or "when did it start" in question or "when did this" in question or "when did the" in question:
-        return {
-            "start_time": {
-                "detector": "start_time",
-                "question": "About when did it start?",
-                "unknown_ok": True,
-                "unknown_ack": "That's okay if you're not sure exactly when it started. I've noted that for your care team.",
-            }
-        }
-
-    if question.startswith("where") or "where is" in question or "where are" in question or "where exactly" in question or "which body part" in question:
-        return {
-            "location": {
-                "detector": "location",
-                "question": "Where are you feeling it?",
-                "unknown_ok": True,
-                "unknown_ack": "That's okay if it's hard to describe exactly. I've noted what you could tell me.",
-            }
-        }
-
-    if question.startswith("who ") and ("support" in question or "help" in question):
-        return {
-            "support": {
-                "detector": "support",
-                "question": "Who has been helping you most?",
-                "unknown_ok": True,
-                "unknown_ack": "That's okay if you don't want to name anyone right now.",
-            }
-        }
-
-    if question.startswith("what kind of support") or question.startswith("what is making") or "what s limiting" in question or "tell me more about what s limiting" in question:
-        return {
-            "reason": {
-                "detector": "reason",
-                "question": "What feels like the main thing making that harder right now?",
-                "unknown_ok": True,
-                "unknown_ack": "That's okay if it's hard to pin down exactly. I've noted that this has been difficult.",
-            }
-        }
-
-    if question.startswith("what kind") or question.startswith("what type"):
-        return {
-            "specific_type": {
-                "detector": "specific_type",
-                "question": "What kind is it?",
-                "unknown_ok": True,
-                "unknown_ack": "That's okay if you don't know the exact type right now.",
-            }
-        }
-
-    return {}
-
-
-def _generic_missing_detail_override(step: dict, answer: str, state: dict) -> dict[str, Any]:
-    schema = STEP_SCHEMAS.get(step.get("id"), {})
-    components = schema.get("components") or _infer_components_from_question(step)
-    if components:
-        missing = []
-        for name, comp in components.items():
-            detector_name = comp.get("detector")
-            detector = DETECTORS_BY_KIND.get(detector_name)
-            if detector and not detector(answer):
-                missing.append((name, comp))
-
-        if missing:
-            first_name, first_comp = missing[0]
-            if _is_unknown_answer(answer) and first_comp.get("unknown_ok"):
-                return {
-                    "follow_up_recommended": False,
-                    "follow_up_goal": None,
-                    "assistant_message": first_comp.get("unknown_ack") or "That's okay if you're not sure right now. I've noted that for your care team.",
-                    "information_completeness": "partial",
-                    "clinical_priority": "low",
-                }
-            return {
-                "follow_up_recommended": True,
-                "follow_up_goal": f"Obtain the missing detail for {first_name.replace('_', ' ')} only.",
-                "follow_up_question": first_comp.get("question") or "Could you tell me a bit more about that?",
-                "information_completeness": "partial",
-                "clinical_priority": "medium",
-            }
-
-    question = _norm_text(step.get("text", ""))
-    if not question or not isinstance(answer, str):
-        return {}
-
-    if _is_unknown_answer(answer):
-        if any(token in question for token in {"when did", "how often", "what has your weight", "how high", "blood pressure", "what has your blood pressure", "when did it start", "where is", "where exactly", "what type", "which body part"}):
-            return {
-                "follow_up_recommended": False,
-                "follow_up_goal": None,
-                "assistant_message": "That's okay if you're not sure right now. I've noted that for your care team.",
-                "information_completeness": "partial",
-                "clinical_priority": "low",
-            }
-
-    if "what are you using" in question and "is it helping" in question:
-        has_management = _has_management_info(answer)
-        has_helping = _has_helping_info(answer)
-        if has_management and not has_helping:
-            return {
-                "follow_up_recommended": True,
-                "follow_up_goal": "Obtain whether the management strategy is helping.",
-                "follow_up_question": "Has that been helping at all?",
-                "information_completeness": "partial",
-                "clinical_priority": "medium",
-            }
-        if has_helping and not has_management:
-            return {
-                "follow_up_recommended": True,
-                "follow_up_goal": "Obtain what the patient is using to manage the symptom.",
-                "follow_up_question": "What have you been using for it?",
-                "information_completeness": "partial",
-                "clinical_priority": "medium",
-            }
-
-    if "how often" in question and "how much" in question:
-        has_freq = _has_frequency_info(answer)
-        has_amount = _has_amount_info(answer)
-        if has_freq and not has_amount and not _is_unknown_answer(answer):
-            return {
-                "follow_up_recommended": True,
-                "follow_up_goal": "Obtain the amount only; frequency was already provided.",
-                "follow_up_question": "About how much is it each time?",
-                "information_completeness": "partial",
-                "clinical_priority": "medium",
-            }
-        if has_amount and not has_freq and not _is_unknown_answer(answer):
-            return {
-                "follow_up_recommended": True,
-                "follow_up_goal": "Obtain the frequency only; amount was already provided.",
-                "follow_up_question": "How often has that been happening?",
-                "information_completeness": "partial",
-                "clinical_priority": "medium",
-            }
-
-    return {}
-
-
-def _targeted_followup_override(step: dict, answer: str, state: dict) -> dict[str, Any]:
-    generic = _generic_missing_detail_override(step, answer, state)
-    if generic:
-        return generic
-
-    if step.get("id") != "med_dose_freq":
-        return {}
-
-    has_freq = _has_frequency_info(answer)
-    has_dose = _has_dose_info(answer)
-    dose_unknown = _dose_is_unknown(answer)
-    med_label = _best_known_pain_medication_label(state)
-
-    if has_freq and dose_unknown:
-        return {
-            "follow_up_recommended": False,
-            "follow_up_goal": None,
-            "assistant_message": f"That's okay if you don't remember the dose right now. I've noted that you take {med_label} almost every day.",
-            "information_completeness": "partial",
-            "clinical_priority": "low",
-        }
-
-    if has_freq and not has_dose:
-        return {
-            "follow_up_recommended": True,
-            "follow_up_goal": "Obtain the medication dose only; frequency was already provided.",
-            "follow_up_question": f"About how much {med_label} do you usually take each time?",
-            "information_completeness": "partial",
-            "clinical_priority": "medium",
-        }
-
-    if has_dose and not has_freq:
-        return {
-            "follow_up_recommended": True,
-            "follow_up_goal": "Obtain the medication frequency only; dose was already provided.",
-            "follow_up_question": f"How often do you usually take {med_label}?",
-            "information_completeness": "partial",
-            "clinical_priority": "medium",
-        }
-
-    return {}
+    return {**default, **result}
 
 
 def _looks_vague_answer(answer: Any) -> bool:
@@ -771,52 +416,6 @@ def _looks_vague_answer(answer: Any) -> bool:
     return False
 
 
-def _free_text_binary_response_override(step: dict, answer: str) -> dict[str, str]:
-    if step.get("type") != "free_text" or not isinstance(answer, str):
-        return {}
-
-    binary = _match_binary_option({"opts": ["Yes", "No"]}, answer)
-    if not binary:
-        return {}
-
-    question = _norm_text(step.get("text", ""))
-    if not question:
-        return {}
-
-    detail_prefixes = ("when ", "where ", "what ", "which ", "who ")
-    detail_fragments = {
-        "how often", "how much", "how many", "how high", "how bad", "what type",
-        "what kind", "what are you using", "what have you been using",
-        "which body part", "tell me more",
-    }
-    if question.startswith(detail_prefixes) or any(fragment in question for fragment in detail_fragments):
-        return {
-            "action": "clarify",
-            "question": _fallback_clarifying_question(step),
-        }
-
-    yes_no_framing = {
-        "are you", "do you", "have you", "has it", "is it", "does it",
-        "would you", "can you", "are there", "have there",
-        "how are you feeling", "how have you been",
-    }
-    if any(fragment in question for fragment in yes_no_framing):
-        if binary == "No":
-            return {
-                "action": "accept",
-                "assistant_message": "Thanks for sharing that. I've noted that there doesn't seem to be a major issue there right now.",
-            }
-        return {
-            "action": "accept",
-            "assistant_message": "Thanks for sharing that. I've noted that for your care team.",
-        }
-
-    return {
-        "action": "clarify",
-        "question": _fallback_clarifying_question(step),
-    }
-
-
 def _fallback_clarifying_question(step: dict) -> str:
     text = step.get("text", "").strip()
     if not text:
@@ -829,34 +428,6 @@ def _fallback_clarifying_question(step: dict) -> str:
     return "Could you tell me a little more about that?"
 
 
-def _suggest_step_options(step: dict, user_input: str, limit: int = 3) -> list[str]:
-    raw = _norm_text(user_input)
-    if not raw:
-        return []
-
-    candidate_options = [
-        opt for opt in step.get("opts", [])
-        if _norm_text(opt) not in {"other", "somewhere else"}
-    ]
-    if not candidate_options:
-        return []
-
-    normalized_to_option = {_norm_text(opt): opt for opt in candidate_options}
-    matches = get_close_matches(raw, list(normalized_to_option.keys()), n=limit, cutoff=0.45)
-    suggestions = [normalized_to_option[m] for m in matches]
-
-    if suggestions:
-        return suggestions
-
-    raw_words = set(raw.split())
-    token_matches = []
-    for opt in candidate_options:
-        opt_words = set(_norm_text(opt).split())
-        if raw_words & opt_words:
-            token_matches.append(opt)
-    return token_matches[:limit]
-
-
 def _build_retry_prompt(step: dict, user_input: str) -> str:
     schema = STEP_SCHEMAS.get(step.get("id"), {})
     if schema.get("unmatched_followup") and not _looks_vague_answer(user_input):
@@ -864,17 +435,6 @@ def _build_retry_prompt(step: dict, user_input: str) -> str:
 
     if _looks_vague_answer(user_input):
         return "I didn’t quite catch that. Could you please say it again?"
-
-    suggestions = _suggest_step_options(step, user_input)
-    if suggestions:
-        if len(suggestions) == 1:
-            return f"I want to make sure I record that correctly. Did you mean {suggestions[0]}?"
-        if len(suggestions) == 2:
-            return f"I want to make sure I record that correctly. Did you mean {suggestions[0]} or {suggestions[1]}?"
-        return (
-            f"I want to make sure I record that correctly. Did you mean "
-            f"{suggestions[0]}, {suggestions[1]}, or {suggestions[2]}?"
-        )
 
     if "Other" in step.get("opts", []):
         return (
@@ -886,44 +446,9 @@ def _build_retry_prompt(step: dict, user_input: str) -> str:
 
 
 def _auto_capture_following_answers(topic_key: str, state: dict, seed_text: str):
-    text = (seed_text or "").strip()
-    if not text or _looks_vague_answer(text):
-        return
-
-    normalized = _norm_text(text)
-    word_count = len(normalized.split())
-    if _has_plain_yes_no_signal(text) and word_count <= 3:
-        return
-
-    for _ in range(3):
-        next_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
-        if not next_step or next_step.get("type") not in {"options", "multi_select"}:
-            return
-
-        inferred = None
-        if next_step["type"] == "options":
-            if len(next_step.get("opts", [])) == 2 and {"yes", "no"} == {_norm_text(opt) for opt in next_step.get("opts", [])} and word_count <= 3:
-                return
-            inferred = _infer_option_from_text(next_step, text)
-            if not inferred and len(_norm_text(text).split()) >= 3:
-                maybe = interpret_user_input_with_options(next_step, text)
-                if maybe in next_step.get("opts", []):
-                    inferred = maybe
-            if inferred in next_step.get("opts", []):
-                state["data"][next_step["id"]] = inferred
-                state["raw_answers"][next_step["id"]] = text
-                continue
-            return
-
-        if next_step["type"] == "multi_select":
-            parsed = parse_multi_select_typed_input(next_step, text)
-            if parsed:
-                if all(item == "Other" for item in parsed):
-                    return
-                state["data"][next_step["id"]] = parsed
-                state["raw_answers"][next_step["id"]] = text
-                continue
-            return
+    # Disabled in normal operation: silent auto-filling made the conversation feel
+    # presumptive and could create unrelated or repeated questions.
+    return
 
 
 
@@ -1914,6 +1439,60 @@ def _append_assistant_message(state: dict, text: str):
     if state["chat"] and state["chat"][-1]["role"] == "assistant" and state["chat"][-1]["content"].strip() == text:
         return
     state["chat"].append({"role": "assistant", "content": text})
+
+
+def _remember_prompted_step(state: dict, step: Optional[dict], prompt_text: str = ""):
+    state["last_prompted_step_id"] = step.get("id") if step else None
+    state["last_prompted_text"] = (prompt_text or "").strip()
+
+
+def _ensure_step_prompted(topic_key: str, state: dict, step: Optional[dict]):
+    if not step:
+        return
+    prompt_text = _step_prompt_text(step, topic_key=topic_key, state=state)
+    last_id = state.get("last_prompted_step_id")
+    last_text = state.get("last_prompted_text", "")
+    if last_id == step.get("id") and (
+        last_text == prompt_text or _is_semantically_redundant_question(last_text, prompt_text)
+    ):
+        return
+    _append_assistant_message(state, prompt_text)
+    _remember_prompted_step(state, step, prompt_text)
+
+
+def _recent_topic_history(state: dict, limit: int = 10) -> list[dict[str, str]]:
+    history = []
+    for msg in state.get("chat", [])[-limit:]:
+        role = msg.get("role", "")
+        content = str(msg.get("content", "")).strip()
+        if role and content:
+            history.append({"role": role, "content": content})
+    return history
+
+
+def _recent_topic_questions(state: dict, limit: int = 8) -> list[str]:
+    questions = []
+    for msg in state.get("chat", [])[-limit * 2:]:
+        if msg.get("role") != "assistant":
+            continue
+        content = str(msg.get("content", "")).strip()
+        if not content:
+            continue
+        parts = [part.strip() for part in content.split("\n\n") if part.strip()]
+        for part in parts:
+            if "?" in part:
+                questions.append(part)
+    return questions[-limit:]
+
+
+def _question_already_asked(state: dict, question_text: str) -> bool:
+    candidate = (question_text or "").strip()
+    if not candidate:
+        return False
+    for asked in _recent_topic_questions(state, limit=10):
+        if _is_semantically_redundant_question(asked, candidate):
+            return True
+    return False
 
 
 def render_chat_bubble(role: str, content: str):
@@ -3290,6 +2869,13 @@ MATCHING RULES:
 CONFIDENCE: 1.0 exact, 0.85-0.95 strong implicit, 0.85 catch-all, <0.7 → no_match.
 matched_option MUST be copied VERBATIM from options list, or null.
 
+TOPIC-HISTORY RULES:
+  - You will receive recent conversation history for this topic only.
+  - Use it to resolve conversational replies like "yes", "no", "only soup", "my sister helps some",
+    or "every day almost" in context of the current question.
+  - Do not treat the patient's answer as unrelated just because it is brief; use the immediate topic history.
+  - Do not force a mapping if the answer is meaningful but clearly does not fit any option; prefer the catch-all option when available.
+
 Return ONLY valid JSON:
 {{
   "match_type": "exact|implicit|no_match|off_topic|invalid",
@@ -3303,7 +2889,7 @@ Return ONLY valid JSON:
 """
 
 
-def run_answer_interpreter(step: dict, patient_answer: str) -> dict:
+def run_answer_interpreter(step: dict, patient_answer: str, topic_history: Optional[list[dict[str, str]]] = None) -> dict:
     """
     Agent 1: Classify patient's free-text answer against predefined options.
     Returns interpreter output dict, or safe default on failure.
@@ -3320,6 +2906,7 @@ def run_answer_interpreter(step: dict, patient_answer: str) -> dict:
         "question_text": step.get("text", ""),
         "options": step.get("opts", []),
         "patient_answer": patient_answer,
+        "recent_topic_history": topic_history or [],
     }, max_tokens=200)
 
     if not result:
@@ -3673,6 +3260,10 @@ FOLLOW-UP RULES:
   - If the patient supplies one detail and explicitly does not know another, accept the known detail and only ask for the missing one if it is truly necessary.
   - If the missing detail is something the patient reasonably may not know right now, prefer no follow-up over repetitive questioning.
   - Never imply the presence of a symptom the patient just denied.
+  - You will receive recent conversation history for this topic only. Use it to avoid repeated questions.
+  - If the current answer already addresses the candidate next step, set next_step_action to skip that step.
+  - If the candidate next step, or any proposed follow-up, would substantially repeat a recent question already asked in this topic, suppress it.
+  - If a natural assistant acknowledgment has already effectively asked the next question, do not ask it again.
   - ONLY recommend follow-up if information_completeness is "partial" or "none"
     AND follow_up_count is 0 AND the missing info is clinically meaningful
   - NEVER recommend follow-up if follow_up_count ≥ 1 (absolute limit: 1 per question)
@@ -3747,6 +3338,9 @@ def run_doctor_relevance(
     prior_comparison: dict,
     session_answers: dict,
     followup_count: int,
+    topic_history: list[dict[str, str]],
+    recent_questions: list[str],
+    detail_coverage: dict,
     candidate_next_step: Optional[dict] = None,
 ) -> dict:
     """
@@ -3776,6 +3370,9 @@ def run_doctor_relevance(
         "current_answer_matched": current_answer_matched,
         "prior_comparison": prior_comparison,
         "session_answers_so_far": session_answers,
+        "recent_topic_history": topic_history,
+        "recent_question_texts": recent_questions,
+        "detail_coverage": detail_coverage,
         "follow_up_count_this_question": followup_count,
         "candidate_next_step": {
             "id": candidate_next_step.get("id"),
@@ -3828,6 +3425,9 @@ RULES:
   - If the patient said they do not know a detail, do not challenge that or sound repetitive
   - Never contradict an explicit "no" or "yes" the patient just gave
   - Never write a follow-up like "Besides anxiety..." or otherwise imply a symptom exists after the patient denied it
+  - You will receive recent topic history and recent question texts from this topic only
+  - Do not write a question that substantially repeats any recent question in that history
+  - If the candidate next step already asks the same thing, return null instead of paraphrasing it
   - If prior-comparison context is clinically useful, you may briefly reflect it in a natural way, but only as conversational context, never as a rigid template
   - Write in second person, conversational language
   - Never use medical jargon without immediate plain explanation
@@ -3839,7 +3439,7 @@ RULES:
 
 Return ONLY valid JSON:
 {{
-  "follow_up_question": "...",
+  "follow_up_question": "..." or null,
   "preamble": "..." or null
 }}
 preamble: ≤10 words transitional phrase if naturally needed, else null.
@@ -3852,6 +3452,9 @@ def run_next_move_agent(
     followup_goal: str,
     tone_profile: str,
     simplify: bool,
+    topic_history: list[dict[str, str]],
+    recent_questions: list[str],
+    candidate_next_step: Optional[dict],
 ) -> dict:
     """
     Agent 6: Author the follow-up question in natural language.
@@ -3862,9 +3465,17 @@ def run_next_move_agent(
         "follow_up_goal": followup_goal,
         "tone_profile": tone_profile,
         "simplify": simplify,
+        "recent_topic_history": topic_history,
+        "recent_question_texts": recent_questions,
+        "candidate_next_step": {
+            "id": candidate_next_step.get("id"),
+            "text": candidate_next_step.get("text"),
+            "type": candidate_next_step.get("type"),
+            "options": candidate_next_step.get("opts", []),
+        } if candidate_next_step else None,
     }, max_tokens=120)
 
-    if result and result.get("follow_up_question"):
+    if result and "follow_up_question" in result:
         return result
     # Fallback: derive a question from the goal
     return {
@@ -3888,6 +3499,16 @@ def _build_session_answers(topic_key: str) -> dict:
             continue
         payload[k] = str(raw_answers.get(k, v))
     return payload
+
+
+def _build_topic_history(topic_key: str) -> list[dict[str, str]]:
+    state = st.session_state.topic_states.get(topic_key, {})
+    return _recent_topic_history(state)
+
+
+def _build_recent_question_texts(topic_key: str) -> list[str]:
+    state = st.session_state.topic_states.get(topic_key, {})
+    return _recent_topic_questions(state)
 
 
 def _build_prior_baseline(topic_key: str) -> dict:
@@ -3949,14 +3570,16 @@ def run_agent_pipeline(
     session_answers = _build_session_answers(topic_key)
     prior_baseline  = _build_prior_baseline(topic_key)
     followup_count  = state.get("followup_counts", {}).get(step["id"], 0)
-    targeted_followup = _targeted_followup_override(step, answer, state)
+    topic_history = _build_topic_history(topic_key)
+    recent_questions = _build_recent_question_texts(topic_key)
     candidate_next_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
 
     # ── STEP 1: Answer Interpreter (must run first) ────────────────
-    interp = run_answer_interpreter(step, answer)
+    interp = run_answer_interpreter(step, answer, topic_history=topic_history)
     matched = interp.get("matched_option")
     distress = interp.get("distress_flag", False)
     urgency_flag = interp.get("urgency_flag", False)
+    detail_coverage = run_detail_coverage_agent(step, answer, topic_history=topic_history, recent_questions=recent_questions)
 
     # ── STEP 2: Run three agents in parallel ───────────────────────
     # Prior Comparison, Urgency, and Sentiment can all run at once.
@@ -4007,16 +3630,10 @@ def run_agent_pipeline(
 
     # ── STEP 4: Doctor-Relevance ───────────────────────────────────
     dr_out = run_doctor_relevance(
-        step, answer, matched, prior_comp, session_answers, followup_count, candidate_next_step=candidate_next_step
+        step, answer, matched, prior_comp, session_answers, followup_count,
+        topic_history=topic_history, recent_questions=recent_questions,
+        detail_coverage=detail_coverage, candidate_next_step=candidate_next_step
     )
-    if targeted_followup:
-        dr_out = {
-            **dr_out,
-            "follow_up_recommended": targeted_followup.get("follow_up_recommended", dr_out.get("follow_up_recommended", False)),
-            "follow_up_goal": targeted_followup.get("follow_up_goal", dr_out.get("follow_up_goal")),
-            "information_completeness": targeted_followup.get("information_completeness", dr_out.get("information_completeness")),
-            "clinical_priority": targeted_followup.get("clinical_priority", dr_out.get("clinical_priority", "medium")),
-        }
 
     # ── STEP 5: Apply follow-up decision logic ─────────────────────
     adapt = sentiment_out.get("adaptation", {})
@@ -4053,15 +3670,19 @@ def run_agent_pipeline(
     # ── STEP 6: Compose follow-up question if needed ───────────────
     follow_up_question = ""
     if do_follow_up and followup_goal:
-        if targeted_followup.get("follow_up_question"):
-            follow_up_question = targeted_followup["follow_up_question"]
-        else:
-            tone = adapt.get("tone_profile", "standard")
-            simplify = adapt.get("simplify_next_question", False)
-            nm_out = run_next_move_agent(step, answer, followup_goal, tone, simplify)
-            preamble = nm_out.get("preamble") or ""
-            fq = nm_out.get("follow_up_question", "")
-            follow_up_question = f"{preamble} {fq}".strip() if preamble else fq
+        tone = adapt.get("tone_profile", "standard")
+        simplify = adapt.get("simplify_next_question", False)
+        nm_out = run_next_move_agent(
+            step, answer, followup_goal, tone, simplify,
+            topic_history=topic_history, recent_questions=recent_questions,
+            candidate_next_step=candidate_next_step,
+        )
+        preamble = nm_out.get("preamble") or ""
+        fq = nm_out.get("follow_up_question", "")
+        follow_up_question = f"{preamble} {fq}".strip() if preamble and fq else fq
+        if _question_already_asked(state, follow_up_question):
+            follow_up_question = ""
+            do_follow_up = False
 
     # ── STEP 7: Build assistant message for non-follow-up case ─────
     assistant_message = ""
@@ -4073,8 +3694,8 @@ def run_agent_pipeline(
         emotional    = sentiment_out.get("emotional_state", "neutral")
 
         # Build a brief contextual acknowledgment
-        if targeted_followup.get("assistant_message"):
-            assistant_message = targeted_followup["assistant_message"]
+        if detail_coverage.get("patient_acknowledgment") and detail_coverage.get("answered_with_uncertainty"):
+            assistant_message = detail_coverage["patient_acknowledgment"]
         elif patient_change_note:
             assistant_message = patient_change_note
         elif comp_note and change_dir in ("worsened", "improved") and prev_answer:
@@ -4094,9 +3715,6 @@ def run_agent_pipeline(
     acknowledgment = ""
     if adapt.get("acknowledgment_required") and adapt.get("acknowledgment_text"):
         acknowledgment = adapt["acknowledgment_text"]
-
-    # ── STEP 8b: Apply generic next-step suppression if appropriate ─
-    _apply_agent_next_step_action(topic_key, state, dr_out.get("next_step_action"))
 
     # ── STEP 9: Merge urgency and sentiment state ──────────────────
     _merge_sentiment_state(sentiment_out)
@@ -4123,6 +3741,7 @@ def run_agent_pipeline(
         "clinical_priority": priority,
         "change_significance": dr_out.get("change_significance", "no_baseline"),
         "change_clinical_note": prior_comp.get("clinical_note", ""),
+        "next_step_action": dr_out.get("next_step_action"),
         "special_signals": dr_out.get("special_signals", {}),
         "sentiment_note": sentiment_out.get("engagement_note_for_doctor"),
     }
@@ -4137,6 +3756,7 @@ def _pipeline_default() -> dict:
         "reduce_follow_up": False, "wants_to_stop": False,
         "doctor_note": None, "clinical_priority": "medium",
         "change_significance": "no_baseline", "change_clinical_note": "",
+        "next_step_action": None,
         "special_signals": {}, "sentiment_note": None,
     }
 
@@ -4221,38 +3841,38 @@ def _catchall_fallback(step: dict, user_input: str) -> str:
     return user_input
 
 
-def interpret_user_input_with_options(step, user_input):
+def interpret_user_input_with_options(step, user_input, topic_history: Optional[list[dict[str, str]]] = None):
     """
     Use the Answer Interpreter Agent to classify free-text against question options.
     Falls back to the catch-all option (Somewhere else / Other) if the agent returns
     no_match but a catch-all exists and the answer is a real, meaningful response.
     Returns matched option string if found, else original input.
     """
-    binary_match = _match_binary_option(step, user_input)
-    if binary_match:
-        return binary_match
-
-    alias_match = _infer_option_from_text(step, user_input)
-    if alias_match:
-        return alias_match
-
-    if step.get("id") == "pain_location":
-        normalized = _norm_text(user_input)
-        if any(w in normalized for w in ("throat", "pharynx", "larynx", "voice box")):
-            return "Throat"
-        if any(w in normalized for w in ("tongue", "lingual")):
-            return "Tongue"
-        if _looks_like_body_location(user_input) and not _is_timing_answer(user_input):
-            return "Somewhere else"
-
-    if not openai_client:
-        # No LLM available — still try catch-all fallback for valid answers
-        return _catchall_fallback(step, user_input)
-
     if not step.get("opts"):
         return user_input
 
-    result = run_answer_interpreter(step, user_input)
+    normalized = _norm_text(user_input)
+    for opt in step.get("opts", []):
+        if _norm_text(opt) == normalized:
+            return opt
+
+    if not openai_client:
+        binary_match = _match_binary_option(step, user_input)
+        if binary_match:
+            return binary_match
+        if step.get("id") == "pain_location":
+            if any(w in normalized for w in ("throat", "pharynx", "larynx", "voice box")):
+                return "Throat"
+            if any(w in normalized for w in ("tongue", "lingual")):
+                return "Tongue"
+            if _looks_like_body_location(user_input) and not _is_timing_answer(user_input):
+                return "Somewhere else"
+        alias_match = _infer_option_from_text(step, user_input)
+        if alias_match:
+            return alias_match
+        return _catchall_fallback(step, user_input)
+
+    result = run_answer_interpreter(step, user_input, topic_history=topic_history)
     matched = result.get("matched_option")
 
     # Agent found a valid specific match
@@ -4520,6 +4140,8 @@ def _init_state():
                 "chat": [],
                 "followup_counts": {},
                 "raw_answers": {},
+                "last_prompted_step_id": None,
+                "last_prompted_text": "",
             }
             for _, key in TOPICS
         },
@@ -4871,34 +4493,21 @@ def _append_next_question(
 ):
     message = assistant_message.strip()
     next_text = _step_prompt_text(next_step, topic_key=topic_key, state=state) if next_step else ""
+    prompt_consumed = False
     if message and next_text and _is_semantically_redundant_question(message, next_text):
-        message = ""
+        prompt_consumed = True
     if message:
         _append_assistant_message(state, message)
     if next_text:
-        _append_assistant_message(state, next_text)
+        if not prompt_consumed:
+            _append_assistant_message(state, next_text)
+        _remember_prompted_step(state, next_step, next_text)
+    elif not next_step:
+        _remember_prompted_step(state, None, "")
 
 
 def _maybe_skip_next_impact_question(topic_key: str, state: dict):
-    next_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
-    if not next_step or next_step.get("type") != "options":
-        return
-
-    opts = next_step.get("opts", [])
-    if "No" not in opts:
-        return
-
-    lower = _norm_text(next_step.get("text", ""))
-    impact_markers = {
-        "affect", "affecting", "impact", "impacting", "interfere", "interfering",
-        "worry", "worried", "concern", "harder", "difficult", "difficulty",
-        "daily activities", "sleep", "eating", "motivation",
-    }
-    if not any(marker in lower for marker in impact_markers):
-        return
-
-    state["data"][next_step["id"]] = "No"
-    state["raw_answers"][next_step["id"]] = "No"
+    return
 
 
 def _apply_agent_next_step_action(topic_key: str, state: dict, action: Optional[dict]):
@@ -4930,48 +4539,11 @@ def _apply_agent_next_step_action(topic_key: str, state: dict, action: Optional[
 
 
 def _apply_generic_fallback_next_step_action(topic_key: str, state: dict):
-    next_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
-    if not next_step or next_step.get("type") != "options":
-        return
-
-    text = _norm_text(next_step.get("text", ""))
-    opts = next_step.get("opts", [])
-    normalized_opts = {_norm_text(opt): opt for opt in opts}
-    raw_values = [_norm_text(str(v)) for v in state.get("raw_answers", {}).values() if str(v).strip()]
-
-    def choose_no():
-        if "no" in normalized_opts:
-            choice = normalized_opts["no"]
-            state["data"][next_step["id"]] = choice
-            state["raw_answers"][next_step["id"]] = choice
-            return True
-        for opt in opts:
-            if _norm_text(opt).startswith("no"):
-                state["data"][next_step["id"]] = opt
-                state["raw_answers"][next_step["id"]] = opt
-                return True
-        return False
-
-    treatment_markers = {
-        "using anything for it", "is it helping", "taking anything", "magic mouthwash",
-        "thrush medicine", "mouthwash", "helping enough",
-    }
-    minimal_problem_markers = {
-        "no pain just noticed it", "not painful", "just noticed it", "not really bothering",
-        "little but manageable", "a little but manageable",
-    }
-    if any(marker in text for marker in treatment_markers) and any(
-        any(flag in value for flag in minimal_problem_markers) for value in raw_values
-    ):
-        if choose_no():
-            return
+    return
 
 
 def _maybe_apply_prompt_driven_skip(topic_key: str, state: dict, pipeline: dict):
-    special = pipeline.get("special_signals", {}) or {}
-    if not special.get("screen_negative_signal"):
-        return
-    _maybe_skip_next_impact_question(topic_key, state)
+    return
 
 
 def _store_followup_prompt(
@@ -5080,7 +4652,7 @@ def handle_pending_followup(topic_key: str, answer: str, source: str = "typed"):
 
         retry_text = (answer or "").strip()
         if source_step["type"] == "options":
-            interpreted = interpret_user_input_with_options(source_step, retry_text)
+            interpreted = interpret_user_input_with_options(source_step, retry_text, topic_history=_recent_topic_history(state))
             if interpreted in source_step.get("opts", []):
                 handle_answer(
                     topic_key,
@@ -5175,6 +4747,12 @@ def handle_answer(
         state["followup_counts"] = {}
     if "raw_answers" not in state:
         state["raw_answers"] = {}
+    if "last_prompted_step_id" not in state:
+        state["last_prompted_step_id"] = None
+    if "last_prompted_text" not in state:
+        state["last_prompted_text"] = ""
+    if state.get("last_prompted_step_id") == step.get("id"):
+        _remember_prompted_step(state, None, "")
     _clear_step_inputs(topic_key, step)
 
     display = display_override if display_override is not None else (
@@ -5194,7 +4772,7 @@ def handle_answer(
         state["data"][f"{step['id']}_other_detail"] = verbatim.strip()
     answer = _coerce_structured_answer(topic_key, step, answer, state["data"], raw_answer=raw_answer)
     state["data"][step["id"]] = answer
-    if isinstance(verbatim, str):
+    if isinstance(verbatim, str) and not openai_client:
         _auto_capture_following_answers(topic_key, state, verbatim)
     next_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
     state["status"] = "in_progress"
@@ -5224,38 +4802,10 @@ def handle_answer(
     # BRANCH B — Free text / voice / typed — run full agent pipeline
     # ══════════════════════════════════════════════════════════════
     if isinstance(answer, str):
-        binary_override = _free_text_binary_response_override(step, answer)
-        if binary_override.get("action") == "clarify":
-            _store_followup_prompt(
-                topic_key,
-                state,
-                step,
-                binary_override.get("question", _fallback_clarifying_question(step)),
-            )
-            st.rerun()
-            return
-        if binary_override.get("action") == "accept":
-            assistant_message = binary_override.get("assistant_message", _default_chatty_reply(topic_key, answer, step, last_topic_data))
-            if _is_negative_screening_answer(answer):
-                _maybe_skip_next_impact_question(topic_key, state)
-                _apply_generic_fallback_next_step_action(topic_key, state)
-                next_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
-            if topic_is_complete(topic_key, state["data"], state.get("raw_answers")):
-                state["status"] = "completed"
-                state["chat"].append({
-                    "role": "assistant",
-                    "content": f"{assistant_message}\n\n✅ Thank you — I have everything I need for this topic.",
-                })
-                st.rerun()
-                return
-            _append_next_question(topic_key, state, next_step, assistant_message)
-            st.rerun()
-            return
-
         is_vague = _looks_vague_answer(answer)
 
         # Vague answer with no options to try → ask clarification (no LLM needed)
-        if is_vague and source in {"typed", "voice", "free_text"}:
+        if is_vague and source in {"typed", "voice", "free_text"} and not openai_client:
             _store_followup_prompt(
                 topic_key, state, step, _fallback_clarifying_question(step),
             )
@@ -5344,7 +4894,7 @@ def handle_answer(
             elif ack:
                 assistant_message = ack
 
-            _maybe_apply_prompt_driven_skip(topic_key, state, pipeline)
+            _apply_agent_next_step_action(topic_key, state, pipeline.get("next_step_action"))
             next_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
 
         else:
@@ -5420,7 +4970,7 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
 
         if user_text and st.session_state.get(submitted_key) != user_text:
             st.session_state[submitted_key] = user_text
-            interpreted = interpret_user_input_with_options(step, user_text)
+            interpreted = interpret_user_input_with_options(step, user_text, topic_history=_recent_topic_history(state))
             if interpreted in step.get("opts", []):
                 handle_answer(topic_key, step, interpreted, source="structured",
                               display_override=user_text, raw_answer=user_text)
@@ -5431,7 +4981,7 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
         voice_submitted_key = f"voice_{topic_key}_{sid}_submitted"
         if voice_text and st.session_state.get(voice_submitted_key) != voice_text:
             st.session_state[voice_submitted_key] = voice_text
-            interpreted = interpret_user_input_with_options(step, voice_text)
+            interpreted = interpret_user_input_with_options(step, voice_text, topic_history=_recent_topic_history(state))
             if interpreted in step.get("opts", []):
                 handle_answer(topic_key, step, interpreted, source="structured",
                               display_override=voice_text, raw_answer=voice_text)
@@ -5646,6 +5196,10 @@ def render_topic_detail(topic_label: str, topic_key: str):
     # ── Ensure followup_counts exists (backward compat) ────────────
     if "followup_counts" not in state:
         state["followup_counts"] = {}
+    if "last_prompted_step_id" not in state:
+        state["last_prompted_step_id"] = None
+    if "last_prompted_text" not in state:
+        state["last_prompted_text"] = ""
 
     # ── Urgency banner (Tier 1–3 from multi-agent system) ───────────
     render_urgency_banner()
@@ -5678,7 +5232,7 @@ def render_topic_detail(topic_label: str, topic_key: str):
         state["chat"] = [{"role": "assistant", "content": intro}]
         first_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
         if first_step:
-            _append_assistant_message(state, _step_prompt_text(first_step, topic_key=topic_key, state=state))
+            _ensure_step_prompted(topic_key, state, first_step)
 
     # ── Header with progress bar ─────────────────────────────────
     header_html = (
@@ -5756,7 +5310,7 @@ def render_topic_detail(topic_label: str, topic_key: str):
     if next_step:
         # Look up previous answer for this specific question
         prev_answer = last_data.get(next_step["id"]) if last_data else None
-        _append_assistant_message(state, _step_prompt_text(next_step, topic_key=topic_key, state=state))
+        _ensure_step_prompted(topic_key, state, next_step)
         st.markdown('</div><div class="composer-wrap">', unsafe_allow_html=True)
         render_input(topic_key, next_step, prev_answer=prev_answer)
         st.markdown('</div></div>', unsafe_allow_html=True)
