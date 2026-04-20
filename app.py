@@ -184,121 +184,6 @@ def _needs_head_neck_followup(text: str) -> bool:
     return bool(words & focused_terms)
 
 
-def _indicates_no_low_mood(text: str) -> bool:
-    normalized = _norm_text(text)
-    if not normalized:
-        return False
-
-    explicit_phrases = {
-        "no low mood",
-        "not feeling down",
-        "not depressed",
-        "i am not depressed",
-        "i m not depressed",
-        "i dont feel down",
-        "i do not feel down",
-        "i dont have low mood",
-        "i do not have low mood",
-        "my mood is okay",
-        "my mood is fine",
-        "emotionally okay",
-        "emotionally fine",
-        "doing okay emotionally",
-        "doing fine emotionally",
-        "i feel okay",
-        "i feel fine",
-    }
-    if normalized in {"okay", "ok", "fine", "good"}:
-        return True
-    if "low mood" in normalized and any(token in normalized for token in {"no", "not", "dont", "don t"}):
-        return True
-    if "depressed" in normalized and any(token in normalized for token in {"no", "not", "dont", "don t"}):
-        return True
-    if "feeling down" in normalized and any(token in normalized for token in {"no", "not", "dont", "don t"}):
-        return True
-    return any(phrase in normalized for phrase in explicit_phrases)
-
-
-def _format_prior_answer_for_prompt(value: Any) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, list):
-        value = ", ".join(str(v) for v in value)
-    text = str(value).strip()
-    if not text:
-        return ""
-    if re.fullmatch(r"\d+(\.\d+)?", text):
-        return text
-    if len(text) > 80:
-        text = text[:77] + "..."
-    return text
-
-
-def _natural_prior_memory(step_id: str, prior_text: str) -> str:
-    normalized = _norm_text(prior_text)
-    if not normalized:
-        return ""
-
-    if step_id == "has_pain":
-        if normalized == "yes":
-            return "You mentioned pain at your last visit."
-        if normalized == "no":
-            return "You weren't having pain at your last visit."
-
-    if step_id == "pain_location":
-        return f"Last time it sounded like it was more in your {prior_text.lower()}."
-
-    if step_id == "dry_mouth":
-        if normalized == "yes":
-            return "Dry mouth was bothering you last time."
-        if normalized == "no":
-            return "Dry mouth wasn't a big issue last time."
-
-    if step_id == "hearing_changes":
-        if normalized == "yes":
-            return "You were noticing hearing changes at your last visit."
-        if normalized == "no":
-            return "You weren't noticing hearing changes last time."
-
-    if step_id == "mouth_sores":
-        if normalized == "yes":
-            return "You had mouth sores at your last visit."
-        if normalized == "no":
-            return "You weren't dealing with mouth sores last time."
-
-    if step_id == "support_adequate":
-        if normalized == "yes":
-            return "Last time it sounded like support between visits was okay."
-        if normalized == "no":
-            return "Last time it sounded like support between visits was limited."
-
-    if step_id == "social_support_quality":
-        return f"Last time you described your support as {prior_text.lower()}."
-
-    if step_id == "emotional_state":
-        return f"Last time you described feeling {prior_text.lower()}."
-
-    if step_id == "eating_ability":
-        return f"Last time you were {prior_text.lower()}."
-
-    if step_id == "weight":
-        return f"Last time your weight was about {prior_text} pounds."
-
-    if normalized == "yes":
-        return "This was present at your last visit too."
-    if normalized == "no":
-        return "This wasn't an issue at your last visit."
-
-    return f"Last time you mentioned {prior_text.lower()}."
-
-
-def _blend_prior_memory(question_text: str, step_id: str, prior_text: str) -> str:
-    memory = _natural_prior_memory(step_id, prior_text)
-    if not memory:
-        return question_text
-    return f"{question_text} {memory}"
-
-
 def _match_binary_option(step: dict, user_input: str) -> Optional[str]:
     opts = step.get("opts", [])
     if len(opts) != 2:
@@ -330,7 +215,7 @@ _RELATION_TERMS = {
     "partner", "spouse", "neighbor", "roommate", "children", "child",
 }
 _MANAGEMENT_TERMS = {
-    "zofran", "compazine", "anti nausea", "anti-nausea", "imodium", "miralax", "senna", "gabapentin", "oxycodone", "advil",
+    "zofran", "imodium", "miralax", "senna", "gabapentin", "oxycodone", "advil",
     "tylenol", "motrin", "ibuprofen", "rinse", "mouthwash", "patch", "tube feed",
     "salt water", "baking soda", "ensure", "boost", "water", "liquids", "soft foods",
 }
@@ -897,7 +782,7 @@ def _auto_capture_following_answers(topic_key: str, state: dict, seed_text: str)
             inferred = _infer_option_from_text(next_step, text)
             if not inferred and len(_norm_text(text).split()) >= 3:
                 maybe = interpret_user_input_with_options(next_step, text)
-                if maybe in next_step.get("opts", []) and not _is_catchall_option_value(maybe):
+                if maybe in next_step.get("opts", []):
                     inferred = maybe
             if inferred in next_step.get("opts", []):
                 state["data"][next_step["id"]] = inferred
@@ -1853,21 +1738,6 @@ def _dynamic_step_text(topic_key: Optional[str], step: dict, state: Optional[dic
     if not state:
         return question_text
 
-    prior_topic_data = st.session_state.get("last_checkin", {}).get(topic_key or "", {})
-    if step["id"] == "weight_impact":
-        prior_weight = prior_topic_data.get("weight")
-        current_weight = state.get("data", {}).get("weight")
-        if prior_weight not in (None, "") and current_weight not in (None, ""):
-            question_text = (
-                f"Has that weight change been affecting how you feel or your energy levels? "
-                f"Last time your weight was {prior_weight} pounds, and today you entered {current_weight}."
-            )
-
-    prior_value = prior_topic_data.get(step["id"])
-    prior_text = _format_prior_answer_for_prompt(prior_value)
-    if prior_text:
-        question_text = _blend_prior_memory(question_text, step["id"], prior_text)
-
     raw_answers = state.get("raw_answers", {})
     prev_step = _previous_step_in_flow(topic_key or "", step.get("id", ""))
     prev_raw = str(raw_answers.get(prev_step["id"], "")).strip() if prev_step else ""
@@ -2102,164 +1972,6 @@ TOPIC_INTROS = {
     "activity":  "Tell me about how your daily activities have been going.",
     "mood":      "This section covers how you've been feeling emotionally and your support system.",
     "other":     "Finally, let's cover any other symptoms — breathing, skin, hearing, and more.",
-}
-
-TOPIC_SCENARIO_PASSES = {
-    "pain": {
-        "title": "Breakthrough throat pain with swallowing",
-        "why_it_matters": "Shows free-text interpretation, targeted follow-up, and escalation when pain is worsening.",
-        "conversation": [
-            ("Assistant", "Do you have any pain today?"),
-            ("Patient", "Yes, mostly in my throat when I swallow."),
-            ("Assistant", "On a scale of 0-10, how bad is the throat pain at its worst?"),
-            ("Patient", "About an 8. It's definitely worse than last week."),
-            ("Assistant", "What pain medications are you using right now?"),
-            ("Patient", "Oxycodone and gabapentin."),
-            ("Assistant", "Are you taking them as prescribed, and are they helping enough?"),
-            ("Patient", "I'm taking them, but the oxycodone only helps for a couple of hours."),
-        ],
-        "agent_pass": [
-            "Answer Interpreter: maps 'mostly in my throat when I swallow' to the throat branch without forcing the patient to use menu wording.",
-            "Prior Comparison: flags a likely worsening trend when the patient says the pain is worse than last week.",
-            "Urgency Agent: treats 8/10 pain with incomplete relief as a higher-priority symptom for same-visit review.",
-            "Doctor-Relevance Agent: confirms the note is clinically useful because it captures location, severity, medications, and response.",
-            "Next-Move Agent: asks a focused follow-up about medication timing or swallowing impact instead of repeating the pain question.",
-        ],
-    },
-    "nutrition": {
-        "title": "Eating less, weight loss, and dehydration risk",
-        "why_it_matters": "Shows nutrition decline with swallowing barriers and fluid support needs.",
-        "conversation": [
-            ("Assistant", "How has eating been going since your last visit?"),
-            ("Patient", "I'm eating less than usual. Mostly soft foods and shakes."),
-            ("Assistant", "What has your weight been recently?"),
-            ("Patient", "I was 156 last visit and I'm 149 now."),
-            ("Assistant", "Are you having trouble swallowing?"),
-            ("Patient", "Yes, solids feel stuck and it hurts."),
-            ("Assistant", "Are you getting any feeding tube support or IV fluids?"),
-            ("Patient", "No feeding tube, but I had IV fluids twice this week because I got dehydrated."),
-        ],
-        "agent_pass": [
-            "Answer Interpreter: preserves the patient's natural description while still mapping to structured fields like 'eating less than usual' and swallowing difficulty.",
-            "Urgency Agent: marks weight loss plus dehydration support as clinically important even if the patient sounds calm.",
-            "Doctor-Relevance Agent: recognizes that oral intake, weight change, and hydration support together are enough to surface in the report.",
-            "Next-Move Agent: can ask whether pain medicine timing is affecting meals, which matches the existing nutrition logic.",
-        ],
-    },
-    "oral": {
-        "title": "Dry mouth, sores, and thick mucus",
-        "why_it_matters": "Shows how the bot separates several oral symptoms without making the patient repeat themselves.",
-        "conversation": [
-            ("Assistant", "Do you have any mouth sores, ulcers, or white patches right now?"),
-            ("Patient", "Yes, I have a sore on the side of my tongue."),
-            ("Assistant", "Is it affecting your ability to eat or drink?"),
-            ("Patient", "A little. Spicy food really burns."),
-            ("Assistant", "Are you having dryness in your mouth?"),
-            ("Patient", "Yes, all day, and it's waking me up at night."),
-            ("Assistant", "Are you having problems with thick mucus in your throat too?"),
-            ("Patient", "Yes, especially in the morning. I've been using salt and baking soda rinses and they help some."),
-        ],
-        "agent_pass": [
-            "Answer Interpreter: captures tongue soreness, dry mouth timing, and mucus management from natural phrasing.",
-            "Sentiment Agent: detects frustration and symptom burden even without explicit distress language.",
-            "Doctor-Relevance Agent: keeps the detail because the conversation covers symptom type, location, daily impact, and what the patient is already trying.",
-            "Next-Move Agent: avoids redundant questions if the patient already volunteered that rinses help some.",
-        ],
-    },
-    "gi": {
-        "title": "Nausea with partial medication relief",
-        "why_it_matters": "Shows targeted follow-up when a free-text answer contains some, but not all, clinically needed details.",
-        "conversation": [
-            ("Assistant", "Have you had any nausea, vomiting, or diarrhea since your last visit?"),
-            ("Patient", "Mostly nausea, and I threw up once yesterday."),
-            ("Assistant", "How often are you feeling nauseated?"),
-            ("Patient", "A few times a day, usually after I try to eat."),
-            ("Assistant", "What are you using for nausea, and is it helping?"),
-            ("Patient", "Zofran twice a day. It helps a little but not enough."),
-            ("Assistant", "How often are you vomiting and how much?"),
-            ("Patient", "Just once yesterday, small amount."),
-        ],
-        "agent_pass": [
-            "Answer Interpreter: correctly splits the patient's first answer into nausea and vomiting rather than forcing one label.",
-            "Doctor-Relevance Agent: notices when management is present but relief is incomplete, which makes the symptom more actionable.",
-            "Next-Move Agent: asks only for the missing vomiting frequency and amount because the nausea management answer was already sufficient.",
-        ],
-    },
-    "fatigue": {
-        "title": "Fatigue affecting function and sleep",
-        "why_it_matters": "Shows how symptom burden can span weakness, daytime function, and medication-related drowsiness.",
-        "conversation": [
-            ("Assistant", "Are you feeling more tired or weak than usual?"),
-            ("Patient", "Yes, very tired. My legs also feel weak."),
-            ("Assistant", "Is the fatigue affecting your daily activities?"),
-            ("Patient", "Yes, I need help showering and I rest most of the day."),
-            ("Assistant", "Are your pain medications making you feel drowsy?"),
-            ("Patient", "Sometimes, especially after the afternoon dose."),
-            ("Assistant", "Are you able to sleep through the night?"),
-            ("Patient", "No, I wake up because of dry mouth and coughing."),
-        ],
-        "agent_pass": [
-            "Answer Interpreter: handles mixed fatigue plus focal weakness in one reply.",
-            "Urgency Agent: increases concern when weakness is affecting basic daily function.",
-            "Doctor-Relevance Agent: links drowsiness, poor sleep, and daytime impairment into a clinically coherent summary.",
-            "Next-Move Agent: asks what is waking the patient at night, which lines up with the sleep follow-up rule.",
-        ],
-    },
-    "activity": {
-        "title": "Reduced activity from pain and fatigue",
-        "why_it_matters": "Shows a functional-status conversation rather than a symptom-only conversation.",
-        "conversation": [
-            ("Assistant", "How is your daily life? Are you able to do your usual activities?"),
-            ("Patient", "I'm doing less than usual."),
-            ("Assistant", "What activities are most difficult right now?"),
-            ("Patient", "Cooking, grocery shopping, and climbing stairs."),
-            ("Assistant", "Is the difficulty mainly due to pain, fatigue, or something else?"),
-            ("Patient", "Both. I get tired fast and my throat pain makes meals a project."),
-        ],
-        "agent_pass": [
-            "Answer Interpreter: maps the patient's free-text answer to the activity branch and keeps the concrete examples.",
-            "Prior Comparison: can highlight a decline if the patient was previously doing normal activities.",
-            "Doctor-Relevance Agent: preserves specific functional losses because they are more useful than a generic 'doing worse' label.",
-        ],
-    },
-    "mood": {
-        "title": "Anxiety, low mood, and limited support",
-        "why_it_matters": "Shows empathic handling of emotional symptoms while still collecting actionable support needs.",
-        "conversation": [
-            ("Assistant", "How are you feeling emotionally? Are you feeling anxious or worried about anything?"),
-            ("Patient", "I've been pretty overwhelmed and worried about treatment not working."),
-            ("Assistant", "Is anxiety or worry affecting your sleep, eating, or daily activities?"),
-            ("Patient", "Yes, mostly my sleep and appetite."),
-            ("Assistant", "Have you been feeling down or depressed?"),
-            ("Patient", "Yes, on and off most days."),
-            ("Assistant", "Do you feel you have enough support between visits?"),
-            ("Patient", "Not really. My daughter works and I'm alone a lot."),
-        ],
-        "agent_pass": [
-            "Sentiment Agent: picks up emotional strain and possible disengagement risk from the patient's wording.",
-            "Doctor-Relevance Agent: treats low support plus depressed mood as a meaningful care-coordination issue.",
-            "Next-Move Agent: follows with a supportive question about what kind of help would be most useful right now.",
-        ],
-    },
-    "other": {
-        "title": "Mixed red-flag symptoms outside the core tracks",
-        "why_it_matters": "Shows how the catch-all topic still supports fast safety escalation.",
-        "conversation": [
-            ("Assistant", "Are you having any difficulty breathing or shortness of breath?"),
-            ("Patient", "A little short of breath when I walk across the room."),
-            ("Assistant", "Have you had any fever or chills recently?"),
-            ("Patient", "Yes, I had chills last night and my temperature was 100.8."),
-            ("Assistant", "Have you been feeling dizzy or lightheaded?"),
-            ("Patient", "Yes, mostly when I stand up, and I almost fell this morning."),
-            ("Assistant", "Have you had any skin problems like irritation, wounds, or redness?"),
-            ("Patient", "The skin on my neck is raw from radiation and looks worse this week."),
-        ],
-        "agent_pass": [
-            "Urgency Agent: identifies fever, near-fall, and exertional shortness of breath as same-day review signals.",
-            "Doctor-Relevance Agent: keeps the temperature, timing, near-fall, and skin progression because those specifics drive triage.",
-            "Orchestrator: prioritizes the safety-sensitive follow-up path over lower-priority symptom details.",
-        ],
-    },
 }
 
 TOPIC_MAIN_RULES = {
@@ -3141,22 +2853,6 @@ STEP_SCHEMAS = {
             "helping": {"detector": "helping", "question": "Has that been helping at all?"},
         },
     },
-    "vomiting_frequency": {
-        "components": {
-            "frequency": {
-                "detector": "frequency",
-                "question": "How often are you vomiting?",
-                "unknown_ok": True,
-                "unknown_ack": "That's okay if you're not sure about the exact timing right now. I've noted what you could tell me.",
-            },
-            "amount": {
-                "detector": "amount",
-                "question": "About how much is it each time?",
-                "unknown_ok": True,
-                "unknown_ack": "That's okay if the amount is hard to estimate right now. I've noted that for your care team.",
-            },
-        },
-    },
     "vomiting_management": {
         "components": {
             "management": {"detector": "management", "question": "What have you been doing to manage the vomiting?"},
@@ -3318,16 +3014,12 @@ def _step_is_relevant(topic_key: str, step: dict, data: dict, raw_answers: Optio
         if step_id == "drowsy_schedule":
             return data.get("sleep_quality") == "No" and data.get("medication_drowsy") in {"Yes", "Sometimes"}
 
-    if topic_key == "mood":
-        if step_id == "feeling_down":
-            emotional_state = str(data.get("emotional_state") or raw_answers.get("emotional_state", ""))
-            if data.get("anxiety_impact") == "No" and _indicates_no_low_mood(emotional_state):
-                return False
-
     if topic_key == "nutrition":
         if step_id == "pain_med_timing":
             barrier = raw("eating_barrier")
-            return any(token in barrier for token in {"pain", "swallow"})
+            meds = data.get("pain_medications") or []
+            has_pain_med = isinstance(meds, list) and "No pain medication" not in meds and len(meds) > 0
+            return has_pain_med and any(token in barrier for token in {"pain", "swallow"})
 
         if step_id == "iv_adjust":
             return data.get("iv_helping") == "No" or any(
@@ -4343,10 +4035,6 @@ def _merge_sentiment_state(sentiment_out: dict):
 _CATCHALL_KEYWORDS = {"somewhere else", "other", "none of these", "something else"}
 
 
-def _is_catchall_option_value(value: str) -> bool:
-    return _norm_text(value) in _CATCHALL_KEYWORDS
-
-
 # Timing/pattern words that are never valid body-location answers
 _TIMING_WORDS = {
     "all the time", "comes and goes", "comes and go", "sometimes", "occasionally",
@@ -4957,38 +4645,6 @@ def _natural_summary(topic_key: str, data: dict) -> str:
         return ", ".join(syms[:3]).capitalize() if syms else "No other symptoms"
 
     return ""
-
-
-def _scenario_conversation_markdown(lines: list[tuple[str, str]]) -> str:
-    rendered = []
-    for speaker, text in lines:
-        rendered.append(f"**{speaker}:** {text}")
-    return "\n\n".join(rendered)
-
-
-def _render_topic_scenario_pass(topic_key: str):
-    scenario = TOPIC_SCENARIO_PASSES.get(topic_key)
-    if not scenario:
-        st.caption("No scenario pass has been added for this topic yet.")
-        return
-
-    st.markdown(f"**Scenario:** {scenario['title']}")
-    st.caption(scenario["why_it_matters"])
-    st.markdown(_scenario_conversation_markdown(scenario["conversation"]))
-    st.markdown("**Agent workflow pass**")
-    for item in scenario["agent_pass"]:
-        st.markdown(f"- {item}")
-
-
-def _render_scenario_library():
-    st.markdown("### Multi-Agent Scenario Pass")
-    st.caption(
-        "These realistic sample conversations show how each topic should behave across interpretation, triage, and next-step questioning."
-    )
-    for _, topic_key in TOPICS:
-        label = TOPIC_LABELS.get(topic_key, topic_key)
-        with st.expander(label, expanded=False):
-            _render_topic_scenario_pass(topic_key)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -5725,9 +5381,6 @@ def render_topic_detail(topic_label: str, topic_key: str):
         else:
             st.caption("No information from your last visit was recorded for this section.")
 
-    with st.expander("Sample conversation for this topic", expanded=False):
-        _render_topic_scenario_pass(topic_key)
-
     # ── Initialize topic on first visit ─────────────────────────
     if state["status"] == "not_started":
         state["status"] = "in_progress"
@@ -6058,9 +5711,6 @@ def screen_overview():
         )
 
     st.markdown('</div>', unsafe_allow_html=True)
-
-    with st.expander("Review sample multi-agent scenario passes", expanded=False):
-        _render_scenario_library()
 
     _, col, _ = st.columns([1, 2, 1])
     with col:
