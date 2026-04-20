@@ -2209,6 +2209,22 @@ def get_next_step(topic_key: str, data: dict, raw_answers: Optional[dict] = None
     return None
 
 
+def get_upcoming_steps(topic_key: str, data: dict, raw_answers: Optional[dict] = None, limit: int = 5) -> list[dict]:
+    upcoming = []
+    for step in FLOWS.get(topic_key, []):
+        when = step.get("when")
+        if when and not when(data):
+            continue
+        if not _step_is_relevant(topic_key, step, data, raw_answers):
+            continue
+        if step["id"] in data:
+            continue
+        upcoming.append(step)
+        if len(upcoming) >= limit:
+            break
+    return upcoming
+
+
 def topic_is_complete(topic_key: str, data: dict, raw_answers: Optional[dict] = None) -> bool:
     return get_next_step(topic_key, data, raw_answers) is None
 
@@ -2929,12 +2945,15 @@ FOLLOW-UP RULES:
   - If the patient gave a broad but meaningful answer, break down what is missing conceptually; do NOT treat it as meaningless.
   - If the patient gives a meaningful negative screen ("no", "not really", "I am okay", "fine") to a broad symptom or emotional check-in question, treat that as a usable answer rather than forcing an unnecessary impact follow-up.
   - If the patient gives a negative screen to a broad opener, set screen_negative_signal=true when the next likely question would otherwise just ask about downstream impact of the same denied problem.
+  - If the patient clearly indicates they do not have a problem in that domain, prefer skipping nonessential downstream questions rather than completing the whole branch mechanically.
+  - Ask only questions that are still clinically necessary after the patient's actual answer.
   - If the patient already explained the reason in their own words, do NOT recommend a generic "what is making this difficult" follow-up.
   - If the patient supplies one detail and explicitly does not know another, accept the known detail and only ask for the missing one if it is truly necessary.
   - If the missing detail is something the patient reasonably may not know right now, prefer no follow-up over repetitive questioning.
   - Never imply the presence of a symptom the patient just denied.
   - You will receive recent conversation history for this topic only. Use it to avoid repeated questions.
   - If the current answer already addresses the candidate next step, set next_step_action to skip that step.
+  - If several upcoming questions become unnecessary for the same reason, include them in next_step_action.plan.
   - If the candidate next step, or any proposed follow-up, would substantially repeat a recent question already asked in this topic, suppress it.
   - If a natural assistant acknowledgment has already effectively asked the next question, do not ask it again.
   - ONLY recommend follow-up if information_completeness is "partial" or "none"
@@ -2954,8 +2973,10 @@ next_step_action:
   - This is the main mechanism for skipping downstream impact/management/change questions generically across topics
   - Only use it when the candidate next step would be unnecessary, redundant, or context-mismatched given the current answer and session answers
   - Prefer suggested_answer to be an exact option from the candidate next step when obvious, often "No"
+  - plan is optional and may list additional upcoming steps that should also be auto-resolved to avoid unnecessary questioning
   - Good examples:
     - Patient denies emotional distress and next step asks whether anxiety is affecting sleep/eating → skip with suggested_answer "No"
+    - Patient denies depression or feeling down and the next questions only elaborate on mood burden or support needs → skip them unless there is another clear concern
     - Patient says a sore is not painful and next step asks whether treatment for painful sores is helping → skip with suggested_answer "No"
     - Patient says IV fluids are helping and gives no sign they want changes, and next step asks about adjusting frequency → skip with suggested_answer "No"
     - Patient says medication is not causing drowsiness and next step asks whether drowsiness is affecting schedule → skip with suggested_answer "No"
@@ -2991,7 +3012,14 @@ Return ONLY valid JSON:
   "next_step_action": {{
     "skip_immediate_next_step": false,
     "suggested_answer": "..." or null,
-    "reason": "..." or null
+    "reason": "..." or null,
+    "plan": [
+      {{
+        "step_id": "...",
+        "suggested_answer": "..." or null,
+        "reason": "..." or null
+      }}
+    ]
   }},
   "special_signals": {{
     "trajectory_mismatch": false,
@@ -3015,6 +3043,7 @@ def run_doctor_relevance(
     recent_questions: list[str],
     detail_coverage: dict,
     candidate_next_step: Optional[dict] = None,
+    upcoming_steps: Optional[list[dict]] = None,
 ) -> dict:
     """
     Agent 5: Assess clinical sufficiency and decide if follow-up is warranted.
@@ -3028,6 +3057,7 @@ def run_doctor_relevance(
             "skip_immediate_next_step": False,
             "suggested_answer": None,
             "reason": None,
+            "plan": [],
         },
         "special_signals": {
             "trajectory_mismatch": False, "medication_stop_signal": False,
@@ -3053,6 +3083,15 @@ def run_doctor_relevance(
             "type": candidate_next_step.get("type"),
             "options": candidate_next_step.get("opts", []),
         } if candidate_next_step else None,
+        "upcoming_steps": [
+            {
+                "id": s.get("id"),
+                "text": s.get("text"),
+                "type": s.get("type"),
+                "options": s.get("opts", []),
+            }
+            for s in (upcoming_steps or [])
+        ],
     }, max_tokens=400)
 
     if not result:
@@ -3246,6 +3285,7 @@ def run_agent_pipeline(
     topic_history = _build_topic_history(topic_key)
     recent_questions = _build_recent_question_texts(topic_key)
     candidate_next_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
+    upcoming_steps = get_upcoming_steps(topic_key, state["data"], state.get("raw_answers"), limit=5)
 
     # ── STEP 1: Answer Interpreter (must run first) ────────────────
     interp = run_answer_interpreter(step, answer, topic_history=topic_history)
@@ -3305,7 +3345,8 @@ def run_agent_pipeline(
     dr_out = run_doctor_relevance(
         step, answer, matched, prior_comp, session_answers, followup_count,
         topic_history=topic_history, recent_questions=recent_questions,
-        detail_coverage=detail_coverage, candidate_next_step=candidate_next_step
+        detail_coverage=detail_coverage, candidate_next_step=candidate_next_step,
+        upcoming_steps=upcoming_steps,
     )
 
     # ── STEP 5: Apply follow-up decision logic ─────────────────────
@@ -4009,31 +4050,46 @@ def _maybe_skip_next_impact_question(topic_key: str, state: dict):
 
 
 def _apply_agent_next_step_action(topic_key: str, state: dict, action: Optional[dict]):
-    if not action or not action.get("skip_immediate_next_step"):
+    if not action:
         return
 
-    next_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
-    if not next_step or next_step.get("type") != "options":
-        return
+    plan = []
+    if action.get("skip_immediate_next_step"):
+        next_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
+        if next_step:
+            plan.append({
+                "step_id": next_step.get("id"),
+                "suggested_answer": action.get("suggested_answer"),
+                "reason": action.get("reason"),
+            })
+    for item in action.get("plan", []) or []:
+        if isinstance(item, dict) and item.get("step_id"):
+            plan.append(item)
 
-    opts = next_step.get("opts", [])
-    suggested = action.get("suggested_answer")
-    if suggested in opts:
-        state["data"][next_step["id"]] = suggested
-        state["raw_answers"][next_step["id"]] = suggested
-        return
-
-    normalized_opts = {_norm_text(opt): opt for opt in opts}
-    if "no" in normalized_opts:
-        state["data"][next_step["id"]] = normalized_opts["no"]
-        state["raw_answers"][next_step["id"]] = normalized_opts["no"]
-        return
-
-    for opt in opts:
-        if _norm_text(opt).startswith("no"):
-            state["data"][next_step["id"]] = opt
-            state["raw_answers"][next_step["id"]] = opt
-            return
+    for item in plan:
+        step_id = item.get("step_id")
+        step = STEP_BY_ID.get(step_id)
+        if not step or step_id in state["data"]:
+            continue
+        if step.get("type") != "options":
+            continue
+        opts = step.get("opts", [])
+        suggested = item.get("suggested_answer")
+        chosen = None
+        if suggested in opts:
+            chosen = suggested
+        else:
+            normalized_opts = {_norm_text(opt): opt for opt in opts}
+            if "no" in normalized_opts:
+                chosen = normalized_opts["no"]
+            else:
+                for opt in opts:
+                    if _norm_text(opt).startswith("no"):
+                        chosen = opt
+                        break
+        if chosen:
+            state["data"][step_id] = chosen
+            state["raw_answers"][step_id] = chosen
 
 
 def _apply_generic_fallback_next_step_action(topic_key: str, state: dict):
@@ -4282,12 +4338,12 @@ def handle_answer(
     last_topic_data = st.session_state.last_checkin.get(topic_key, {})
 
     # ══════════════════════════════════════════════════════════════
-    # BRANCH A — Structured answer (fast path, no agents)
-    # source="structured" means we already mapped the patient's reply to a
-    # real option/list value, whether it came from a button, typing, or retry.
-    # Once we have that mapping, do not send it back through the LLM.
+    # BRANCH A — Structured non-string answers (fast path)
+    # Lists/numbers do not benefit much from the language pipeline.
+    # String answers, including button/option replies like "Yes" or "No",
+    # still go through the agents so the app can skip irrelevant follow-ups.
     # ══════════════════════════════════════════════════════════════
-    if source == "structured":
+    if source == "structured" and not isinstance(answer, str):
         if topic_is_complete(topic_key, state["data"], state.get("raw_answers")):
             state["status"] = "completed"
             state["chat"].append({
@@ -4301,7 +4357,7 @@ def handle_answer(
         return
 
     # ══════════════════════════════════════════════════════════════
-    # BRANCH B — Free text / voice / typed — run full agent pipeline
+    # BRANCH B — String answers — run full agent pipeline
     # ══════════════════════════════════════════════════════════════
     if isinstance(answer, str):
         if source in {"typed", "voice", "free_text"} and not openai_client and not answer.strip():
