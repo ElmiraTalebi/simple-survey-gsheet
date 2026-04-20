@@ -265,7 +265,7 @@ _RELATION_TERMS = {
     "partner", "spouse", "neighbor", "roommate", "children", "child",
 }
 _MANAGEMENT_TERMS = {
-    "zofran", "imodium", "miralax", "senna", "gabapentin", "oxycodone", "advil",
+    "zofran", "compazine", "anti nausea", "anti-nausea", "imodium", "miralax", "senna", "gabapentin", "oxycodone", "advil",
     "tylenol", "motrin", "ibuprofen", "rinse", "mouthwash", "patch", "tube feed",
     "salt water", "baking soda", "ensure", "boost", "water", "liquids", "soft foods",
 }
@@ -832,7 +832,7 @@ def _auto_capture_following_answers(topic_key: str, state: dict, seed_text: str)
             inferred = _infer_option_from_text(next_step, text)
             if not inferred and len(_norm_text(text).split()) >= 3:
                 maybe = interpret_user_input_with_options(next_step, text)
-                if maybe in next_step.get("opts", []):
+                if maybe in next_step.get("opts", []) and not _is_catchall_option_value(maybe):
                     inferred = maybe
             if inferred in next_step.get("opts", []):
                 state["data"][next_step["id"]] = inferred
@@ -3079,6 +3079,22 @@ STEP_SCHEMAS = {
             "helping": {"detector": "helping", "question": "Has that been helping at all?"},
         },
     },
+    "vomiting_frequency": {
+        "components": {
+            "frequency": {
+                "detector": "frequency",
+                "question": "How often are you vomiting?",
+                "unknown_ok": True,
+                "unknown_ack": "That's okay if you're not sure about the exact timing right now. I've noted what you could tell me.",
+            },
+            "amount": {
+                "detector": "amount",
+                "question": "About how much is it each time?",
+                "unknown_ok": True,
+                "unknown_ack": "That's okay if the amount is hard to estimate right now. I've noted that for your care team.",
+            },
+        },
+    },
     "vomiting_management": {
         "components": {
             "management": {"detector": "management", "question": "What have you been doing to manage the vomiting?"},
@@ -3249,9 +3265,7 @@ def _step_is_relevant(topic_key: str, step: dict, data: dict, raw_answers: Optio
     if topic_key == "nutrition":
         if step_id == "pain_med_timing":
             barrier = raw("eating_barrier")
-            meds = data.get("pain_medications") or []
-            has_pain_med = isinstance(meds, list) and "No pain medication" not in meds and len(meds) > 0
-            return has_pain_med and any(token in barrier for token in {"pain", "swallow"})
+            return any(token in barrier for token in {"pain", "swallow"})
 
         if step_id == "iv_adjust":
             return data.get("iv_helping") == "No" or any(
@@ -4265,6 +4279,10 @@ def _merge_sentiment_state(sentiment_out: dict):
 
 # Keywords that identify a catch-all option in any question
 _CATCHALL_KEYWORDS = {"somewhere else", "other", "none of these", "something else"}
+
+
+def _is_catchall_option_value(value: str) -> bool:
+    return _norm_text(value) in _CATCHALL_KEYWORDS
 
 
 # Timing/pattern words that are never valid body-location answers
