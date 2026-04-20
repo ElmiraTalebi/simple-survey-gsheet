@@ -414,6 +414,34 @@ def _dose_is_unknown(text: str) -> bool:
 
 
 def _generic_missing_detail_override(step: dict, answer: str, state: dict) -> dict[str, Any]:
+    schema = STEP_SCHEMAS.get(step.get("id"), {})
+    components = schema.get("components", {})
+    if components:
+        missing = []
+        for name, comp in components.items():
+            detector_name = comp.get("detector")
+            detector = DETECTORS_BY_KIND.get(detector_name)
+            if detector and not detector(answer):
+                missing.append((name, comp))
+
+        if missing:
+            first_name, first_comp = missing[0]
+            if _is_unknown_answer(answer) and first_comp.get("unknown_ok"):
+                return {
+                    "follow_up_recommended": False,
+                    "follow_up_goal": None,
+                    "assistant_message": first_comp.get("unknown_ack") or "That's okay if you're not sure right now. I've noted that for your care team.",
+                    "information_completeness": "partial",
+                    "clinical_priority": "low",
+                }
+            return {
+                "follow_up_recommended": True,
+                "follow_up_goal": f"Obtain the missing detail for {first_name.replace('_', ' ')} only.",
+                "follow_up_question": first_comp.get("question") or "Could you tell me a bit more about that?",
+                "information_completeness": "partial",
+                "clinical_priority": "medium",
+            }
+
     question = _norm_text(step.get("text", ""))
     if not question or not isinstance(answer, str):
         return {}
@@ -626,6 +654,7 @@ def _auto_capture_following_answers(topic_key: str, state: dict, seed_text: str)
                     inferred = maybe
             if inferred in next_step.get("opts", []):
                 state["data"][next_step["id"]] = inferred
+                state["raw_answers"][next_step["id"]] = text
                 continue
             return
 
@@ -633,6 +662,7 @@ def _auto_capture_following_answers(topic_key: str, state: dict, seed_text: str)
             parsed = parse_multi_select_typed_input(next_step, text)
             if parsed:
                 state["data"][next_step["id"]] = parsed
+                state["raw_answers"][next_step["id"]] = text
                 continue
             return
 
@@ -1406,6 +1436,15 @@ def _dynamic_step_text(topic_key: Optional[str], step: dict, state: Optional[dic
     prev_step = _previous_step_in_flow(topic_key or "", step.get("id", ""))
     prev_raw = str(raw_answers.get(prev_step["id"], "")).strip() if prev_step else ""
     prev_phrase = _contextualize_raw_phrase(prev_raw)
+    schema = STEP_SCHEMAS.get(step.get("id"), {})
+
+    if schema.get("components") and prev_phrase:
+        first_component = next(iter(schema["components"].values()))
+        detector_name = first_component.get("detector")
+        if detector_name == "helping":
+            return first_component.get("question", "Has that been helping at all?")
+        if detector_name == "specific_type":
+            return first_component.get("question", question_text)
 
     if topic_key == "pain" and step.get("id") == "med_adherence_issue":
         prior = _norm_text(str(raw_answers.get("taking_as_prescribed", "")))
@@ -2458,6 +2497,154 @@ STEP_BY_ID = {
     step["id"]: step
     for flow in FLOWS.values()
     for step in flow
+}
+
+
+STEP_SCHEMAS = {
+    "med_dose_freq": {
+        "components": {
+            "frequency": {
+                "detector": "frequency",
+                "question": "How often do you usually take it?",
+                "unknown_ok": True,
+                "unknown_ack": "That's okay if you're not sure about the timing right now. I've noted what you could tell me.",
+            },
+            "dose": {
+                "detector": "dose",
+                "question": "About how much do you usually take each time?",
+                "unknown_ok": True,
+                "unknown_ack": "That's okay if you don't remember the dose right now. I've noted that for your care team.",
+            },
+        },
+    },
+    "nausea_management": {
+        "components": {
+            "management": {"detector": "management", "question": "What have you been using for the nausea?"},
+            "helping": {"detector": "helping", "question": "Has that been helping at all?"},
+        },
+    },
+    "vomiting_management": {
+        "components": {
+            "management": {"detector": "management", "question": "What have you been doing to manage the vomiting?"},
+            "helping": {"detector": "helping", "question": "Has that been helping at all?"},
+        },
+    },
+    "diarrhea_management": {
+        "components": {
+            "management": {"detector": "management", "question": "What have you been taking or doing for the diarrhea?"},
+            "helping": {"detector": "helping", "question": "Has that been helping at all?"},
+        },
+    },
+    "magic_mouthwash": {
+        "components": {
+            "management": {"detector": "management", "question": "What have you been using for that?"},
+            "helping": {"detector": "helping", "question": "Has it been helping enough?"},
+        },
+    },
+    "mucus_management": {
+        "components": {
+            "management": {"detector": "management", "question": "What have you been using for the mucus?"},
+            "helping": {"detector": "helping", "question": "Has that been helping at all?"},
+        },
+    },
+    "oral_rinse_type": {
+        "components": {
+            "specific_type": {
+                "detector": "specific_type",
+                "question": "What kind of rinse have you been using?",
+                "unknown_ok": True,
+                "unknown_ack": "That's okay if you don't remember the exact name right now.",
+            },
+        },
+    },
+    "iv_frequency": {
+        "components": {
+            "frequency": {
+                "detector": "frequency",
+                "question": "How often have you been getting the IV fluids?",
+                "unknown_ok": True,
+                "unknown_ack": "That's okay if you don't remember the exact schedule right now.",
+            },
+        },
+    },
+    "sleep_wake_reason": {
+        "components": {
+            "reason": {"detector": "reason", "question": "What tends to wake you up at night?"},
+        },
+    },
+    "difficult_activities": {
+        "components": {
+            "reason": {"detector": "reason", "question": "Which daily activities feel hardest right now?"},
+        },
+    },
+    "who_supports": {
+        "components": {
+            "support": {"detector": "support", "question": "Who has been helping support you?"},
+        },
+    },
+    "needed_support": {
+        "components": {
+            "reason": {"detector": "reason", "question": "What kind of help would feel most useful right now?"},
+        },
+    },
+    "other_pain_desc": {
+        "components": {
+            "location": {
+                "detector": "location",
+                "question": "Which body part is hurting?",
+                "unknown_ok": False,
+            },
+        },
+    },
+    "pain_start": {
+        "components": {
+            "start_time": {
+                "detector": "start_time",
+                "question": "About when did that pain start?",
+                "unknown_ok": True,
+                "unknown_ack": "That's okay if you're not sure exactly when it started.",
+            },
+        },
+    },
+    "skin_location": {
+        "components": {
+            "location": {
+                "detector": "location",
+                "question": "Where on your body are you noticing that skin problem?",
+                "unknown_ok": False,
+            },
+        },
+    },
+    "skin_start": {
+        "components": {
+            "start_time": {
+                "detector": "start_time",
+                "question": "About when did you first notice it?",
+                "unknown_ok": True,
+                "unknown_ack": "That's okay if you're not sure exactly when it started.",
+            },
+        },
+    },
+    "fever_start": {
+        "components": {
+            "start_time": {
+                "detector": "start_time",
+                "question": "About when did the fever or chills begin?",
+                "unknown_ok": True,
+                "unknown_ack": "That's okay if you're not sure exactly when it started.",
+            },
+        },
+    },
+    "bp_reading": {
+        "components": {
+            "amount": {
+                "detector": "amount",
+                "question": "Do you remember roughly what the reading has been?",
+                "unknown_ok": True,
+                "unknown_ack": "That's okay if you don't remember the exact blood pressure reading right now.",
+            },
+        },
+    },
 }
 
 
