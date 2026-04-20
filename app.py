@@ -151,8 +151,8 @@ BODY_LOCATION_TERMS = {
 }
 
 HEAD_NECK_LOCATION_TERMS = {
-    "head", "face", "jaw", "chin", "ear", "ears", "neck", "throat", "tongue",
-    "mouth", "lip", "lips", "gum", "gums", "tooth", "teeth", "cheek", "palate", "scalp",
+    "face", "jaw", "chin", "ear", "ears", "throat", "tongue",
+    "mouth", "lip", "lips", "gum", "gums", "tooth", "teeth", "cheek", "palate",
 }
 
 
@@ -170,6 +170,18 @@ def _is_head_neck_location(text: str) -> bool:
         return False
     words = set(normalized.split())
     return bool(words & HEAD_NECK_LOCATION_TERMS)
+
+
+def _needs_head_neck_followup(text: str) -> bool:
+    normalized = _norm_text(text)
+    if not normalized:
+        return False
+    words = set(normalized.split())
+    focused_terms = {
+        "ear", "ears", "jaw", "chin", "mouth", "lip", "lips", "gum", "gums",
+        "tooth", "teeth", "cheek", "palate", "tongue", "throat",
+    }
+    return bool(words & focused_terms)
 
 
 def _match_binary_option(step: dict, user_input: str) -> Optional[str]:
@@ -640,7 +652,7 @@ def _auto_capture_following_answers(topic_key: str, state: dict, seed_text: str)
         return
 
     for _ in range(3):
-        next_step = get_next_step(topic_key, state["data"])
+        next_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
         if not next_step or next_step.get("type") not in {"options", "multi_select"}:
             return
 
@@ -988,73 +1000,86 @@ div[data-baseweb="select"] > div {
     display: flex !important;
     width: 100% !important;
     margin-bottom: 12px;
-    align-items: flex-end;
-}
-
-.chat-row.assistant {
+    align-items: flex-start;
     justify-content: flex-start !important;
-    padding-right: 18%;
+    padding-left: 0 !important;
+    padding-right: 0 !important;
+    gap: 10px;
 }
 
-.chat-row.user {
-    justify-content: flex-end !important;
-    padding-left: 18%;
+.chat-avatar {
+    width: 26px;
+    height: 26px;
+    border-radius: 999px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 26px;
+    font-size: 11px;
+    font-weight: 800;
+    color: white;
+    margin-top: 2px;
 }
 
-.chat-bubble-wrap {
+.chat-row.assistant .chat-avatar {
+    background: #ef476f;
+}
+
+.chat-row.user .chat-avatar {
+    background: #1f1f1f;
+}
+
+.chat-entry {
     display: flex;
     flex-direction: column;
     gap: 4px;
-    max-width: min(74%, 680px);
+    max-width: min(86%, 860px);
+    min-width: 0;
 }
 
-.chat-row.user .chat-bubble-wrap {
-    align-items: flex-end;
-}
-
-.chat-row.assistant .chat-bubble-wrap {
-    align-items: flex-start;
+.chat-meta {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    padding: 0 2px;
 }
 
 .chat-role {
     font-size: 10px;
     font-weight: 800;
     letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: #7d92a7;
-    padding: 0 6px;
+    text-transform: none;
+    color: #1d2b36;
+}
+
+.chat-time {
+    font-size: 10px;
+    color: #9aa9b6;
 }
 
 .chat-bubble {
-    display: inline-block;
-    width: auto !important;
+    display: block;
+    width: 100%;
     max-width: 100%;
-    border-radius: 20px;
-    padding: 0.8rem 0.95rem;
-    border: 1px solid rgba(215, 228, 239, 0.95);
-    line-height: 1.68;
+    border-radius: 16px;
+    padding: 0.62rem 0.75rem;
+    border: 1px solid #edf2f6;
+    line-height: 1.6;
     white-space: pre-wrap;
     word-break: break-word;
-    font-size: 14px;
-    box-shadow: 0 10px 24px rgba(23, 50, 74, 0.05);
+    font-size: 13.5px;
+    box-shadow: none;
+    background: rgba(255,255,255,0.86);
 }
 
 .chat-row.assistant .chat-bubble {
-    background: #ffffff;
     color: #17324a;
-    border-top-left-radius: 10px;
+    border-top-left-radius: 6px;
 }
 
 .chat-row.user .chat-bubble {
-    background: linear-gradient(135deg, #e9f4ff 0%, #dbeefe 100%);
-    color: #103a5d;
-    border-color: #bed9ef;
-    border-top-right-radius: 10px;
-    box-shadow: 0 12px 24px rgba(15,108,189,0.08);
-}
-
-.chat-row.user .chat-role {
-    color: #6a89a4;
+    color: #1c2730;
+    border-top-left-radius: 6px;
 }
 
 /* ── Topic status pills ── */
@@ -1500,16 +1525,8 @@ div[data-baseweb="select"] > div {
         padding: 0 10px 10px 10px;
     }
 
-    .chat-row.assistant {
-        padding-right: 10%;
-    }
-
-    .chat-row.user {
-        padding-left: 10%;
-    }
-
-    .chat-bubble-wrap {
-        max-width: 90%;
+    .chat-entry {
+        max-width: 92%;
     }
 }
 
@@ -1650,12 +1667,13 @@ def _append_assistant_message(state: dict, text: str):
 def render_chat_bubble(role: str, content: str):
     safe = _html.escape(content or "").replace("\n", "<br>")
     role_cls = "user" if role == "user" else "assistant"
-    role_label = "" if role == "user" else "Care Assistant"
-    role_html = f'<div class="chat-role">{role_label}</div>' if role_label else ""
+    role_label = "You" if role == "user" else "Care Assistant"
+    avatar_label = "Y" if role == "user" else "I"
     st.markdown(
         f'<div class="chat-row {role_cls}">'
-        f'  <div class="chat-bubble-wrap">'
-        f'    {role_html}'
+        f'  <div class="chat-avatar">{avatar_label}</div>'
+        f'  <div class="chat-entry">'
+        f'    <div class="chat-meta"><div class="chat-role">{role_label}</div></div>'
         f'    <div class="chat-bubble">{safe}</div>'
         f'  </div>'
         f'</div>',
@@ -1905,14 +1923,14 @@ FLOW_PAIN = [
        opts=["Yes", "No"],
        when=lambda d: (
            d.get("pain_location") == "Somewhere else"
-           and _is_head_neck_location(d.get("other_pain_desc", ""))
+           and _needs_head_neck_followup(d.get("other_pain_desc", ""))
        )),
 
     _q("jaw_swelling", "Do you feel any swelling near your jaw?",
        opts=["Yes", "No"],
        when=lambda d: (
            d.get("pain_location") == "Somewhere else"
-           and _is_head_neck_location(d.get("other_pain_desc", ""))
+           and _needs_head_neck_followup(d.get("other_pain_desc", ""))
        )),
 
     _q("pain_with_chewing",
@@ -1920,7 +1938,7 @@ FLOW_PAIN = [
        opts=["Yes", "No"],
        when=lambda d: (
            d.get("pain_location") == "Somewhere else"
-           and _is_head_neck_location(d.get("other_pain_desc", ""))
+           and _needs_head_neck_followup(d.get("other_pain_desc", ""))
        )),
 
     _q("pain_start",                        # ← added (Main 3, Somewhere else branch)
@@ -2825,25 +2843,86 @@ STEP_SCHEMAS = {
 # FLOW ENGINE
 # ══════════════════════════════════════════════════════════════════
 
-def get_next_step(topic_key: str, data: dict) -> Optional[dict]:
+def _step_is_relevant(topic_key: str, step: dict, data: dict, raw_answers: Optional[dict] = None) -> bool:
+    raw_answers = raw_answers or {}
+    step_id = step.get("id")
+
+    def raw(field: str) -> str:
+        return _norm_text(str(raw_answers.get(field, "")))
+
+    if topic_key == "pain":
+        if step_id in {"ear_pain", "jaw_swelling", "pain_with_chewing"}:
+            return _needs_head_neck_followup(data.get("other_pain_desc", "")) or _needs_head_neck_followup(raw_answers.get("other_pain_desc", ""))
+
+        if step_id == "pain_med_timing":
+            barrier = raw("eating_barrier")
+            meds = data.get("pain_medications") or []
+            has_pain_med = isinstance(meds, list) and "No pain medication" not in meds and len(meds) > 0
+            return has_pain_med and any(token in barrier for token in {"pain", "swallow"})
+
+    if topic_key == "oral":
+        if step_id == "magic_mouthwash":
+            impact = data.get("sore_pain_impact") or raw_answers.get("sore_pain_impact", "")
+            return _norm_text(str(impact)) != _norm_text("No pain, just noticed it")
+
+        if step_id == "avoiding_brushing":
+            issue = _norm_text(str(data.get("teeth_issue_type") or raw_answers.get("teeth_issue_type", "")))
+            brushing = data.get("brushing_difficult")
+            return brushing == "Yes" or any(token in issue for token in {"pain", "sore", "multiple"})
+
+    if topic_key == "fatigue":
+        if step_id == "drowsy_schedule":
+            return data.get("sleep_quality") == "No" and data.get("medication_drowsy") in {"Yes", "Sometimes"}
+
+    if topic_key == "nutrition":
+        if step_id == "pain_med_timing":
+            barrier = raw("eating_barrier")
+            meds = data.get("pain_medications") or []
+            has_pain_med = isinstance(meds, list) and "No pain medication" not in meds and len(meds) > 0
+            return has_pain_med and any(token in barrier for token in {"pain", "swallow"})
+
+        if step_id == "iv_adjust":
+            return data.get("iv_helping") == "No" or any(
+                token in raw("iv_frequency") for token in {"want", "need", "more", "less", "change"}
+            )
+
+    if topic_key == "other":
+        if step_id == "hearing_worsening":
+            hearing = _norm_text(str(data.get("hearing_type") or raw_answers.get("hearing_type", "")))
+            return bool(hearing)
+
+        if step_id == "voice_communication_impact":
+            progression = data.get("voice_progression")
+            timing = data.get("voice_timing")
+            return progression in {"About the same", "Worse"} or timing == "Constant"
+
+    return True
+
+
+def get_next_step(topic_key: str, data: dict, raw_answers: Optional[dict] = None) -> Optional[dict]:
     """Return the first unanswered applicable step for this topic."""
     for step in FLOWS.get(topic_key, []):
         when = step.get("when")
         if when and not when(data):
+            continue
+        if not _step_is_relevant(topic_key, step, data, raw_answers):
             continue
         if step["id"] not in data:
             return step
     return None
 
 
-def topic_is_complete(topic_key: str, data: dict) -> bool:
-    return get_next_step(topic_key, data) is None
+def topic_is_complete(topic_key: str, data: dict, raw_answers: Optional[dict] = None) -> bool:
+    return get_next_step(topic_key, data, raw_answers) is None
 
 
-def get_topic_progress(topic_key: str, data: dict) -> tuple[int, int]:
+def get_topic_progress(topic_key: str, data: dict, raw_answers: Optional[dict] = None) -> tuple[int, int]:
     """Returns (answered, applicable) counts."""
     flow = FLOWS.get(topic_key, [])
-    applicable = [s for s in flow if not s.get("when") or s["when"](data)]
+    applicable = [
+        s for s in flow
+        if (not s.get("when") or s["when"](data)) and _step_is_relevant(topic_key, s, data, raw_answers)
+    ]
     answered = [s for s in applicable if s["id"] in data]
     return len(answered), len(applicable)
 
@@ -4651,10 +4730,10 @@ def handle_pending_followup(topic_key: str, answer: str, source: str = "typed"):
         last_topic_data,
     )
 
-    next_step = get_next_step(topic_key, state["data"])
+    next_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
     state["status"] = "in_progress"
 
-    if topic_is_complete(topic_key, state["data"]):
+    if topic_is_complete(topic_key, state["data"], state.get("raw_answers")):
         state["status"] = "completed"
         state["chat"].append({
             "role": "assistant",
@@ -4701,7 +4780,7 @@ def handle_answer(
     state["data"][step["id"]] = answer
     if isinstance(verbatim, str):
         _auto_capture_following_answers(topic_key, state, verbatim)
-    next_step = get_next_step(topic_key, state["data"])
+    next_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
     state["status"] = "in_progress"
 
     last_topic_data = st.session_state.last_checkin.get(topic_key, {})
@@ -4712,7 +4791,7 @@ def handle_answer(
     # it is already a clean matched answer, no LLM classification needed.
     # ══════════════════════════════════════════════════════════════
     if source == "structured":
-        if topic_is_complete(topic_key, state["data"]):
+        if topic_is_complete(topic_key, state["data"], state.get("raw_answers")):
             state["status"] = "completed"
             state["chat"].append({
                 "role": "assistant",
@@ -4821,7 +4900,7 @@ def handle_answer(
         assistant_message = ""
 
     # ── Topic complete check ──────────────────────────────────────
-    if topic_is_complete(topic_key, state["data"]):
+    if topic_is_complete(topic_key, state["data"], state.get("raw_answers")):
         state["status"] = "completed"
         final_message = "✅ Thank you — I have everything I need for this topic."
         if assistant_message:
@@ -5142,12 +5221,12 @@ def render_topic_detail(topic_label: str, topic_key: str):
         state["status"] = "in_progress"
         intro = TOPIC_INTROS.get(topic_key, "Let's go through this section together.")
         state["chat"] = [{"role": "assistant", "content": intro}]
-        first_step = get_next_step(topic_key, state["data"])
+        first_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
         if first_step:
             _append_assistant_message(state, _step_prompt_text(first_step, topic_key=topic_key, state=state))
 
     # ── Header with progress bar ─────────────────────────────────
-    answered, applicable = get_topic_progress(topic_key, state["data"])
+    answered, applicable = get_topic_progress(topic_key, state["data"], state.get("raw_answers"))
     progress_note = f"{answered}/{applicable} answered" if applicable > 0 else "Getting started"
     st.markdown(
         '<div class="chat-shell">'
@@ -5221,7 +5300,7 @@ def render_topic_detail(topic_label: str, topic_key: str):
             st.markdown('</div>', unsafe_allow_html=True)
         st.markdown('</div></div>', unsafe_allow_html=True)
         return
-    next_step = get_next_step(topic_key, state["data"])
+    next_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
     if next_step:
         # Look up previous answer for this specific question
         prev_answer = last_data.get(next_step["id"]) if last_data else None
