@@ -984,6 +984,19 @@ div[data-baseweb="select"] > div {
     padding: 6px 9px;
 }
 
+.chat-shell-summary {
+    padding: 10px 12px;
+    border-bottom: 1px solid #e8eef4;
+    background: rgba(247, 251, 254, 0.72);
+    font-size: 12px;
+    line-height: 1.55;
+    color: #5a7085;
+}
+
+.chat-shell-summary strong {
+    color: #17324a;
+}
+
 .chat-history {
     padding: 14px 14px 8px 14px;
     min-height: 220px;
@@ -4928,7 +4941,6 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
 
     state = st.session_state.topic_states[topic_key]
     prev = state["data"].get(step["id"])
-    _, composer_col = st.columns([1.05, 0.95])
 
     def render_option_buttons(button_topic_key: str, button_step: dict, multi: bool = False):
         opts = button_step.get("opts", [])
@@ -4946,118 +4958,108 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
 
     # ── Options ─────────────────────────────────────────────────
     if stype == "options":
-        with composer_col:
-            st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
-            col_text = st.columns([1])[0]
-            with col_text:
-                user_text = st.text_input(
-                    "Message",
-                    key=f"text_{topic_key}_{sid}",
-                    label_visibility="collapsed",
-                    placeholder="Type a reply..."
-                )
-            render_option_buttons(topic_key, step, multi=False)
+        st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
+        user_text = st.text_input(
+            "Message",
+            key=f"text_{topic_key}_{sid}",
+            label_visibility="collapsed",
+            placeholder="Type a reply..."
+        )
+        render_option_buttons(topic_key, step, multi=False)
 
-            with st.container():
-                voice_text = voice_widget(f"{topic_key}_{sid}_opt", label="Mic")
+        with st.container():
+            voice_text = voice_widget(f"{topic_key}_{sid}_opt", label="Mic")
 
-            submitted_key = f"text_{topic_key}_{sid}_submitted"
+        submitted_key = f"text_{topic_key}_{sid}_submitted"
 
-            if user_text and st.session_state.get(submitted_key) != user_text:
-                st.session_state[submitted_key] = user_text
-                interpreted = interpret_user_input_with_options(step, user_text)
-                if interpreted in step.get("opts", []):
-                    # Use fast-path (no agents) but show the patient's raw text in chat
-                    handle_answer(topic_key, step, interpreted, source="structured",
-                                  display_override=user_text, raw_answer=user_text)
-                else:
-                    _request_retry_for_step(topic_key, step, user_text, source="typed")
-                    return
+        if user_text and st.session_state.get(submitted_key) != user_text:
+            st.session_state[submitted_key] = user_text
+            interpreted = interpret_user_input_with_options(step, user_text)
+            if interpreted in step.get("opts", []):
+                handle_answer(topic_key, step, interpreted, source="structured",
+                              display_override=user_text, raw_answer=user_text)
+            else:
+                _request_retry_for_step(topic_key, step, user_text, source="typed")
+                return
 
-            voice_submitted_key = f"voice_{topic_key}_{sid}_submitted"
-            if voice_text and st.session_state.get(voice_submitted_key) != voice_text:
-                st.session_state[voice_submitted_key] = voice_text
-                interpreted = interpret_user_input_with_options(step, voice_text)
-                if interpreted in step.get("opts", []):
-                    handle_answer(topic_key, step, interpreted, source="structured",
-                                  display_override=voice_text, raw_answer=voice_text)
-                else:
-                    _request_retry_for_step(topic_key, step, voice_text, source="voice")
-                    return
-            st.markdown('</div>', unsafe_allow_html=True)
+        voice_submitted_key = f"voice_{topic_key}_{sid}_submitted"
+        if voice_text and st.session_state.get(voice_submitted_key) != voice_text:
+            st.session_state[voice_submitted_key] = voice_text
+            interpreted = interpret_user_input_with_options(step, voice_text)
+            if interpreted in step.get("opts", []):
+                handle_answer(topic_key, step, interpreted, source="structured",
+                              display_override=voice_text, raw_answer=voice_text)
+            else:
+                _request_retry_for_step(topic_key, step, voice_text, source="voice")
+                return
+        st.markdown('</div>', unsafe_allow_html=True)
                 
 
     # ── Multi-select ─────────────────────────────────────────────
     elif stype == "multi_select":
-        with composer_col:
-            st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
-            text_key = f"text_{topic_key}_{sid}"
-            submit_key = f"{text_key}_submitted"
-            col_text = st.columns([1])[0]
-            with col_text:
-                user_text = st.text_input(
-                    "Reply",
-                    key=text_key,
-                    label_visibility="collapsed",
-                    placeholder="Type one or more answers, separated by commas..."
-                )
-            render_option_buttons(topic_key, step, multi=True)
-            with st.container():
-                voice_text = voice_widget(f"{topic_key}_{sid}_multi", label="Mic")
+        st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
+        text_key = f"text_{topic_key}_{sid}"
+        submit_key = f"{text_key}_submitted"
+        user_text = st.text_input(
+            "Reply",
+            key=text_key,
+            label_visibility="collapsed",
+            placeholder="Type one or more answers, separated by commas..."
+        )
+        render_option_buttons(topic_key, step, multi=True)
+        with st.container():
+            voice_text = voice_widget(f"{topic_key}_{sid}_multi", label="Mic")
 
-            if user_text and st.session_state.get(submit_key) != user_text:
-                st.session_state[submit_key] = user_text
-                parsed = parse_multi_select_typed_input(step, user_text)
-                if parsed:
-                    handle_answer(topic_key, step, parsed, source="structured",
-                                  display_override=user_text)
-                else:
-                    _request_retry_for_step(topic_key, step, user_text, source="typed")
-                    return
+        if user_text and st.session_state.get(submit_key) != user_text:
+            st.session_state[submit_key] = user_text
+            parsed = parse_multi_select_typed_input(step, user_text)
+            if parsed:
+                handle_answer(topic_key, step, parsed, source="structured",
+                              display_override=user_text)
+            else:
+                _request_retry_for_step(topic_key, step, user_text, source="typed")
+                return
 
-            voice_submit_key = f"voice_{topic_key}_{sid}_submitted"
-            if voice_text and st.session_state.get(voice_submit_key) != voice_text:
-                st.session_state[voice_submit_key] = voice_text
-                parsed = parse_multi_select_typed_input(step, voice_text)
-                if parsed:
-                    handle_answer(topic_key, step, parsed, source="structured",
-                                  display_override=voice_text)
-                else:
-                    _request_retry_for_step(topic_key, step, voice_text, source="voice")
-                    return
-            st.markdown('</div>', unsafe_allow_html=True)
+        voice_submit_key = f"voice_{topic_key}_{sid}_submitted"
+        if voice_text and st.session_state.get(voice_submit_key) != voice_text:
+            st.session_state[voice_submit_key] = voice_text
+            parsed = parse_multi_select_typed_input(step, voice_text)
+            if parsed:
+                handle_answer(topic_key, step, parsed, source="structured",
+                              display_override=voice_text)
+            else:
+                _request_retry_for_step(topic_key, step, voice_text, source="voice")
+                return
+        st.markdown('</div>', unsafe_allow_html=True)
 
     # ── Number ───────────────────────────────────────────────────
     elif stype == "number":
-        with composer_col:
-            st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
-            text_key = f"text_{topic_key}_{sid}"
-            submit_key = f"{text_key}_submitted"
-            if text_key not in st.session_state:
-                st.session_state[text_key] = ""
-            col_text = st.columns([1])[0]
-            with col_text:
-                user_text = st.text_input(
-                    "Reply",
-                    key=text_key,
-                    label_visibility="collapsed",
-                    placeholder=f"Enter a number ({int(step['min_v'])}-{int(step['max_v'])})"
-                )
-            with st.container():
-                voice_text = voice_widget(f"{topic_key}_{sid}_num", label="Mic")
+        st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
+        text_key = f"text_{topic_key}_{sid}"
+        submit_key = f"{text_key}_submitted"
+        if text_key not in st.session_state:
+            st.session_state[text_key] = ""
+        user_text = st.text_input(
+            "Reply",
+            key=text_key,
+            label_visibility="collapsed",
+            placeholder=f"Enter a number ({int(step['min_v'])}-{int(step['max_v'])})"
+        )
+        with st.container():
+            voice_text = voice_widget(f"{topic_key}_{sid}_num", label="Mic")
 
-            candidate = user_text or voice_text or ""
-            if candidate and st.session_state.get(submit_key) != candidate:
-                st.session_state[submit_key] = candidate
-                try:
-                    val = int(float(candidate))
-                    if val < step["min_v"] or val > step["max_v"]:
-                        st.warning(f"Please enter a value between {int(step['min_v'])} and {int(step['max_v'])}.")
-                    else:
-                        handle_answer(topic_key, step, val, source="typed")
-                except ValueError:
-                    st.warning("Please enter a number.")
-            st.markdown('</div>', unsafe_allow_html=True)
+        candidate = user_text or voice_text or ""
+        if candidate and st.session_state.get(submit_key) != candidate:
+            st.session_state[submit_key] = candidate
+            try:
+                val = int(float(candidate))
+                if val < step["min_v"] or val > step["max_v"]:
+                    st.warning(f"Please enter a value between {int(step['min_v'])} and {int(step['max_v'])}.")
+                else:
+                    handle_answer(topic_key, step, val, source="typed")
+            except ValueError:
+                st.warning("Please enter a number.")
+        st.markdown('</div>', unsafe_allow_html=True)
 
     # ── Free text ────────────────────────────────────────────────
     elif stype == "free_text":
@@ -5073,26 +5075,25 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
             st.session_state[widget_key] = transcript
             st.session_state[f"{widget_key}_voice_sync"] = transcript
 
-        with composer_col:
-            st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
-            with st.container():
-                free_text = st.text_input(
-                    "Reply",
-                    placeholder=step.get("placeholder", "Please describe…"),
-                    key=widget_key,
-                    label_visibility="collapsed",
-                )
-            with st.container():
-                voice_text = voice_widget(f"{topic_key}_{sid}", label="Mic")
-            if voice_text and voice_text != st.session_state.get(f"{widget_key}_voice_sync"):
-                st.session_state[widget_key] = voice_text
-                st.session_state[f"{widget_key}_voice_sync"] = voice_text
+        st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
+        with st.container():
+            free_text = st.text_input(
+                "Reply",
+                placeholder=step.get("placeholder", "Please describe…"),
+                key=widget_key,
+                label_visibility="collapsed",
+            )
+        with st.container():
+            voice_text = voice_widget(f"{topic_key}_{sid}", label="Mic")
+        if voice_text and voice_text != st.session_state.get(f"{widget_key}_voice_sync"):
+            st.session_state[widget_key] = voice_text
+            st.session_state[f"{widget_key}_voice_sync"] = voice_text
 
-            if free_text and st.session_state.get(submit_key) != free_text:
-                st.session_state[submit_key] = free_text
-                handle_answer(topic_key, step, free_text, source="free_text")
+        if free_text and st.session_state.get(submit_key) != free_text:
+            st.session_state[submit_key] = free_text
+            handle_answer(topic_key, step, free_text, source="free_text")
 
-            st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -5229,7 +5230,8 @@ def render_topic_detail(topic_label: str, topic_key: str):
     # ── Header with progress bar ─────────────────────────────────
     answered, applicable = get_topic_progress(topic_key, state["data"], state.get("raw_answers"))
     progress_note = f"{answered}/{applicable} answered" if applicable > 0 else "Getting started"
-    st.markdown(
+    last_visit_summary = _natural_summary(topic_key, last_data) if last_data else ""
+    header_html = (
         '<div class="chat-shell">'
         '  <div class="chat-shell-header">'
         '    <div class="chat-shell-title">'
@@ -5241,7 +5243,15 @@ def render_topic_detail(topic_label: str, topic_key: str):
         '    </div>'
         f'    <div class="chat-shell-note">{_html.escape(progress_note)}</div>'
         '  </div>'
-        '  <div class="chat-history">',
+        + (
+            f'<div class="chat-shell-summary"><strong>Last visit:</strong> {_html.escape(last_visit_summary)}</div>'
+            if last_visit_summary else
+            '<div class="chat-shell-summary"><strong>Last visit:</strong> No prior summary recorded for this topic.</div>'
+        )
+        + '  <div class="chat-history">'
+    )
+    st.markdown(
+        header_html,
         unsafe_allow_html=True,
     )
 
@@ -5276,29 +5286,27 @@ def render_topic_detail(topic_label: str, topic_key: str):
         pending_submit_key = f"{pending_key}_submitted"
         if pending_key not in st.session_state:
             st.session_state[pending_key] = ""
-        _, composer_col = st.columns([1.05, 0.95])
         st.markdown('</div><div class="composer-wrap">', unsafe_allow_html=True)
 
-        with composer_col:
-            st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
-            with st.container():
-                pending_text = st.text_input(
-                    "Reply",
-                    key=pending_key,
-                    placeholder="Type or speak your answer here...",
-                    label_visibility="collapsed",
-                )
-            with st.container():
-                pending_voice = voice_widget(f"pending_{topic_key}_{pending_suffix}", label="Mic")
-            if pending_voice and pending_voice != st.session_state.get(f"{pending_key}_voice_sync"):
-                st.session_state[pending_key] = pending_voice
-                st.session_state[f"{pending_key}_voice_sync"] = pending_voice
+        st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
+        with st.container():
+            pending_text = st.text_input(
+                "Reply",
+                key=pending_key,
+                placeholder="Type or speak your answer here...",
+                label_visibility="collapsed",
+            )
+        with st.container():
+            pending_voice = voice_widget(f"pending_{topic_key}_{pending_suffix}", label="Mic")
+        if pending_voice and pending_voice != st.session_state.get(f"{pending_key}_voice_sync"):
+            st.session_state[pending_key] = pending_voice
+            st.session_state[f"{pending_key}_voice_sync"] = pending_voice
 
-            if pending_text and st.session_state.get(pending_submit_key) != pending_text:
-                st.session_state[pending_submit_key] = pending_text
-                handle_pending_followup(topic_key, pending_text, source="followup")
+        if pending_text and st.session_state.get(pending_submit_key) != pending_text:
+            st.session_state[pending_submit_key] = pending_text
+            handle_pending_followup(topic_key, pending_text, source="followup")
 
-            st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
         st.markdown('</div></div>', unsafe_allow_html=True)
         return
     next_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
