@@ -187,6 +187,82 @@ def _match_binary_option(step: dict, user_input: str) -> Optional[str]:
     return None
 
 
+_FREQUENCY_HINTS = {
+    "daily", "everyday", "every day", "nightly", "weekly", "twice", "three times",
+    "four times", "once", "morning", "evening", "bedtime", "hour", "hours",
+    "as needed", "prn",
+}
+
+
+def _has_frequency_info(text: str) -> bool:
+    normalized = _norm_text(text)
+    if not normalized:
+        return False
+    if any(phrase in normalized for phrase in _FREQUENCY_HINTS):
+        return True
+    if re.search(r"\b\d+\s*(x|times?)\b", normalized):
+        return True
+    if re.search(r"\bevery\s+\d+\s*(hour|hours|day|days)\b", normalized):
+        return True
+    return False
+
+
+def _has_dose_info(text: str) -> bool:
+    normalized = _norm_text(text)
+    if not normalized:
+        return False
+    if re.search(r"\b\d+\s*(mg|mcg|g|ml|milligram|milligrams|tablet|tablets|pill|pills|capsule|capsules)\b", normalized):
+        return True
+    if re.search(r"\b(one|two|three|four)\s+(tablet|tablets|pill|pills|capsule|capsules)\b", normalized):
+        return True
+    return False
+
+
+def _best_known_pain_medication_label(state: dict) -> str:
+    raw_answers = state.get("raw_answers", {})
+    raw_text = str(raw_answers.get("pain_medications", "")).strip()
+    if raw_text:
+        cleaned = raw_text.strip(" .")
+        if cleaned:
+            return cleaned
+
+    meds = state.get("data", {}).get("pain_medications") or []
+    if isinstance(meds, list):
+        meds = [m for m in meds if m not in {"Other", "No pain medication"}]
+        if meds:
+            return meds[0]
+    return "that medication"
+
+
+def _targeted_followup_override(step: dict, answer: str, state: dict) -> dict[str, Any]:
+    if step.get("id") != "med_dose_freq":
+        return {}
+
+    has_freq = _has_frequency_info(answer)
+    has_dose = _has_dose_info(answer)
+    med_label = _best_known_pain_medication_label(state)
+
+    if has_freq and not has_dose:
+        return {
+            "follow_up_recommended": True,
+            "follow_up_goal": "Obtain the medication dose only; frequency was already provided.",
+            "follow_up_question": f"What dose of {med_label} do you usually take each time?",
+            "information_completeness": "partial",
+            "clinical_priority": "medium",
+        }
+
+    if has_dose and not has_freq:
+        return {
+            "follow_up_recommended": True,
+            "follow_up_goal": "Obtain the medication frequency only; dose was already provided.",
+            "follow_up_question": f"How often do you usually take {med_label}?",
+            "information_completeness": "partial",
+            "clinical_priority": "medium",
+        }
+
+    return {}
+
+
 def _looks_vague_answer(answer: Any) -> bool:
     if not isinstance(answer, str):
         return False
@@ -2814,6 +2890,7 @@ def run_agent_pipeline(
     session_answers = _build_session_answers(topic_key)
     prior_baseline  = _build_prior_baseline(topic_key)
     followup_count  = state.get("followup_counts", {}).get(step["id"], 0)
+    targeted_followup = _targeted_followup_override(step, answer, state)
 
     # ── STEP 1: Answer Interpreter (must run first) ────────────────
     interp = run_answer_interpreter(step, answer)
@@ -2872,6 +2949,14 @@ def run_agent_pipeline(
     dr_out = run_doctor_relevance(
         step, answer, matched, prior_comp, session_answers, followup_count
     )
+    if targeted_followup:
+        dr_out = {
+            **dr_out,
+            "follow_up_recommended": targeted_followup.get("follow_up_recommended", dr_out.get("follow_up_recommended", False)),
+            "follow_up_goal": targeted_followup.get("follow_up_goal", dr_out.get("follow_up_goal")),
+            "information_completeness": targeted_followup.get("information_completeness", dr_out.get("information_completeness")),
+            "clinical_priority": targeted_followup.get("clinical_priority", dr_out.get("clinical_priority", "medium")),
+        }
 
     # ── STEP 5: Apply follow-up decision logic ─────────────────────
     adapt = sentiment_out.get("adaptation", {})
@@ -2908,12 +2993,15 @@ def run_agent_pipeline(
     # ── STEP 6: Compose follow-up question if needed ───────────────
     follow_up_question = ""
     if do_follow_up and followup_goal:
-        tone = adapt.get("tone_profile", "standard")
-        simplify = adapt.get("simplify_next_question", False)
-        nm_out = run_next_move_agent(step, answer, followup_goal, tone, simplify)
-        preamble = nm_out.get("preamble") or ""
-        fq = nm_out.get("follow_up_question", "")
-        follow_up_question = f"{preamble} {fq}".strip() if preamble else fq
+        if targeted_followup.get("follow_up_question"):
+            follow_up_question = targeted_followup["follow_up_question"]
+        else:
+            tone = adapt.get("tone_profile", "standard")
+            simplify = adapt.get("simplify_next_question", False)
+            nm_out = run_next_move_agent(step, answer, followup_goal, tone, simplify)
+            preamble = nm_out.get("preamble") or ""
+            fq = nm_out.get("follow_up_question", "")
+            follow_up_question = f"{preamble} {fq}".strip() if preamble else fq
 
     # ── STEP 7: Build assistant message for non-follow-up case ─────
     assistant_message = ""
