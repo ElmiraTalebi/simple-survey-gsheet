@@ -12,6 +12,7 @@ import streamlit.components.v1 as _stc
 import gspread
 from google.oauth2.service_account import Credentials
 from openai import OpenAI
+from chatbot_topic_flows import FLOWS, QUESTION_TYPE_BY_ID, STEP_BY_ID, TOPIC_INTROS, TOPICS
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -100,68 +101,6 @@ def _coerce_structured_answer(
         return answer
 
     return answer
-
-_DETAIL_COVERAGE_SYS = """
-You are the Detail-Coverage Agent for a clinical chatbot serving head and neck
-cancer patients.
-
-Your task is to judge whether the patient's answer already contains the clinically
-important detail(s) requested by the current question.
-
-You will receive:
-  - question_text
-  - question_type
-  - options
-  - patient_answer
-  - recent_topic_history: recent assistant questions and patient answers from this topic
-  - recent_question_texts: recent assistant question texts from this topic
-
-RULES:
-  - Work semantically, not by keyword matching.
-  - Treat natural patient language as valid clinical information.
-  - Infer from the question what kind of detail is being asked for.
-  - If the patient provided some but not all of that detail, mark it as partial and describe the single missing detail in plain language.
-  - If the patient explicitly says they do not know a detail, treat that as usable uncertainty rather than pushing repeatedly.
-  - Do not ask for details the patient already provided in plain language.
-  - Do not recommend a follow-up that repeats a recent question from this topic.
-  - Be conservative about follow-up: only recommend it when a meaningful detail is actually still missing.
-
-Return ONLY valid JSON:
-{{
-  "information_completeness": "complete|partial|none",
-  "follow_up_recommended": true/false,
-  "follow_up_goal": "..." or null,
-  "patient_acknowledgment": "..." or null,
-  "answered_with_uncertainty": false
-}}
-"""
-
-
-def run_detail_coverage_agent(step: dict, answer: str, topic_history: list[dict[str, str]], recent_questions: list[str]) -> dict:
-    default = {
-        "information_completeness": "complete",
-        "follow_up_recommended": False,
-        "follow_up_goal": None,
-        "patient_acknowledgment": None,
-        "answered_with_uncertainty": False,
-    }
-    if not openai_client:
-        return default
-
-    result = _call_agent(_DETAIL_COVERAGE_SYS, {
-        "question_text": step.get("text", ""),
-        "question_type": step.get("type", "free_text"),
-        "options": step.get("opts", []),
-        "patient_answer": answer,
-        "recent_topic_history": topic_history,
-        "recent_question_texts": recent_questions,
-    }, max_tokens=250)
-
-    if not result:
-        return default
-
-    return {**default, **result}
-
 
 def _fallback_clarifying_question(step: dict) -> str:
     text = step.get("text", "").strip()
@@ -1155,6 +1094,15 @@ div[data-baseweb="select"] > div {
     color: #10375a !important;
 }
 
+.suggested-replies-note {
+    margin: 8px 0 10px 2px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: #6b7d92;
+}
+
 .composer-shell div[data-baseweb="select"] > div {
     border-radius: 16px !important;
     min-height: 46px !important;
@@ -1532,887 +1480,6 @@ def voice_widget(key_suffix: str, label: str = "Speak your answer") -> Optional[
 # TOPIC & FLOW DEFINITIONS
 # ══════════════════════════════════════════════════════════════════
 
-# Each entry: (display_label, internal_key)
-TOPICS = [
-    ("🩹 Pain & Medications",   "pain"),
-    ("🍽️  Nutrition & Fluids",   "nutrition"),
-    ("👄 Oral Symptoms",         "oral"),
-    ("🤢 GI Symptoms",           "gi"),
-    ("😴 Fatigue & Sleep",       "fatigue"),
-    ("🚶 Activity Level",        "activity"),
-    ("🧠 Mood",                  "mood"),
-    ("💊 Other Symptoms",        "other"),
-]
-
-TOPIC_INTROS = {
-    "pain":      "Let's talk about any pain you've been having, what you're taking for it, and whether that regimen is helping.",
-    "nutrition": "I'd like to ask about your eating, drinking, and weight.",
-    "oral":      "Let's go over any mouth and throat symptoms like sticky mucus, thrush, dryness, and what you're using to manage them.",
-    "gi":        "I'll ask about nausea, vomiting, diarrhea, constipation, and how you're managing those symptoms.",
-    "fatigue":   "Let's discuss how your energy and sleep have been.",
-    "activity":  "Tell me about how your daily activities have been going.",
-    "mood":      "This section covers how you've been feeling emotionally and your support system.",
-    "other":     "Finally, let's cover any other symptoms — breathing, skin, hearing, and more.",
-}
-
-TOPIC_MAIN_RULES = {
-    "pain":      ["Main2", "Main3", "Main12", "Main38"],
-    "nutrition": ["Main5", "Main6", "Main8", "Main25", "Main26", "Main27", "Main34"],
-    "oral":      ["Main4", "Main7", "Main10", "Main24", "Main33"],
-    "gi":        ["Main11", "Main18"],
-    "fatigue":   ["Main13", "Main14"],
-    "activity":  ["Main30"],
-    "mood":      ["Main15", "Main35", "Main39"],
-    "other":     ["Main9", "Main16", "Main17", "Main19", "Main20", "Main21", "Main22", "Main23", "Main36", "Main37"],
-}
-
-
-def _q(id, text, type="options", opts=None, when=None,
-        placeholder="Please describe...", min_v=0, max_v=10, default_v=0):
-    """Helper to build a question step dict."""
-    return {
-        "id": id, "text": text, "type": type,
-        "opts": opts or [], "when": when,
-        "placeholder": placeholder,
-        "min_v": min_v, "max_v": max_v, "default_v": default_v,
-    }
-
-
-def _safe_int(val, default=0):
-    try:
-        return int(val)
-    except (TypeError, ValueError):
-        return default
-
-
-def _safe_float(val, default: Optional[float] = None) -> Optional[float]:
-    try:
-        return float(val)
-    except (TypeError, ValueError):
-        return default
-
-
-# ── PAIN & MEDICATIONS (Main 2, 3, 12, 38) ────────────────────────
-FLOW_PAIN = [
-    # Main 2
-    _q("has_pain", "Do you have any pain today?", opts=["Yes", "No"]),
-
-    # Main 3 — location
-    _q("pain_location", "Where are you feeling the pain?",
-       opts=["Throat", "Tongue", "Somewhere else"],
-       when=lambda d: d.get("has_pain") == "Yes"),
-
-    # ── Throat branch ──
-    _q("throat_timing",
-       "Is the throat pain there all the time, or only when you swallow or eat?",
-       opts=["All the time", "Only when swallowing", "Only when eating",
-             "Both swallowing and eating"],
-       when=lambda d: d.get("pain_location") == "Throat"),
-
-    _q("throat_severity",
-       "On a scale of 0–10, how bad is the throat pain at its worst?",
-       type="number", min_v=0, max_v=10, default_v=5,
-       when=lambda d: d.get("pain_location") == "Throat"),
-
-    _q("throat_med_helps",
-       "Are you taking pain medication for this? Is it helping?",
-       opts=["Yes, it helps", "Yes, but it's not enough", "No, I'm not taking anything"],
-       when=lambda d: (d.get("pain_location") == "Throat"
-                       and _safe_int(d.get("throat_severity", 0)) > 4)),
-
-    # ── Tongue branch ──
-    _q("tongue_type",
-       "Is it a sore or ulcer on the tongue, or a general painful feeling?",
-       opts=["There's a sore/ulcer", "Just pain, no visible sore"],
-       when=lambda d: d.get("pain_location") == "Tongue"),
-
-    _q("tongue_spot",
-       "Is the pain in one specific spot, or does it spread?",
-       opts=["One spot", "Spreads across tongue", "Whole mouth"],
-       when=lambda d: d.get("pain_location") == "Tongue"),
-
-    _q("tongue_severity",
-       "On a scale of 0–10, how bad is the tongue pain at its worst?",
-       type="number", min_v=0, max_v=10, default_v=5,
-       when=lambda d: d.get("pain_location") == "Tongue"),
-
-    # ── Somewhere else branch ──
-    _q("other_pain_desc",
-       "Which body part is hurting?",
-       type="free_text", placeholder="e.g., near my jaw and ear…",
-       when=lambda d: d.get("pain_location") == "Somewhere else"),
-
-    _q("other_pain_severity",
-       "How bad is that pain at its worst on a 0 to 10 scale?",
-       type="number", min_v=0, max_v=10, default_v=5,
-       when=lambda d: d.get("pain_location") == "Somewhere else"),
-
-    _q("ear_pain", "Do you have ear pain or hearing changes?",
-       opts=["Yes", "No"],
-       when=lambda d: (
-           d.get("pain_location") == "Somewhere else"
-           and bool(d.get("other_pain_head_neck_focused"))
-       )),
-
-    _q("jaw_swelling", "Do you feel any swelling near your jaw?",
-       opts=["Yes", "No"],
-       when=lambda d: (
-           d.get("pain_location") == "Somewhere else"
-           and bool(d.get("other_pain_head_neck_focused"))
-       )),
-
-    _q("pain_with_chewing",
-       "Does the pain worsen when chewing or opening your mouth?",
-       opts=["Yes", "No"],
-       when=lambda d: (
-           d.get("pain_location") == "Somewhere else"
-           and bool(d.get("other_pain_head_neck_focused"))
-       )),
-
-    _q("pain_start",                        # ← added (Main 3, Somewhere else branch)
-       "When did this pain start?",
-       type="free_text",
-       placeholder="e.g., about a week ago, since I started radiation…",
-       when=lambda d: d.get("pain_location") == "Somewhere else"),
-
-    # Main 12 — Medications
-    _q("pain_medications",
-       "Which medications are you currently taking for pain?",
-       type="multi_select",
-       opts=["Gabapentin", "Oxycodone", "Butrans patch", "Other", "No pain medication"]),
-
-    _q("med_dose_freq",
-       "How often are you taking your pain medication, and at what dose?",
-       type="free_text", placeholder="e.g., Oxycodone 5mg every 6 hours…",
-       when=lambda d: (bool(d.get("pain_medications"))
-                       and "No pain medication" not in (d.get("pain_medications") or []))),
-
-    # Main 38 — Adherence
-    _q("taking_as_prescribed",
-       "Are you taking your medications as prescribed?",
-       opts=["Yes", "No"],
-       when=lambda d: (bool(d.get("pain_medications"))
-                       and "No pain medication" not in (d.get("pain_medications") or []))),
-
-    _q("med_adherence_issue",
-       "What is making it difficult to take your medications?",
-       opts=["Side effects", "Schedule", "Access issues", "Other"],
-       when=lambda d: (
-           d.get("taking_as_prescribed") == "No"
-           and bool(d.get("pain_medications"))
-           and "No pain medication" not in (d.get("pain_medications") or [])
-       )),
-
-    _q("med_side_effects",
-       "Are you experiencing any side effects from your medications?",
-       opts=["Yes", "No"],
-       when=lambda d: (
-           d.get("taking_as_prescribed") == "Yes"
-           and bool(d.get("pain_medications"))
-           and "No pain medication" not in (d.get("pain_medications") or [])
-       )),
-]
-
-# ── NUTRITION & FLUIDS (Main 5, 6, 8, 25, 26, 27, 34) ─────────────
-FLOW_NUTRITION = [
-    # Main 5 — Eating ability
-    _q("eating_ability",
-       "How has your eating been since your last visit?",
-       opts=["Eating normally — no problems",
-             "Eating less than usual, but managing",
-             "Struggling — only liquids or very little",
-             "Not eating — using a feeding tube only"]),
-
-    # Branch: Eating less
-    _q("fluid_intake_managing",
-       "Are you drinking enough fluids throughout the day — water, shakes, or other drinks?",
-       opts=["Yes, drinking well", "A little less than usual", "Struggling to drink enough"],
-       when=lambda d: d.get("eating_ability") == "Eating less than usual, but managing"),
-
-    _q("food_type",
-       "What are you able to eat right now?",
-       opts=["Mostly normal food", "Soft foods only (yogurt, soup, pudding)",
-             "Mix of soft and liquid", "Mainly liquids"],
-       when=lambda d: d.get("eating_ability") == "Eating less than usual, but managing"),
-
-    # Branch: Struggling
-    _q("nutritional_shakes",
-       "How many nutritional shakes or Boost/Ensure drinks are you having per day?",
-       opts=["None", "1–2", "3–4", "More than 4"],
-       when=lambda d: d.get("eating_ability") == "Struggling — only liquids or very little"),
-
-    _q("eating_barrier",
-       "What is stopping you from eating more?",
-       opts=["Pain when eating/swallowing", "Feel full very quickly",
-             "No appetite", "Nausea", "Too tired to prepare food"],
-       when=lambda d: d.get("eating_ability") == "Struggling — only liquids or very little"),
-
-    _q("fluid_struggling",
-       "Are you drinking enough fluids — water, juice, or anything?",
-       opts=["Yes, drinking well", "A little", "Very little, hard to drink"],
-       when=lambda d: d.get("eating_ability") == "Struggling — only liquids or very little"),
-
-    _q("fluid_barrier",
-       "What's making it hard to drink?",
-       opts=["Pain when swallowing", "Dry mouth", "Nausea", "Just not thirsty"],
-       when=lambda d: (d.get("eating_ability") == "Struggling — only liquids or very little"
-                       and d.get("fluid_struggling") in ["A little", "Very little, hard to drink"])),
-
-    _q("pain_med_timing",
-       "Are you timing your pain medication before meals to make eating easier?",
-       opts=["Yes, it helps", "I try, but it's not enough",
-             "No, I didn't know to do this", "No, I don't take pain medication"],
-       when=lambda d: d.get("eating_ability") == "Struggling — only liquids or very little"),
-
-    # Branch: Tube only
-    _q("tube_issues",
-       "Is the tube feeding going well — no blockages, leaks, or discomfort around the site?",
-       opts=["Working fine", "Some issues — leaking or blockage",
-             "Discomfort/soreness around the tube"],
-       when=lambda d: d.get("eating_ability") == "Not eating — using a feeding tube only"),
-
-    _q("tube_oral_sips",
-       "Are you still able to take any sips of water or liquids by mouth at all?",
-       opts=["Yes, small amounts", "Very occasionally for comfort", "No, nothing by mouth"],
-       when=lambda d: d.get("eating_ability") == "Not eating — using a feeding tube only"),
-
-    # Main 6 — Weight
-    _q("weight",
-       "What has your weight been recently? (Enter in pounds)",
-       type="number", min_v=50, max_v=500, default_v=150),
-
-    _q("weight_impact",
-       "Has any weight change been affecting how you feel or your energy levels?",
-       opts=["Yes, I've noticed a difference", "Not really"]),
-
-    # Main 8 — Swallowing
-    _q("swallowing_difficulty",
-       "Are you having any difficulty swallowing — liquids, food, or pills?",
-       opts=["Yes", "No"]),
-
-    _q("swallowing_type",
-       "Is it painful to swallow, or just mechanically difficult?",
-       opts=["Painful to swallow", "Mechanically difficult"],
-       when=lambda d: d.get("swallowing_difficulty") == "Yes"),
-
-    _q("choking_with_eating",
-       "Do you cough or choke when you eat?",
-       opts=["Yes", "No"],
-       when=lambda d: d.get("swallowing_difficulty") == "Yes"),
-
-    _q("swallowing_method",
-       "Are you still able to swallow liquids by mouth, or is everything through a feeding tube?",
-       opts=["I swallow by mouth", "Everything through the feeding tube"],
-       when=lambda d: d.get("swallowing_difficulty") == "Yes"),
-
-    # Main 25 — Choking/Coughing (standalone — separate from Main 8)
-    _q("choking_coughing",
-       "Are you having any difficulty with choking or coughing when eating or drinking?",
-       opts=["Yes", "No"]),
-
-    _q("choking_type",
-       "Does it happen with liquids, solids, or both?",
-       opts=["Liquids", "Solids", "Both"],
-       when=lambda d: d.get("choking_coughing") == "Yes"),
-
-    _q("choking_frequency",
-       "Does it happen every time you eat, or only occasionally?",
-       opts=["Every time", "Occasionally"],
-       when=lambda d: d.get("choking_coughing") == "Yes"),
-
-    _q("choking_pills",                     # ← added (Main 25)
-       "Does it also happen when you take pills?",
-       opts=["Yes", "No"],
-       when=lambda d: d.get("choking_coughing") == "Yes"),
-
-    # Main 26 — IV Fluids
-    _q("iv_fluids",
-       "Are you currently receiving IV fluids or hydration treatments?",
-       opts=["Yes", "No"]),
-
-    _q("iv_frequency",
-       "How often are you receiving IV fluids?",
-       type="free_text", placeholder="e.g., twice a week…",
-       when=lambda d: d.get("iv_fluids") == "Yes"),
-
-    _q("iv_helping",
-       "Do you feel the IV fluids are helping?",
-       opts=["Yes", "No"],
-       when=lambda d: d.get("iv_fluids") == "Yes"),
-
-    _q("iv_adjust",                         # ← added (Main 26)
-       "Would you like to adjust the frequency of your hydration visits?",
-       opts=["Yes", "No"],
-       when=lambda d: d.get("iv_fluids") == "Yes"),
-
-    _q("need_hydration",
-       "Do you feel like you might need hydration support?",
-       opts=["Yes", "No"],
-       when=lambda d: d.get("iv_fluids") == "No"),
-
-    # Main 27 — Feeding tube (for patients not already exclusively tube-fed)
-    _q("feeding_tube",
-       "Are you currently using a feeding tube?",
-       opts=["Yes", "No"],
-       when=lambda d: d.get("eating_ability") != "Not eating — using a feeding tube only"),
-
-    _q("tube_status",
-       "Is the feeding tube working well or are there issues?",
-       opts=["Working well", "Leakage", "Blockage", "Discomfort"],
-       when=lambda d: (d.get("feeding_tube") == "Yes"
-                       and d.get("eating_ability") != "Not eating — using a feeding tube only")),
-
-    _q("tube_oral",
-       "Are you able to take anything by mouth at all?",
-       opts=["Yes, some", "No, nothing by mouth"],
-       when=lambda d: (d.get("feeding_tube") == "Yes"
-                       and d.get("eating_ability") != "Not eating — using a feeding tube only")),
-
-    # Main 34 — Taste
-    _q("taste_changes",
-       "Have you noticed any changes in your sense of taste?",
-       opts=["Yes", "No"]),
-
-    _q("taste_type",
-       "Does food taste different, bland, or unpleasant?",
-       opts=["Different", "Bland", "Unpleasant"],
-       when=lambda d: d.get("taste_changes") == "Yes"),
-
-    _q("taste_eating_impact",
-       "Is the taste change affecting your ability to eat?",
-       opts=["Yes", "No"],
-       when=lambda d: d.get("taste_changes") == "Yes"),
-]
-
-# ── ORAL SYMPTOMS (Main 4, 7, 10, 24, 33) ─────────────────────────
-FLOW_ORAL = [
-    # Main 4 — Mouth sores / thrush
-    _q("mouth_sores",
-       "Do you have any mouth sores, ulcers, or white patches/thrush right now?",
-       opts=["Yes", "No"]),
-
-    _q("sore_new_or_old",
-       "Is this new since your last visit, or have you had it for a while?",
-       opts=["New", "Not sure", "Same one as before"],
-       when=lambda d: d.get("mouth_sores") == "Yes"),
-
-    _q("sore_location",
-       "Where exactly is it?",
-       opts=["Inside the mouth/cheek", "On the tongue", "Back of the throat",
-             "Gums/lips", "Multiple spots"],
-       when=lambda d: (d.get("mouth_sores") == "Yes"
-                       and d.get("sore_new_or_old") in ["New", "Not sure"])),
-
-    _q("sore_pain_impact",
-       "Is the sore painful? Is it affecting your ability to eat or drink?",
-       opts=["No pain, just noticed it", "A little, but manageable",
-             "Yes, can't eat/drink comfortably"],
-       when=lambda d: (d.get("mouth_sores") == "Yes"
-                       and d.get("sore_new_or_old") in ["New", "Not sure"])),
-
-    _q("magic_mouthwash",
-       "Are you using anything for it, like magic mouthwash or thrush medicine? If yes, is it helping?",
-       opts=["Yes, it helps", "Yes, but not enough",
-             "No, I don't have it", "No, I don't use it"],
-       when=lambda d: (d.get("mouth_sores") == "Yes"
-                       and d.get("sore_new_or_old") in ["New", "Not sure"])),
-
-    _q("sore_progression",
-       "Is the sore getting better, staying the same, or getting worse?",
-       opts=["Getting better", "About the same", "Getting worse", "Not sure"],
-       when=lambda d: (d.get("mouth_sores") == "Yes"
-                       and d.get("sore_new_or_old") == "Same one as before")),
-
-    _q("sore_eating_impact_old",
-       "Is it still preventing you from eating or drinking comfortably?",
-       opts=["Yes", "A little", "No"],
-       when=lambda d: (d.get("mouth_sores") == "Yes"
-                       and d.get("sore_new_or_old") == "Same one as before"
-                       and d.get("sore_progression") in ["About the same", "Getting worse"])),
-
-    # Main 7 — Dry mouth
-    _q("dry_mouth",
-       "Are you experiencing any dryness in your mouth?",
-       opts=["Yes", "No"]),
-
-    _q("dry_mouth_timing",
-       "Is the dryness worse at night or all day?",
-       opts=["Worse at night", "All day"],
-       when=lambda d: d.get("dry_mouth") == "Yes"),
-
-    _q("dry_mouth_med",
-       "Are you using any medication like Biotene or a saliva substitute?",
-       opts=["Yes", "No"],
-       when=lambda d: d.get("dry_mouth") == "Yes"),
-
-    _q("dry_mouth_impact",
-       "Is the dryness making it harder to eat, talk, or sleep?",
-       opts=["Yes", "No"],
-       when=lambda d: d.get("dry_mouth") == "Yes"),
-
-    # Main 10 — Mucus / thick secretions
-    _q("mucus_issues",
-       "Are you having problems with mucus or thick secretions in your throat?",
-       opts=["Yes", "No"]),
-
-    _q("mucus_type",
-       "Is the mucus thick and hard to clear, or more watery?",
-       opts=["Thick", "More watery"],
-       when=lambda d: d.get("mucus_issues") == "Yes"),
-
-    _q("mucus_impact",
-       "Is the mucus affecting your ability to swallow or sleep?",
-       opts=["Yes", "No"],
-       when=lambda d: d.get("mucus_issues") == "Yes"),
-
-    _q("mucus_management",
-       "Are you using anything to manage it — like Robitussin or saline rinses?",
-       opts=["Yes", "No"],
-       when=lambda d: d.get("mucus_issues") == "Yes"),
-
-    # Main 24 — Teeth / Gums
-    _q("teeth_gum_issues",
-       "Are you having any problems with your teeth or gums?",
-       opts=["Yes", "No"]),
-
-    _q("teeth_issue_type",
-       "Is there pain, bleeding, or sores with your teeth or gums?",
-       opts=["Pain", "Bleeding", "Sores", "Multiple issues"],
-       when=lambda d: d.get("teeth_gum_issues") == "Yes"),
-
-    _q("brushing_difficult",
-       "Is it making brushing difficult?",
-       opts=["Yes", "No"],
-       when=lambda d: d.get("teeth_gum_issues") == "Yes"),
-
-    _q("avoiding_brushing",                 # ← added (Main 24)
-       "Are you avoiding brushing because of the discomfort?",
-       opts=["Yes", "No"],
-       when=lambda d: d.get("teeth_gum_issues") == "Yes"),
-
-    # Main 33 — Oral rinses
-    _q("oral_rinse_use",
-       "Are you using mouthwash or oral rinses regularly?",
-       opts=["Yes", "No"]),
-
-    _q("oral_rinse_type",
-       "What type are you using?",
-       type="free_text",
-       placeholder="e.g., magic mouthwash, salt/baking soda rinse…",
-       when=lambda d: d.get("oral_rinse_use") == "Yes"),
-
-    _q("oral_rinse_helping",
-       "Is it helping?",
-       opts=["Yes", "No"],
-       when=lambda d: d.get("oral_rinse_use") == "Yes"),
-
-    _q("oral_rinse_open",
-       "Would you be open to trying an oral rinse to help with symptoms?",
-       opts=["Yes", "No"],
-       when=lambda d: d.get("oral_rinse_use") == "No"),
-]
-
-# ── GI SYMPTOMS (Main 11, 18) ─────────────────────────────────────
-FLOW_GI = [
-    # Main 11 — Nausea / Vomiting / Diarrhea
-    _q("nausea_vomiting",
-       "Have you had any nausea, vomiting, or diarrhea since your last visit?",
-       type="multi_select",
-       opts=["Nausea", "Vomiting", "Diarrhea", "None of these"]),
-
-    _q("nausea_frequency",
-       "How often are you feeling nauseated?",
-       type="free_text",
-       placeholder="e.g., a few times a day, mostly in the mornings…",
-       when=lambda d: "Nausea" in (d.get("nausea_vomiting") or [])),
-
-    _q("nausea_management",
-       "What are you using for nausea, and is it helping?",
-       type="free_text",
-       placeholder="e.g., Zofran twice a day and it helps a little…",
-       when=lambda d: "Nausea" in (d.get("nausea_vomiting") or [])),
-
-    _q("vomiting_frequency",
-       "How often are you vomiting and how much?",
-       type="free_text",
-       placeholder="e.g., once or twice a day, small amounts…",
-       when=lambda d: "Vomiting" in (d.get("nausea_vomiting") or [])),
-
-    _q("vomiting_management",
-       "What are you doing to manage the vomiting, and is it helping?",
-       type="free_text",
-       placeholder="e.g., anti-nausea medication, small sips, and it is helping some…",
-       when=lambda d: "Vomiting" in (d.get("nausea_vomiting") or [])),
-
-    _q("diarrhea_frequency",
-       "How often are you having diarrhea?",
-       type="free_text",
-       placeholder="e.g., three loose stools a day…",
-       when=lambda d: "Diarrhea" in (d.get("nausea_vomiting") or [])),
-
-    _q("diarrhea_management",
-       "Are you taking anything for the diarrhea, and is it helping?",
-       type="free_text",
-       placeholder="e.g., Imodium and it helps some…",
-       when=lambda d: "Diarrhea" in (d.get("nausea_vomiting") or [])),
-
-    # Main 18 — Constipation
-    _q("constipation",
-       "Have you had any constipation or trouble moving your bowels?",
-       opts=["Yes", "No"]),
-
-    _q("bowel_frequency",
-       "How often are you having bowel movements?",
-       type="free_text",
-       placeholder="e.g., once every 3 days…",
-       when=lambda d: d.get("constipation") == "Yes"),
-
-    _q("constipation_meds",
-       "Are you taking anything like Senna, Miralax, or other medications for constipation?",
-       opts=["Yes", "No"],
-       when=lambda d: d.get("constipation") == "Yes"),
-
-    _q("bloating",
-       "Are you feeling bloated or uncomfortable?",
-       opts=["Yes", "No"],
-       when=lambda d: d.get("constipation") == "Yes"),
-]
-
-# ── FATIGUE & SLEEP (Main 13, 14) ─────────────────────────────────
-FLOW_FATIGUE = [
-    # Main 13 — Fatigue / Weakness
-    _q("fatigue",
-       "Are you feeling more tired or weak than usual?",
-       opts=["Yes", "No"]),
-
-    _q("fatigue_type",
-       "Is it a general tiredness, or weakness in specific parts of your body?",
-       opts=["General tiredness", "Weakness in specific parts"],
-       when=lambda d: d.get("fatigue") == "Yes"),
-
-    _q("weakness_location",
-       "In which parts of your body do you feel weakness?",
-       type="free_text", placeholder="e.g., legs, arms…",
-       when=lambda d: (d.get("fatigue") == "Yes"
-                       and d.get("fatigue_type") == "Weakness in specific parts")),
-
-    _q("fatigue_daily_impact",
-       "Is the fatigue affecting your daily activities — getting dressed, moving around?",
-       opts=["Yes", "No"],
-       when=lambda d: d.get("fatigue") == "Yes"),
-
-    # Main 14 — Drowsiness + Sleep
-    _q("medication_drowsy",
-       "Are your pain medications making you feel drowsy?",
-       opts=["Yes", "No", "Sometimes"]),
-
-    _q("sleep_quality",
-       "Are you able to sleep through the night?",
-       opts=["Yes", "No"]),
-
-    _q("sleep_wake_reason",
-       "Are you waking up at night due to pain, dry mouth, or coughing?",
-       type="free_text",
-       placeholder="e.g., pain wakes me up around 3am…",
-       when=lambda d: d.get("sleep_quality") == "No"),
-
-    _q("drowsy_schedule",                   # ← fixed: now conditional on sleep_quality, not drowsiness
-       "Is drowsiness from medication affecting your normal wake/sleep schedule?",
-       opts=["Yes", "No"],
-       when=lambda d: d.get("sleep_quality") == "No"),
-]
-
-# ── ACTIVITY LEVEL (Main 30) ───────────────────────────────────────
-FLOW_ACTIVITY = [
-    _q("activity_level",
-       "How is your daily life — are you able to do your usual activities?",
-       opts=["Doing everything normally", "Doing less than usual",
-             "Struggling with daily tasks"]),
-
-    _q("difficult_activities",
-       "What activities are most difficult right now?",
-       type="free_text",
-       placeholder="e.g., climbing stairs, cooking, getting dressed…",
-       when=lambda d: d.get("activity_level") in
-             ["Doing less than usual", "Struggling with daily tasks"]),
-
-    _q("activity_limiting_factor",
-       "Is the difficulty mainly due to pain, fatigue, or something else?",
-       opts=["Pain", "Fatigue", "Both", "Something else"],
-       when=lambda d: d.get("activity_level") in
-             ["Doing less than usual", "Struggling with daily tasks"]),
-
-    _q("activity_other_desc",
-       "Can you tell me more about what's limiting your activities?",
-       type="free_text", placeholder="e.g., balance issues, weakness…",
-       when=lambda d: d.get("activity_limiting_factor") == "Something else"),
-]
-
-# ── MOOD (Main 15, 35, 39) ─────────────────────────────────────────
-FLOW_MOOD = [
-    # Main 15 — Emotional state / Anxiety
-    _q("emotional_state",
-       "How are you feeling emotionally? Are you feeling anxious or worried about anything?",
-       type="free_text",
-       placeholder="Please share how you've been feeling — there are no wrong answers…"),
-
-    _q("anxiety_impact",
-       "Is anxiety or worry affecting your sleep, eating, or daily activities?",
-       opts=["Yes", "No", "A little"]),
-
-    _q("social_support_quality",
-       "Do you have people around you who you can talk to about how you're feeling?",
-       opts=["Yes, I have good support", "Some support", "Not really"]),
-
-    # Main 35 — Depression
-    _q("feeling_down",
-       "Have you been feeling down or depressed?",
-       opts=["Yes", "No"]),
-
-    _q("depression_frequency",
-       "How often have you been feeling this way?",
-       type="free_text",
-       placeholder="e.g., most days, occasionally, mostly in the evenings…",
-       when=lambda d: d.get("feeling_down") == "Yes"),
-
-    _q("depression_daily_impact",
-       "Is it affecting your daily activities or motivation?",
-       opts=["Yes", "No"],
-       when=lambda d: d.get("feeling_down") == "Yes"),
-
-    # Main 39 — Support between visits
-    _q("support_adequate",
-       "Do you feel you have enough support between visits?",
-       opts=["Yes", "No"]),
-
-    _q("who_supports",
-       "Who is supporting you — family, friends, or caregivers?",
-       type="free_text",
-       placeholder="e.g., my wife and daughter…",
-       when=lambda d: d.get("support_adequate") == "Yes"),
-
-    _q("needed_support",
-       "What kind of support would be most helpful right now?",
-       type="free_text",
-       placeholder="e.g., emotional support, help with transportation, more info about treatment…",
-       when=lambda d: d.get("support_adequate") == "No"),
-]
-
-# ── OTHER SYMPTOMS (Main 9, 16, 17, 19, 20, 21, 22, 23, 36, 37) ───
-FLOW_OTHER = [
-    # Main 9 — Breathing
-    _q("breathing_issues",
-       "Are you having any difficulty breathing or shortness of breath?",
-       opts=["Yes", "No"]),
-
-    _q("breathing_timing",
-       "Is the breathing difficulty constant, or does it come on with activity?",
-       opts=["It's constant", "It comes on with activity"],
-       when=lambda d: d.get("breathing_issues") == "Yes"),
-
-    _q("wheezing",
-       "Are you wheezing or feeling like something is blocking your airway?",
-       opts=["Yes", "No"],
-       when=lambda d: d.get("breathing_issues") == "Yes"),
-
-    # Main 16 — Hearing
-    _q("hearing_changes",
-       "Do you have any hearing problems or changes recently?",
-       opts=["Yes", "No"]),
-
-    _q("hearing_type",
-       "Is it ringing in your ears, hearing loss, or both?",
-       opts=["Ringing in ears", "Hearing loss", "Both"],
-       when=lambda d: d.get("hearing_changes") == "Yes"),
-
-    _q("hearing_constant",
-       "Is it constant or does it come and go?",
-       opts=["Constant", "Comes and goes"],
-       when=lambda d: d.get("hearing_changes") == "Yes"),
-
-    _q("hearing_worsening",
-       "Has it gotten worse compared to your last visit?",
-       opts=["Yes", "No"],
-       when=lambda d: d.get("hearing_changes") == "Yes"),
-
-    # Main 17 — Dizziness
-    _q("dizziness",
-       "Have you been feeling dizzy or lightheaded?",
-       opts=["Yes", "No"]),
-
-    _q("dizziness_timing",
-       "Is it constant or only when you stand up or change position?",
-       opts=["Constant", "Only when standing or changing position"],
-       when=lambda d: d.get("dizziness") == "Yes"),
-
-    _q("dizziness_worsening",               # ← added (Main 17)
-       "Has the dizziness gotten worse recently?",
-       opts=["Yes", "No"],
-       when=lambda d: d.get("dizziness") == "Yes"),
-
-    _q("falls",
-       "Have you had any falls or felt like you might fall?",
-       opts=["Yes", "No"],
-       when=lambda d: d.get("dizziness") == "Yes"),
-
-    # Main 19 — Numbness / Tingling
-    _q("numbness",
-       "Have you noticed any numbness or tingling in your hands or feet?",
-       opts=["Yes", "No"]),
-
-    _q("numbness_location",
-       "Is it in your hands, feet, or both?",
-       opts=["Hands", "Feet", "Both"],
-       when=lambda d: d.get("numbness") == "Yes"),
-
-    _q("numbness_new",
-       "Is it new or getting worse?",
-       opts=["New", "Getting worse", "Same as before"],
-       when=lambda d: d.get("numbness") == "Yes"),
-
-    _q("numbness_daily_impact",
-       "Is it affecting your daily activities?",
-       opts=["Yes", "No"],
-       when=lambda d: d.get("numbness") == "Yes"),
-
-    # Main 20 — Fever / Chills
-    _q("fever_chills",
-       "Have you had any fever or chills recently?",
-       opts=["Yes", "No"]),
-
-    _q("fever_start", "When did the fever or chills start?",
-       type="free_text", placeholder="e.g., two days ago…",
-       when=lambda d: d.get("fever_chills") == "Yes"),
-
-    _q("fever_temp", "How high was the fever?",
-       type="free_text", placeholder="e.g., 101.5°F…",
-       when=lambda d: d.get("fever_chills") == "Yes"),
-
-    _q("fever_other_symptoms",
-       "Do you have any other symptoms like cough or signs of infection?",
-       opts=["Yes", "No"],
-       when=lambda d: d.get("fever_chills") == "Yes"),
-
-    # Main 21 — Blood pressure
-    _q("bp_monitoring",
-       "Are you checking your blood pressure at home?",
-       opts=["Yes", "No"]),
-
-    _q("bp_reading", "What has your blood pressure been recently?",
-       type="free_text", placeholder="e.g., 130/85…",
-       when=lambda d: d.get("bp_monitoring") == "Yes"),
-
-    _q("bp_dizziness",
-       "Have you felt dizzy or lightheaded with blood pressure changes?",
-       opts=["Yes", "No"],
-       when=lambda d: d.get("bp_monitoring") == "Yes"),
-
-    _q("bp_home_monitor",
-       "Do you have a way to check your blood pressure at home?",
-       opts=["Yes", "No"],
-       when=lambda d: d.get("bp_monitoring") == "No"),
-
-    # Main 22 — Skin
-    _q("skin_issues",
-       "Have you had any skin problems — like irritation, wounds, or redness?",
-       opts=["Yes", "No"]),
-
-    _q("skin_location", "Where is the skin issue located?",
-       type="free_text", placeholder="e.g., neck, shoulder, near jaw…",
-       when=lambda d: d.get("skin_issues") == "Yes"),
-
-    _q("skin_start",                        # ← added (Main 22)
-       "When did it start?",
-       type="free_text",
-       placeholder="e.g., about a week ago, at the start of radiation…",
-       when=lambda d: d.get("skin_issues") == "Yes"),
-
-    _q("skin_progression",
-       "Is it getting better, worse, or staying the same?",
-       opts=["Getting better", "About the same", "Getting worse"],
-       when=lambda d: d.get("skin_issues") == "Yes"),
-
-    _q("skin_drainage",
-       "Any drainage, bleeding, or open areas?",
-       opts=["Yes", "No"],
-       when=lambda d: d.get("skin_issues") == "Yes"),
-
-    # Main 23 — Voice / Hoarseness
-    _q("voice_hoarseness",
-       "How is your voice? Have you noticed any hoarseness or trouble speaking?",
-       opts=["Yes, problems with my voice", "No, voice is fine"]),
-
-    _q("voice_timing",
-       "Is the hoarseness constant or only when you're talking?",
-       opts=["Constant", "Only when talking"],
-       when=lambda d: d.get("voice_hoarseness") == "Yes, problems with my voice"),
-
-    _q("voice_progression",
-       "Has your voice improved or worsened since your last visit?",
-       opts=["Improved", "About the same", "Worse"],
-       when=lambda d: d.get("voice_hoarseness") == "Yes, problems with my voice"),
-
-    _q("voice_communication_impact",
-       "Is it affecting your ability to communicate with others?",
-       opts=["Yes", "No"],
-       when=lambda d: d.get("voice_hoarseness") == "Yes, problems with my voice"),
-
-    # Main 36 — Concentration / Memory
-    _q("concentration",
-       "Have you had trouble concentrating or remembering things?",
-       opts=["Yes", "No"]),
-
-    _q("concentration_new",
-       "Is it new or ongoing?",
-       opts=["New", "Ongoing"],
-       when=lambda d: d.get("concentration") == "Yes"),
-
-    _q("concentration_daily_impact",
-       "Is it affecting your daily tasks?",
-       opts=["Yes", "No"],
-       when=lambda d: d.get("concentration") == "Yes"),
-
-    # Main 37 — Sexual health
-    _q("sexual_health",
-       "Have you had any sexual health concerns or changes?",
-       opts=["Yes", "Prefer not to say", "No"]),
-
-    _q("sexual_discuss",
-       "Would you like to discuss this further with your provider?",
-       opts=["Yes", "No"],
-       when=lambda d: d.get("sexual_health") == "Yes"),
-
-    _q("sexual_cause",                      # ← added (Main 37)
-       "Is it related to treatment, energy levels, or something else?",
-       opts=["Treatment side effects", "Energy levels", "Other"],
-       when=lambda d: d.get("sexual_health") == "Yes"),
-]
-
-# Master flow registry
-FLOWS = {
-    "pain":      FLOW_PAIN,
-    "nutrition": FLOW_NUTRITION,
-    "oral":      FLOW_ORAL,
-    "gi":        FLOW_GI,
-    "fatigue":   FLOW_FATIGUE,
-    "activity":  FLOW_ACTIVITY,
-    "mood":      FLOW_MOOD,
-    "other":     FLOW_OTHER,
-}
-
-QUESTION_TYPE_BY_ID = {
-    step["id"]: step.get("type", "options")
-    for flow in FLOWS.values()
-    for step in flow
-}
-
-STEP_BY_ID = {
-    step["id"]: step
-    for flow in FLOWS.values()
-    for step in flow
-}
-
-
 # ══════════════════════════════════════════════════════════════════
 # FLOW ENGINE
 # ══════════════════════════════════════════════════════════════════
@@ -2542,87 +1609,126 @@ def _call_openai(prompt: str, max_tokens: int = 120, temp: float = 0.4) -> str:
         return ""
 
 
-_QUESTION_RELATION_SYS = """
-You decide whether two patient-facing questions are asking essentially the same thing.
+_ROUTING_SUPPORT_SYS = """
+You are a compact routing support agent for a clinical chatbot.
 
-Return ONLY valid JSON:
+You will receive a mode plus the relevant inputs.
+
+Modes:
+  - question_relation
+  - pain_location_focus
+
+For mode=question_relation:
+  Decide whether two patient-facing questions are asking essentially the same thing.
+  Rules:
+    - Treat paraphrases as the same intent.
+    - If one question is only a softer or more natural wording of the other, mark true.
+    - If one asks for a different detail, mark false.
+    - Be especially sensitive to duplicate symptom questions in clinical chat.
+
+For mode=pain_location_focus:
+  Decide whether a patient-described pain location should trigger the focused
+  head-and-neck follow-up branch.
+  Rules:
+    - Mark true only when the described location is specifically in or very near the
+      ear, jaw, mouth, lips, gums, teeth, cheek, palate, tongue, or throat.
+    - Mark false for broad or nonspecific areas like head, face, neck, arm, back, chest,
+      or anything outside that focused region.
+
+Return ONLY valid JSON with the fields needed for the mode:
 {
-  "same_intent": true/false
+  "same_intent": true/false,
+  "head_neck_focused": true/false
 }
-
-Rules:
-- Treat paraphrases as the same intent.
-- If one question is only a softer or more natural wording of the other, mark true.
-- If one asks for a different detail, mark false.
-- Be especially sensitive to duplicate symptom questions in clinical chat.
 """
+
+
+def _run_routing_support_agent(mode: str, payload: dict, max_tokens: int = 80) -> dict:
+    if not openai_client:
+        return {}
+    result = _call_agent(_ROUTING_SUPPORT_SYS, {"mode": mode, **payload}, max_tokens=max_tokens)
+    return result or {}
 
 
 def run_question_relation_agent(question_a: str, question_b: str) -> dict:
     default = {"same_intent": False}
-    if not openai_client:
-        return default
-    result = _call_agent(_QUESTION_RELATION_SYS, {
+    result = _run_routing_support_agent("question_relation", {
         "question_a": question_a,
         "question_b": question_b,
-    }, max_tokens=80)
-    return {**default, **result} if result else default
-
-
-_PAIN_LOCATION_FOCUS_SYS = """
-You classify whether a patient-described pain location should trigger the focused
-head-and-neck follow-up branch in a clinical chatbot.
-
-Return ONLY valid JSON:
-{
-  "head_neck_focused": true/false
-}
-
-Mark true only when the described location is specifically in or very near the
-ear, jaw, mouth, lips, gums, teeth, cheek, palate, tongue, or throat.
-Mark false for broad or nonspecific areas like head, face, neck, arm, back, chest,
-or anything outside that focused region.
-"""
+    })
+    return {**default, **result}
 
 
 def run_pain_location_focus_agent(location_text: str) -> dict:
     default = {"head_neck_focused": False}
-    if not openai_client or not str(location_text or "").strip():
+    if not str(location_text or "").strip():
         return default
-    result = _call_agent(_PAIN_LOCATION_FOCUS_SYS, {
+    result = _run_routing_support_agent("pain_location_focus", {
         "location_text": location_text,
-    }, max_tokens=80)
-    return {**default, **result} if result else default
+    })
+    return {**default, **result}
 
 
-_QUESTION_WRITER_SYS = """
-You rewrite the next patient-facing question for a clinical chatbot.
+_CONVERSATION_COPY_SYS = """
+You are a compact conversation copy agent for a clinical chatbot.
 
-You will receive:
-  - base_question_text
-  - question_type
-  - options
-  - recent_topic_history
-  - recent_question_texts
-  - last_visit_same_question_answer
+You will receive a mode plus the relevant inputs.
 
-Rules:
-  - The form question is a question bank hint, not fixed wording.
-  - Write one natural nurse-like question that asks for the same clinical detail.
-  - Use topic history so the question feels like a direct continuation of the conversation.
-  - Avoid repeating a recent question from this topic.
-  - Do not rewrite a narrower follow-up detail question back into the broader parent question.
-  - If the patient already named a specific location, medication, symptom, or person, do not turn the next question back into a generic chooser they already answered.
-  - Mention last-visit history only when it genuinely helps orient the patient.
-  - Never prepend awkward phrases like "Last visit you reported yes."
-  - Do not imply symptoms the patient has not endorsed.
-  - Keep the question concise and conversational.
+Modes:
+  - question_rewrite
+  - clarification
+  - quick_replies
 
-Return ONLY valid JSON:
+For mode=question_rewrite:
+  Rewrite the next patient-facing question naturally.
+  Rules:
+    - The form question is a question bank hint, not fixed wording.
+    - Write one natural nurse-like question that asks for the same clinical detail.
+    - Use topic history so the question feels like a direct continuation of the conversation.
+    - Avoid repeating a recent question from this topic.
+    - Do not rewrite a narrower follow-up detail question back into the broader parent question.
+    - If the patient already named a specific location, medication, symptom, or person, do not turn the next question back into a generic chooser they already answered.
+    - Mention last-visit history only when it genuinely helps orient the patient.
+    - Never prepend awkward phrases like "Last visit you reported yes."
+    - Do not imply symptoms the patient has not endorsed.
+    - Keep the question concise and conversational.
+
+For mode=clarification:
+  Write a short clarification question when the patient's reply did not clearly answer the current question.
+  Rules:
+    - Ask for the same missing information more clearly, not a different detail.
+    - Be warm and brief.
+    - If options exist, you may gently restate the kind of answer needed.
+    - Do not sound robotic or blame the patient.
+    - Do not repeat the original question verbatim.
+
+For mode=quick_replies:
+  Suggest clickable quick-reply buttons.
+  Rules:
+    - Return 2 to 4 short patient-style reply options when helpful.
+    - These are suggestion buttons, not the only valid answers. Free text will still be available.
+    - Suggestions must fit the current question naturally and must not contradict the recent topic history.
+    - Do not repeat a detail the patient already gave as if it still needs to be answered.
+    - If predefined_options already exist, return an empty list.
+    - For number questions, suggestions must be numeric strings within range.
+    - For free-text questions, keep suggestions short and natural, like something a patient would actually tap.
+    - Prefer suggestions that help the patient answer quickly, not a full exhaustive list.
+    - If no helpful suggestions are obvious, return an empty list.
+
+Return ONLY valid JSON with the fields needed for the mode:
 {
-  "question_text": "..."
+  "question_text": "...",
+  "clarification_question": "...",
+  "suggestions": ["...", "..."]
 }
 """
+
+
+def _run_conversation_copy_agent(mode: str, payload: dict, max_tokens: int) -> dict:
+    if not openai_client:
+        return {}
+    result = _call_agent(_CONVERSATION_COPY_SYS, {"mode": mode, **payload}, max_tokens=max_tokens)
+    return result or {}
 
 
 def run_question_writer_agent(
@@ -2632,10 +1738,7 @@ def run_question_writer_agent(
     last_visit_same_question_answer: Any = None,
 ) -> dict:
     default = {"question_text": step.get("text", "")}
-    if not openai_client:
-        return default
-
-    result = _call_agent(_QUESTION_WRITER_SYS, {
+    result = _run_conversation_copy_agent("question_rewrite", {
         "base_question_text": step.get("text", ""),
         "question_type": step.get("type", "options"),
         "options": step.get("opts", []),
@@ -2643,100 +1746,127 @@ def run_question_writer_agent(
         "recent_question_texts": recent_questions,
         "last_visit_same_question_answer": last_visit_same_question_answer,
     }, max_tokens=140)
-    return {**default, **result} if result else default
-
-
-_CLARIFICATION_WRITER_SYS = """
-You write a short clarification question for a clinical chatbot when the patient's
-reply did not clearly answer the current question.
-
-You will receive:
-  - original_question
-  - question_type
-  - options
-  - patient_reply
-  - recent_topic_history
-
-Rules:
-  - Ask for the same missing information more clearly, not a different detail.
-  - Be warm and brief.
-  - If options exist, you may gently restate the kind of answer needed.
-  - Do not sound robotic or blame the patient.
-  - Do not repeat the original question verbatim.
-
-Return ONLY valid JSON:
-{
-  "clarification_question": "..."
-}
-"""
+    return {**default, **result}
 
 
 def run_clarification_writer_agent(step: dict, patient_reply: str, topic_history: list[dict[str, str]]) -> dict:
     default = {"clarification_question": "Could you tell me a little more about that?"}
-    if not openai_client:
-        return default
-    result = _call_agent(_CLARIFICATION_WRITER_SYS, {
+    result = _run_conversation_copy_agent("clarification", {
         "original_question": step.get("text", ""),
         "question_type": step.get("type", "options"),
         "options": step.get("opts", []),
         "patient_reply": patient_reply,
         "recent_topic_history": topic_history,
     }, max_tokens=120)
-    return {**default, **result} if result else default
+    return {**default, **result}
 
 
-_TOPIC_SUMMARY_SYS = """
-You write a one-sentence human summary of the patient's last check-in for a single topic.
-
-Rules:
-  - Write one natural sentence, not bullet points.
-  - Focus on the most clinically relevant details.
-  - Prefer plain language.
-  - If the data is sparse, write a modest summary instead of inventing detail.
-  - Do not mention internal field names.
-  - Keep it under 20 words.
-
-Return ONLY valid JSON:
-{
-  "summary": "..."
-}
-"""
-
-
-def run_topic_summary_agent(topic_label: str, topic_data: dict) -> dict:
-    default = {"summary": "Information was recorded for this topic."}
-    if not openai_client:
+def run_quick_reply_suggester_agent(step: dict, topic_history: list[dict[str, str]], recent_questions: list[str]) -> dict:
+    default = {"suggestions": []}
+    result = _run_conversation_copy_agent("quick_replies", {
+        "question_text": step.get("text", ""),
+        "question_type": step.get("type", "free_text"),
+        "predefined_options": step.get("opts", []),
+        "placeholder": step.get("placeholder"),
+        "min_value": step.get("min_v"),
+        "max_value": step.get("max_v"),
+        "recent_topic_history": topic_history,
+        "recent_question_texts": recent_questions,
+    }, max_tokens=140)
+    if not result:
         return default
-    result = _call_agent(_TOPIC_SUMMARY_SYS, {
-        "topic_label": topic_label,
-        "topic_data": topic_data,
-    }, max_tokens=100)
-    return {**default, **result} if result else default
+
+    suggestions = result.get("suggestions", [])
+    if not isinstance(suggestions, list):
+        return default
+
+    cleaned = []
+    seen = set()
+    for item in suggestions:
+        text = str(item or "").strip()
+        if not text:
+            continue
+        key = _norm_text(text)
+        if key in seen:
+            continue
+        seen.add(key)
+        cleaned.append(text)
+        if len(cleaned) >= 4:
+            break
+    return {"suggestions": cleaned}
 
 
-_REPORT_TOPIC_INSIGHT_SYS = """
-You compare one topic from a patient's current check-in against their last check-in.
+_REPORT_SUPPORT_SYS = """
+You are a compact report support agent for a clinical symptom dashboard.
 
-Return ONLY valid JSON:
+You will receive a mode plus the relevant inputs.
+
+Modes:
+  - topic_summary
+  - topic_insight
+  - overview
+
+For mode=topic_summary:
+  Write a one-sentence human summary of the patient's last check-in for a single topic.
+  Rules:
+    - Write one natural sentence, not bullet points.
+    - Focus on the most clinically relevant details.
+    - Prefer plain language.
+    - If the data is sparse, write a modest summary instead of inventing detail.
+    - Do not mention internal field names.
+    - Keep it under 20 words.
+
+For mode=topic_insight:
+  Compare one topic from a patient's current check-in against their last check-in.
+  Rules:
+    - worsened: same issue but clearly more severe, broader, or more disruptive now
+    - new_issue: a clinically meaningful issue is present now but was absent or not reported last visit
+    - improved: clearly better now than last visit
+    - stable: same overall, unchanged, or no meaningful difference
+    - unanswered: current topic has essentially no usable answer
+    - Keep summaries patient/clinician-readable, plain language, and concise.
+    - detail_lines should be short factual lines that help a clinician compare last vs now.
+    - attention_lines should include only the most clinically relevant items.
+
+For mode=overview:
+  Write a short patient-summary banner for a clinical topic dashboard.
+  Rules:
+    - Use the provided topic insight summaries.
+    - Keep each item short.
+    - Mention only the most meaningful changes.
+    - If a category has nothing meaningful, return an empty list or null.
+
+Return ONLY valid JSON with the fields needed for the mode:
 {
+  "summary": "...",
   "status": "worsened|new_issue|improved|stable|unanswered",
   "status_label": "...",
   "last_summary": "..." or null,
   "current_summary": "..." or null,
   "detail_lines": ["...", "..."],
-  "attention_lines": ["...", "..."]
+  "attention_lines": ["...", "..."],
+  "main_issue": "..." or null,
+  "new_issues": ["...", "..."],
+  "improvements": ["...", "..."],
+  "needs_attention": ["...", "..."]
 }
-
-Rules:
-  - worsened: same issue but clearly more severe, broader, or more disruptive now
-  - new_issue: a clinically meaningful issue is present now but was absent or not reported last visit
-  - improved: clearly better now than last visit
-  - stable: same overall, unchanged, or no meaningful difference
-  - unanswered: current topic has essentially no usable answer
-  - Keep summaries patient/clinician-readable, plain language, and concise.
-  - detail_lines should be short factual lines that help a clinician compare last vs now.
-  - attention_lines should include only the most clinically relevant items.
 """
+
+
+def _run_report_support_agent(mode: str, payload: dict, max_tokens: int) -> dict:
+    if not openai_client:
+        return {}
+    result = _call_agent(_REPORT_SUPPORT_SYS, {"mode": mode, **payload}, max_tokens=max_tokens)
+    return result or {}
+
+
+def run_topic_summary_agent(topic_label: str, topic_data: dict) -> dict:
+    default = {"summary": "Information was recorded for this topic."}
+    result = _run_report_support_agent("topic_summary", {
+        "topic_label": topic_label,
+        "topic_data": topic_data,
+    }, max_tokens=100)
+    return {**default, **result}
 
 
 def run_report_topic_insight_agent(topic_label: str, last_topic_data: dict, current_topic_data: dict) -> dict:
@@ -2748,33 +1878,12 @@ def run_report_topic_insight_agent(topic_label: str, last_topic_data: dict, curr
         "detail_lines": [],
         "attention_lines": [],
     }
-    if not openai_client:
-        return default
-    result = _call_agent(_REPORT_TOPIC_INSIGHT_SYS, {
+    result = _run_report_support_agent("topic_insight", {
         "topic_label": topic_label,
         "last_topic_data": last_topic_data,
         "current_topic_data": current_topic_data,
     }, max_tokens=220)
-    return {**default, **result} if result else default
-
-
-_REPORT_OVERVIEW_SYS = """
-You write a short patient-summary banner for a clinical topic dashboard.
-
-Return ONLY valid JSON:
-{
-  "main_issue": "..." or null,
-  "new_issues": ["...", "..."],
-  "improvements": ["...", "..."],
-  "needs_attention": ["...", "..."]
-}
-
-Rules:
-  - Use the provided topic insight summaries.
-  - Keep each item short.
-  - Mention only the most meaningful changes.
-  - If a category has nothing meaningful, return an empty list or null.
-"""
+    return {**default, **result}
 
 
 def run_report_overview_agent(topic_insights: list[dict]) -> dict:
@@ -2784,12 +1893,10 @@ def run_report_overview_agent(topic_insights: list[dict]) -> dict:
         "improvements": [],
         "needs_attention": [],
     }
-    if not openai_client:
-        return default
-    result = _call_agent(_REPORT_OVERVIEW_SYS, {
+    result = _run_report_support_agent("overview", {
         "topic_insights": topic_insights,
     }, max_tokens=180)
-    return {**default, **result} if result else default
+    return {**default, **result}
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -2928,80 +2035,8 @@ def run_answer_interpreter(step: dict, patient_answer: str, topic_history: Optio
 # AGENT 2 — PRIOR CHECK-IN COMPARISON
 # ══════════════════════════════════════════════════════════════════
 
-_PRIOR_COMPARISON_SYS = """
-You are the Prior Check-in Comparison Agent for a clinical chatbot.
-Compare a patient's current answer to the same question from their last check-in.
-
-change_direction rules:
-  improved       — current answer suggests less pain / better status
-  worsened       — current answer suggests more pain / worse status
-  neutral_change — changed but direction unclear (e.g., location shifted)
-  no_change      — answers are the same or equivalent
-  new_data       — no prior data available for comparison
-
-change_magnitude rules:
-  For numeric severity: large=3+ points difference, moderate=2, small=1, none=0
-  For non-numeric: large if clinically major (e.g., no pain → severe pain),
-    moderate for any other meaningful change, small for minor wording difference.
-
-clinical_note: One sentence, plain English. Include change magnitude and direction.
-If no prior data: "No prior data available for comparison."
-
-patient_facing_note:
-  - 1 short sentence in chatbot voice for the patient, or null if not useful
-  - Use only when the comparison adds value to the conversation
-  - Good uses: weight increased/decreased, pain improved/worsened, symptom better/same/worse
-  - Mention improvement when it is clinically encouraging, such as weight gain, lower symptom burden, or better function
-  - Mention worsening when it helps orient the patient and clinician to a meaningful change
-  - Do NOT use for trivial yes/no comparisons like "Last time you said yes"
-  - Keep it natural and supportive, not report-like
-  - Examples:
-    - "Your weight is up from last visit, which is encouraging."
-    - "It sounds like this has been a bit worse than last time."
-    - "This seems about the same as your last visit."
-
-Return ONLY valid JSON:
-{
-  "has_prior_data": true/false,
-  "last_answer": "..." or null,
-  "change_detected": true/false,
-  "change_direction": "improved|worsened|neutral_change|no_change|new_data",
-  "change_magnitude": "large|moderate|small|none",
-  "clinical_note": "...",
-  "patient_facing_note": "..." or null
-}
-"""
-
-
-def run_prior_comparison(step: dict, current_answer: str, last_topic_data: dict) -> dict:
-    """
-    Agent 2: Compare current answer to last check-in answer for this question.
-    Returns comparison dict, or no-prior-data default on failure.
-    """
-    default = {
-        "has_prior_data": False, "last_answer": None,
-        "change_detected": False, "change_direction": "new_data",
-        "change_magnitude": "none", "clinical_note": "No prior data available.",
-        "patient_facing_note": None,
-    }
-    if not last_topic_data:
-        return default
-
-    last_answer = last_topic_data.get(step["id"])
-    if last_answer is None:
-        return default
-
-    result = _call_agent(_PRIOR_COMPARISON_SYS, {
-        "question_text": step.get("text", ""),
-        "last_check_in_answer": str(last_answer),
-        "current_answer": current_answer,
-    }, max_tokens=200)
-
-    return {**default, **result} if result else default
-
-
 # ══════════════════════════════════════════════════════════════════
-# AGENT 3 — URGENCY & CRITICALITY
+# AGENT 2 — URGENCY & CRITICALITY
 # ══════════════════════════════════════════════════════════════════
 
 _URGENCY_SYS = f"""
@@ -3246,10 +2281,12 @@ _DOCTOR_RELEVANCE_SYS = f"""
 You are the Doctor-Relevance Agent for a clinical chatbot serving head and neck
 cancer patients. {_HNC_CONTEXT}
 
-You evaluate patient answers from the physician's perspective. Your outputs:
+You evaluate patient answers from the physician's perspective in one pass. Your outputs:
   1. Clinical sufficiency verdict on the current answer
   2. Follow-up recommendation with a precise information GOAL (not the question itself)
-  3. A compact clinical note (≤35 words, third person) for the doctor's report
+  3. Comparison to the same question from the prior visit when prior data exists
+  4. A compact doctor-facing note (≤35 words, third person)
+  5. A short patient-facing comparison or acknowledgment note only when useful
 
 FOLLOW-UP RULES:
   - The question list is a question bank, not a rigid script. Judge the current answer
@@ -3275,10 +2312,34 @@ FOLLOW-UP RULES:
   - If the patient's raw wording already fully answers the candidate next step, skip that step and carry the raw detail forward instead of asking it again.
   - If the candidate next step, or any proposed follow-up, would substantially repeat a recent question already asked in this topic, suppress it.
   - If a natural assistant acknowledgment has already effectively asked the next question, do not ask it again.
+  - If the patient explicitly says they do not know a detail, treat that as usable uncertainty rather than pushing repeatedly.
+  - If the patient provided some but not all of the detail, mark it as partial and describe the single missing detail in follow_up_goal.
   - ONLY recommend follow-up if information_completeness is "partial" or "none"
     AND follow_up_count is 0 AND the missing info is clinically meaningful
   - NEVER recommend follow-up if follow_up_count ≥ 1 (absolute limit: 1 per question)
   - NEVER recommend follow-up if patient showed resistance in their answer
+
+PRIOR-COMPARISON RULES:
+  - You will receive last_checkin_answer for this same question when available.
+  - Compare current answer to the same question from the prior visit.
+  - change_direction:
+      improved       — current answer suggests less pain / better status
+      worsened       — current answer suggests more pain / worse status
+      neutral_change — changed but direction unclear
+      no_change      — answers are the same or equivalent
+      new_data       — no prior data available
+  - change_magnitude:
+      numeric severity: large=3+ points difference, moderate=2, small=1, none=0
+      non-numeric: large if clinically major, moderate for meaningful change, small for minor wording difference
+  - clinical_note:
+      one short plain-English comparison sentence; if no prior data, say no prior data available
+  - patient_facing_note:
+      one short natural sentence only when the comparison adds value
+      good uses: weight up/down, pain improved/worsened, symptom burden better/worse
+      do NOT use for trivial yes/no comparisons like "Last time you said yes"
+  - patient_acknowledgment:
+      optional short acknowledgment when uncertainty itself should be accepted naturally
+      example: "Thanks for sharing that. It's okay if you're not sure of the exact dose."
 
 SPECIAL CLINICAL SIGNALS (set if present):
   trajectory_mismatch: patient says improving but comparison shows worsening (or vice versa)
@@ -3327,6 +2388,15 @@ Return ONLY valid JSON:
   "follow_up_recommended": true/false,
   "follow_up_goal": "..." or null,
   "follow_up_urgency": "immediate|routine|none",
+  "patient_acknowledgment": "..." or null,
+  "answered_with_uncertainty": false,
+  "has_prior_data": true/false,
+  "last_answer": "..." or null,
+  "change_detected": true/false,
+  "change_direction": "improved|worsened|neutral_change|no_change|new_data",
+  "change_magnitude": "large|moderate|small|none",
+  "clinical_note": "..." or null,
+  "patient_facing_note": "..." or null,
   "change_significance": "critical|notable|stable|no_baseline",
   "clinical_priority": "high|medium|low",
   "doctor_note": "..." or null,
@@ -3359,22 +2429,36 @@ def run_doctor_relevance(
     step: dict,
     current_answer_raw: str,
     current_answer_matched: Optional[str],
-    prior_comparison: dict,
+    last_topic_data: dict,
     session_answers: dict,
     followup_count: int,
     topic_history: list[dict[str, str]],
     recent_questions: list[str],
-    detail_coverage: dict,
     candidate_next_step: Optional[dict] = None,
     upcoming_steps: Optional[list[dict]] = None,
 ) -> dict:
     """
-    Agent 5: Assess clinical sufficiency and decide if follow-up is warranted.
+    Clinical assessment agent: assess sufficiency, prior-visit comparison,
+    and follow-up relevance in one pass.
     """
+    last_answer = None
+    if last_topic_data:
+        raw_last = last_topic_data.get(step["id"])
+        if raw_last is not None:
+            last_answer = str(raw_last)
     default = {
         "information_completeness": "complete", "clinical_value_score": 0.7,
         "follow_up_recommended": False, "follow_up_goal": None,
         "follow_up_urgency": "none", "change_significance": "no_baseline",
+        "patient_acknowledgment": None,
+        "answered_with_uncertainty": False,
+        "has_prior_data": bool(last_answer),
+        "last_answer": last_answer,
+        "change_detected": False,
+        "change_direction": "new_data" if last_answer is None else "no_change",
+        "change_magnitude": "none",
+        "clinical_note": "No prior data available." if last_answer is None else "",
+        "patient_facing_note": None,
         "clinical_priority": "medium", "doctor_note": None,
         "next_step_action": {
             "skip_immediate_next_step": False,
@@ -3395,11 +2479,10 @@ def run_doctor_relevance(
         "options": step.get("opts", []),
         "current_answer_raw": current_answer_raw,
         "current_answer_matched": current_answer_matched,
-        "prior_comparison": prior_comparison,
+        "last_checkin_answer": last_answer,
         "session_answers_so_far": session_answers,
         "recent_topic_history": topic_history,
         "recent_question_texts": recent_questions,
-        "detail_coverage": detail_coverage,
         "follow_up_count_this_question": followup_count,
         "candidate_next_step": {
             "id": candidate_next_step.get("id"),
@@ -3621,19 +2704,12 @@ def run_agent_pipeline(
     matched = interp.get("matched_option")
     distress = interp.get("distress_flag", False)
     urgency_flag = interp.get("urgency_flag", False)
-    detail_coverage = run_detail_coverage_agent(step, current_raw_answer, topic_history=topic_history, recent_questions=recent_questions)
-
-    # ── STEP 2: Run three agents in parallel ───────────────────────
-    # Prior Comparison, Urgency, and Sentiment can all run at once.
-    prior_comp = {}
+    # ── STEP 2: Run urgency and sentiment in parallel ──────────────
     urgency_out = {}
     sentiment_out = {}
 
     active_urgency_signals = st.session_state.get("urgency_state", {}).get("all_signals", [])
     active_sentiment_signals = st.session_state.get("sentiment_state", {}).get("all_signals", [])
-
-    def _run_prior():
-        return run_prior_comparison(step, current_raw_answer, last_topic_data)
 
     def _run_urgency():
         return run_urgency_agent(
@@ -3646,11 +2722,9 @@ def run_agent_pipeline(
             step, current_raw_answer, session_answers, active_sentiment_signals, question_count
         )
 
-    with _futures.ThreadPoolExecutor(max_workers=3) as pool:
-        f_prior     = pool.submit(_run_prior)
+    with _futures.ThreadPoolExecutor(max_workers=2) as pool:
         f_urgency   = pool.submit(_run_urgency)
         f_sentiment = pool.submit(_run_sentiment)
-        prior_comp   = f_prior.result()
         urgency_out  = f_urgency.result()
         sentiment_out = f_sentiment.result()
 
@@ -3672,9 +2746,9 @@ def run_agent_pipeline(
 
     # ── STEP 4: Doctor-Relevance ───────────────────────────────────
     dr_out = run_doctor_relevance(
-        step, current_raw_answer, matched, prior_comp, session_answers, followup_count,
+        step, current_raw_answer, matched, last_topic_data, session_answers, followup_count,
         topic_history=topic_history, recent_questions=recent_questions,
-        detail_coverage=detail_coverage, candidate_next_step=candidate_next_step,
+        candidate_next_step=candidate_next_step,
         upcoming_steps=upcoming_steps,
     )
 
@@ -3738,15 +2812,15 @@ def run_agent_pipeline(
     # ── STEP 7: Build assistant message for non-follow-up case ─────
     assistant_message = ""
     if not do_follow_up:
-        comp_note    = prior_comp.get("clinical_note", "")
-        patient_change_note = (prior_comp.get("patient_facing_note") or "").strip()
-        change_dir   = prior_comp.get("change_direction", "new_data")
-        prev_answer  = prior_comp.get("last_answer", "")
+        comp_note    = dr_out.get("clinical_note", "")
+        patient_change_note = (dr_out.get("patient_facing_note") or "").strip()
+        change_dir   = dr_out.get("change_direction", "new_data")
+        prev_answer  = dr_out.get("last_answer", "")
         emotional    = sentiment_out.get("emotional_state", "neutral")
 
         # Build a brief contextual acknowledgment
-        if detail_coverage.get("patient_acknowledgment") and detail_coverage.get("answered_with_uncertainty"):
-            assistant_message = detail_coverage["patient_acknowledgment"]
+        if dr_out.get("patient_acknowledgment") and dr_out.get("answered_with_uncertainty"):
+            assistant_message = dr_out["patient_acknowledgment"]
         elif patient_change_note:
             assistant_message = patient_change_note
         elif comp_note and change_dir in ("worsened", "improved") and prev_answer:
@@ -3791,7 +2865,7 @@ def run_agent_pipeline(
         "doctor_note": dr_out.get("doctor_note"),
         "clinical_priority": priority,
         "change_significance": dr_out.get("change_significance", "no_baseline"),
-        "change_clinical_note": prior_comp.get("clinical_note", ""),
+        "change_clinical_note": dr_out.get("clinical_note", ""),
         "next_step_action": dr_out.get("next_step_action"),
         "special_signals": dr_out.get("special_signals", {}),
         "sentiment_note": sentiment_out.get("engagement_note_for_doctor"),
@@ -4685,6 +3759,118 @@ def _backfill_next_step_from_topic_history(topic_key: str, state: dict, next_ste
         break
 
 
+def _resolve_next_step(topic_key: str, state: dict) -> Optional[dict]:
+    next_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
+    _backfill_next_step_from_topic_history(topic_key, state, next_step)
+    return get_next_step(topic_key, state["data"], state.get("raw_answers"))
+
+
+def _quick_reply_suggestions(topic_key: str, state: dict, step: dict) -> list[str]:
+    if step.get("opts"):
+        return []
+    if step.get("type") not in {"free_text", "number"}:
+        return []
+    cache = state.setdefault("generated_quick_replies", {})
+    cached = cache.get(step["id"])
+    if isinstance(cached, list):
+        return cached
+
+    result = run_quick_reply_suggester_agent(
+        step,
+        topic_history=_recent_topic_history(state),
+        recent_questions=_recent_topic_questions(state),
+    )
+    suggestions = result.get("suggestions", []) if isinstance(result, dict) else []
+    if not isinstance(suggestions, list):
+        suggestions = []
+    cache[step["id"]] = suggestions
+    return suggestions
+
+
+def _mark_submission_once(submitted_key: str, candidate: str) -> bool:
+    if not candidate or st.session_state.get(submitted_key) == candidate:
+        return False
+    st.session_state[submitted_key] = candidate
+    return True
+
+
+def _render_choice_button_grid(options: list[str], key_prefix: str) -> Optional[str]:
+    if not options:
+        return None
+    cols_per_row = 2 if len(options) > 1 else 1
+    for idx in range(0, len(options), cols_per_row):
+        row = st.columns(cols_per_row)
+        for offset, option in enumerate(options[idx:idx + cols_per_row]):
+            with row[offset]:
+                if st.button(option, key=f"{key_prefix}_{idx + offset}", use_container_width=True):
+                    return option
+    return None
+
+
+def _process_option_submission(
+    topic_key: str,
+    step: dict,
+    candidate: str,
+    source: str,
+    submitted_key: str,
+    topic_history: list[dict[str, str]],
+) -> bool:
+    if not _mark_submission_once(submitted_key, candidate):
+        return False
+    interpreted = interpret_user_input_with_options(step, candidate, topic_history=topic_history)
+    if interpreted in step.get("opts", []):
+        handle_answer(
+            topic_key,
+            step,
+            interpreted,
+            source="structured",
+            display_override=candidate,
+            raw_answer=candidate,
+        )
+    else:
+        _request_retry_for_step(topic_key, step, candidate, source=source)
+    return True
+
+
+def _process_multiselect_submission(
+    topic_key: str,
+    step: dict,
+    candidate: str,
+    source: str,
+    submitted_key: str,
+) -> bool:
+    if not _mark_submission_once(submitted_key, candidate):
+        return False
+    parsed = parse_multi_select_typed_input(step, candidate)
+    if parsed:
+        handle_answer(
+            topic_key,
+            step,
+            parsed,
+            source="structured",
+            display_override=candidate,
+            raw_answer=candidate,
+        )
+    else:
+        _request_retry_for_step(topic_key, step, candidate, source=source)
+    return True
+
+
+def _process_number_submission(topic_key: str, step: dict, candidate: str, submitted_key: str) -> bool:
+    if not _mark_submission_once(submitted_key, candidate):
+        return False
+    try:
+        value = int(float(candidate))
+    except ValueError:
+        st.warning("Please enter a number.")
+        return True
+    if value < step["min_v"] or value > step["max_v"]:
+        st.warning(f"Please enter a value between {int(step['min_v'])} and {int(step['max_v'])}.")
+        return True
+    handle_answer(topic_key, step, value, source="typed")
+    return True
+
+
 def _store_followup_prompt(
     topic_key: str,
     state: dict,
@@ -4755,6 +3941,8 @@ def _clear_step_inputs(topic_key: str, step: dict):
         keys_to_clear.extend([
             f"text_{topic_key}_{sid}",
             f"text_{topic_key}_{sid}_submitted",
+            f"suggested_{topic_key}_{sid}",
+            f"suggested_{topic_key}_{sid}_submitted",
             f"_vt_{topic_key}_{sid}_num",
             f"_vh_{topic_key}_{sid}_num",
         ])
@@ -4762,6 +3950,8 @@ def _clear_step_inputs(topic_key: str, step: dict):
         keys_to_clear.extend([
             f"ft_{topic_key}_{sid}",
             f"ft_{topic_key}_{sid}_submitted",
+            f"suggested_{topic_key}_{sid}",
+            f"suggested_{topic_key}_{sid}_submitted",
             f"ft_{topic_key}_{sid}_voice_sync",
             f"_vt_{topic_key}_{sid}",
             f"_vh_{topic_key}_{sid}",
@@ -4971,6 +4161,8 @@ def handle_answer(
         state["last_prompted_text"] = ""
     if "generated_prompts" not in state:
         state["generated_prompts"] = {}
+    if "generated_quick_replies" not in state:
+        state["generated_quick_replies"] = {}
     if state.get("last_prompted_step_id") == step.get("id"):
         _remember_prompted_step(state, None, "")
     _clear_step_inputs(topic_key, step)
@@ -5004,9 +4196,7 @@ def handle_answer(
         state["data"]["other_pain_head_neck_focused"] = bool(focus.get("head_neck_focused"))
     if isinstance(verbatim, str) and not openai_client:
         _auto_capture_following_answers(topic_key, state, verbatim)
-    next_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
-    _backfill_next_step_from_topic_history(topic_key, state, next_step)
-    next_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
+    next_step = _resolve_next_step(topic_key, state)
     state["status"] = "in_progress"
 
     last_topic_data = st.session_state.last_checkin.get(topic_key, {})
@@ -5106,7 +4296,7 @@ def handle_answer(
                     next_step_action = pipeline.get("next_step_action")
                     if next_step_action:
                         _apply_agent_next_step_action(topic_key, state, next_step_action)
-                        next_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
+                        next_step = _resolve_next_step(topic_key, state)
                     # Increment follow-up counter
                     fc = state["followup_counts"]
                     fc[step["id"]] = fc.get(step["id"], 0) + 1
@@ -5130,7 +4320,7 @@ def handle_answer(
                 assistant_message = ack
 
             _apply_agent_next_step_action(topic_key, state, pipeline.get("next_step_action"))
-            next_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
+            next_step = _resolve_next_step(topic_key, state)
 
         else:
             # No OpenAI — use fallback reply
@@ -5138,7 +4328,7 @@ def handle_answer(
                 topic_key, answer, step, last_topic_data
             )
             _apply_generic_fallback_next_step_action(topic_key, state)
-            next_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
+            next_step = _resolve_next_step(topic_key, state)
 
     else:
         # Non-string answer (numeric, list from multi_select on structured path)
@@ -5164,28 +4354,79 @@ def handle_answer(
 # ══════════════════════════════════════════════════════════════════
 
 
-def render_input(topic_key: str, step: dict, prev_answer=None):
+def render_input(topic_key: str, step: dict):
     """Render the appropriate input widget for the current question."""
     stype = step["type"]
     sid   = step["id"]
 
-
     state = st.session_state.topic_states[topic_key]
-    prev = state["data"].get(step["id"])
+    topic_history = _recent_topic_history(state)
 
     def render_option_buttons(button_topic_key: str, button_step: dict, multi: bool = False):
         opts = button_step.get("opts", [])
-        if not opts:
+        selected = _render_choice_button_grid(opts, f"btn_{button_topic_key}_{button_step['id']}")
+        if selected:
+            payload = [selected] if multi else selected
+            handle_answer(button_topic_key, button_step, payload, source="structured")
             return
-        cols_per_row = 2 if len(opts) > 1 else 1
-        for idx in range(0, len(opts), cols_per_row):
-            row = st.columns(cols_per_row)
-            for offset, opt in enumerate(opts[idx:idx + cols_per_row]):
-                with row[offset]:
-                    if st.button(opt, key=f"btn_{button_topic_key}_{button_step['id']}_{idx + offset}", use_container_width=True):
-                        payload = [opt] if multi else opt
-                        handle_answer(button_topic_key, button_step, payload, source="structured")
-                        return
+
+    def render_suggested_buttons(button_topic_key: str, button_step: dict):
+        if button_step.get("opts") or button_step.get("type") not in {"free_text", "number"}:
+            return
+        suggestions = _quick_reply_suggestions(button_topic_key, state, button_step)
+        if not suggestions:
+            return
+        st.markdown('<div class="suggested-replies-note">Suggested replies</div>', unsafe_allow_html=True)
+        pills_key = f"suggested_{button_topic_key}_{button_step['id']}"
+        submitted_key = f"{pills_key}_submitted"
+
+        selected = None
+        if hasattr(st, "pills"):
+            selected = st.pills(
+                "Suggested replies",
+                suggestions,
+                key=pills_key,
+                label_visibility="collapsed",
+            )
+        else:
+            selected = _render_choice_button_grid(
+                suggestions,
+                f"suggest_{button_topic_key}_{button_step['id']}",
+            )
+
+        if not selected or not _mark_submission_once(submitted_key, selected):
+            return
+        if button_step["type"] == "number":
+            try:
+                numeric_value = int(float(selected))
+            except (TypeError, ValueError):
+                handle_answer(
+                    button_topic_key,
+                    button_step,
+                    selected,
+                    source="typed",
+                    display_override=selected,
+                    raw_answer=selected,
+                )
+                return
+            handle_answer(
+                button_topic_key,
+                button_step,
+                numeric_value,
+                source="typed",
+                display_override=selected,
+                raw_answer=selected,
+            )
+            return
+        handle_answer(
+            button_topic_key,
+            button_step,
+            selected,
+            source="free_text",
+            display_override=selected,
+            raw_answer=selected,
+        )
+        return
 
     # ── Options ─────────────────────────────────────────────────
     if stype == "options":
@@ -5202,27 +4443,12 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
             voice_text = voice_widget(f"{topic_key}_{sid}_opt", label="Mic")
 
         submitted_key = f"text_{topic_key}_{sid}_submitted"
-
-        if user_text and st.session_state.get(submitted_key) != user_text:
-            st.session_state[submitted_key] = user_text
-            interpreted = interpret_user_input_with_options(step, user_text, topic_history=_recent_topic_history(state))
-            if interpreted in step.get("opts", []):
-                handle_answer(topic_key, step, interpreted, source="structured",
-                              display_override=user_text, raw_answer=user_text)
-            else:
-                _request_retry_for_step(topic_key, step, user_text, source="typed")
-                return
+        if _process_option_submission(topic_key, step, user_text, "typed", submitted_key, topic_history):
+            return
 
         voice_submitted_key = f"voice_{topic_key}_{sid}_submitted"
-        if voice_text and st.session_state.get(voice_submitted_key) != voice_text:
-            st.session_state[voice_submitted_key] = voice_text
-            interpreted = interpret_user_input_with_options(step, voice_text, topic_history=_recent_topic_history(state))
-            if interpreted in step.get("opts", []):
-                handle_answer(topic_key, step, interpreted, source="structured",
-                              display_override=voice_text, raw_answer=voice_text)
-            else:
-                _request_retry_for_step(topic_key, step, voice_text, source="voice")
-                return
+        if _process_option_submission(topic_key, step, voice_text, "voice", voice_submitted_key, topic_history):
+            return
         st.markdown('</div>', unsafe_allow_html=True)
                 
 
@@ -5241,26 +4467,12 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
         with st.container():
             voice_text = voice_widget(f"{topic_key}_{sid}_multi", label="Mic")
 
-        if user_text and st.session_state.get(submit_key) != user_text:
-            st.session_state[submit_key] = user_text
-            parsed = parse_multi_select_typed_input(step, user_text)
-            if parsed:
-                handle_answer(topic_key, step, parsed, source="structured",
-                              display_override=user_text, raw_answer=user_text)
-            else:
-                _request_retry_for_step(topic_key, step, user_text, source="typed")
-                return
+        if _process_multiselect_submission(topic_key, step, user_text, "typed", submit_key):
+            return
 
         voice_submit_key = f"voice_{topic_key}_{sid}_submitted"
-        if voice_text and st.session_state.get(voice_submit_key) != voice_text:
-            st.session_state[voice_submit_key] = voice_text
-            parsed = parse_multi_select_typed_input(step, voice_text)
-            if parsed:
-                handle_answer(topic_key, step, parsed, source="structured",
-                              display_override=voice_text, raw_answer=voice_text)
-            else:
-                _request_retry_for_step(topic_key, step, voice_text, source="voice")
-                return
+        if _process_multiselect_submission(topic_key, step, voice_text, "voice", voice_submit_key):
+            return
         st.markdown('</div>', unsafe_allow_html=True)
 
     # ── Number ───────────────────────────────────────────────────
@@ -5276,20 +4488,13 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
             label_visibility="collapsed",
             placeholder=f"Enter a number ({int(step['min_v'])}-{int(step['max_v'])})"
         )
+        render_suggested_buttons(topic_key, step)
         with st.container():
             voice_text = voice_widget(f"{topic_key}_{sid}_num", label="Mic")
 
         candidate = user_text or voice_text or ""
-        if candidate and st.session_state.get(submit_key) != candidate:
-            st.session_state[submit_key] = candidate
-            try:
-                val = int(float(candidate))
-                if val < step["min_v"] or val > step["max_v"]:
-                    st.warning(f"Please enter a value between {int(step['min_v'])} and {int(step['max_v'])}.")
-                else:
-                    handle_answer(topic_key, step, val, source="typed")
-            except ValueError:
-                st.warning("Please enter a number.")
+        if _process_number_submission(topic_key, step, candidate, submit_key):
+            return
         st.markdown('</div>', unsafe_allow_html=True)
 
     # ── Free text ────────────────────────────────────────────────
@@ -5314,6 +4519,7 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
                 key=widget_key,
                 label_visibility="collapsed",
             )
+        render_suggested_buttons(topic_key, step)
         with st.container():
             voice_text = voice_widget(f"{topic_key}_{sid}", label="Mic")
         if voice_text and voice_text != st.session_state.get(f"{widget_key}_voice_sync"):
@@ -5543,11 +4749,9 @@ def render_topic_detail(topic_label: str, topic_key: str):
         return
     next_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
     if next_step:
-        # Look up previous answer for this specific question
-        prev_answer = last_data.get(next_step["id"]) if last_data else None
         _ensure_step_prompted(topic_key, state, next_step)
         st.markdown('</div><div class="composer-wrap">', unsafe_allow_html=True)
-        render_input(topic_key, next_step, prev_answer=prev_answer)
+        render_input(topic_key, next_step)
         st.markdown('</div></div>', unsafe_allow_html=True)
 
 
