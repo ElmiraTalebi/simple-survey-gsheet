@@ -40,22 +40,6 @@ def _norm_text(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).strip()
 
 
-_BODY_LOCATION_PATTERN = re.compile(
-    r"\b("
-    r"head|face|nose|ear|ears|jaw|chin|mouth|tongue|throat|neck|shoulder|arm|elbow|wrist|hand|hands|finger|fingers|"
-    r"chest|back|side|stomach|belly|abdomen|hip|leg|legs|knee|knees|ankle|ankles|foot|feet|toe|toes|rib|ribs|"
-    r"cheek|lip|lips|gum|gums|tooth|teeth|palate|scalp"
-    r")\b"
-)
-
-
-def _looks_like_body_location_phrase(text: str) -> bool:
-    normalized = _norm_text(text)
-    if not normalized:
-        return False
-    return bool(_BODY_LOCATION_PATTERN.search(normalized))
-
-
 def _is_redundant_followup(original_question: str, answer: str, followup_question: str) -> bool:
     oq = _norm_text(original_question)
     fq = _norm_text(followup_question)
@@ -1690,27 +1674,17 @@ FLOW_PAIN = [
     # Main 38 — Adherence
     _q("taking_as_prescribed",
        "Are you taking your medications as prescribed?",
-       opts=["Yes", "No"],
-       when=lambda d: (bool(d.get("pain_medications"))
-                       and "No pain medication" not in (d.get("pain_medications") or []))),
+       opts=["Yes", "No"]),
 
     _q("med_adherence_issue",
        "What is making it difficult to take your medications?",
        opts=["Side effects", "Schedule", "Access issues", "Other"],
-       when=lambda d: (
-           d.get("taking_as_prescribed") == "No"
-           and bool(d.get("pain_medications"))
-           and "No pain medication" not in (d.get("pain_medications") or [])
-       )),
+       when=lambda d: d.get("taking_as_prescribed") == "No"),
 
     _q("med_side_effects",
        "Are you experiencing any side effects from your medications?",
        opts=["Yes", "No"],
-       when=lambda d: (
-           d.get("taking_as_prescribed") == "Yes"
-           and bool(d.get("pain_medications"))
-           and "No pain medication" not in (d.get("pain_medications") or [])
-       )),
+       when=lambda d: d.get("taking_as_prescribed") == "Yes"),
 ]
 
 # ── NUTRITION & FLUIDS (Main 5, 6, 8, 25, 26, 27, 34) ─────────────
@@ -3269,7 +3243,6 @@ FOLLOW-UP RULES:
   - Do NOT create a custom follow-up whose only purpose is to ask the same thing as the candidate next step in different words.
   - If the next formal step already covers the natural next question, prefer no custom follow-up and let that next step be asked once.
   - A patient should never have to answer a natural-language version of a question and then immediately answer the form version of the same question.
-  - This is especially important after structured option answers like Yes/No or category selections: if the next formal step can ask the next needed detail directly, prefer no custom bridge follow-up.
   - If the current answer already addresses the candidate next step, set next_step_action to skip that step.
   - If several upcoming questions become unnecessary for the same reason, include them in next_step_action.plan.
   - If the patient's raw wording already fully answers the candidate next step, skip that step and carry the raw detail forward instead of asking it again.
@@ -3464,7 +3437,6 @@ RULES:
   - You will receive recent topic history and recent question texts from this topic only
   - Do not write a question that substantially repeats any recent question in that history
   - If the candidate next step already asks the same thing, return null instead of paraphrasing it
-  - After a structured option answer, do not pre-ask the next formal step in different words just to sound conversational.
   - Never ask the patient to translate their own concrete answer into the form's categories. For example, after a patient says "nose", do not ask "throat, tongue, or somewhere else?" because that classification should happen internally.
   - If the patient's answer already gives a concrete real-world example, assume the system can preserve it and ask only the next clinically meaningful question.
   - If prior-comparison context is clinically useful, you may briefly reflect it in a natural way, but only as conversational context, never as a rigid template
@@ -3707,14 +3679,6 @@ def run_agent_pipeline(
         suppress = True
     if sigs.get("E3_resistance") and priority != "high":
         suppress = True
-    if (
-        step.get("type") == "options"
-        and candidate_next_step
-        and matched in (step.get("opts") or [])
-        and dr_out.get("information_completeness") == "complete"
-        and not force_followup
-    ):
-        suppress = True
 
     do_follow_up = (force_followup or dr_recommends) and not suppress
 
@@ -3854,14 +3818,6 @@ def interpret_user_input_with_options(step, user_input, topic_history: Optional[
     for opt in step.get("opts", []):
         if _norm_text(opt) == normalized:
             return opt
-
-    opts = step.get("opts", [])
-    if (
-        "Somewhere else" in opts
-        and _looks_like_body_location_phrase(user_input)
-        and ("where" in _norm_text(step.get("text", "")) or "location" in _norm_text(step.get("text", "")))
-    ):
-        return "Somewhere else"
 
     if not openai_client:
         return user_input
@@ -4597,94 +4553,6 @@ def _maybe_apply_prompt_driven_skip(topic_key: str, state: dict, pipeline: dict)
     return
 
 
-def _capture_rich_answer_into_next_step(
-    topic_key: str,
-    state: dict,
-    current_step: dict,
-    resolved_answer: Any,
-    raw_answer: Any,
-):
-    """
-    If a patient answers an option question with richer free text that already
-    answers the immediate next step, capture that detail now so the app does not
-    ask for it again in a different form.
-    """
-    if current_step.get("type") != "options":
-        return
-
-    raw_text = str(raw_answer or "").strip()
-    if not raw_text:
-        return
-    if isinstance(resolved_answer, str) and _norm_text(raw_text) == _norm_text(resolved_answer):
-        return
-
-    next_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
-    if not next_step or next_step.get("id") in state["data"]:
-        return
-    if next_step.get("type") != "options":
-        return
-
-    interpreted = interpret_user_input_with_options(
-        next_step,
-        raw_text,
-        topic_history=_recent_topic_history(state),
-    )
-    if interpreted not in next_step.get("opts", []):
-        return
-
-    coerced = _coerce_structured_answer(
-        topic_key,
-        next_step,
-        interpreted,
-        state["data"],
-        raw_answer=raw_text,
-    )
-    state["data"][next_step["id"]] = coerced
-    state["raw_answers"][next_step["id"]] = raw_text
-
-
-def _backfill_next_step_from_topic_history(topic_key: str, state: dict, next_step: Optional[dict]):
-    """
-    Safety net: if the next unresolved step is a location chooser with a catch-all
-    and the patient already named a concrete body part earlier in this topic,
-    resolve it internally instead of surfacing the chooser again.
-    """
-    if not next_step or next_step.get("id") in state["data"]:
-        return
-    if next_step.get("type") != "options":
-        return
-    if "Somewhere else" not in (next_step.get("opts") or []):
-        return
-    step_text = _norm_text(next_step.get("text", ""))
-    if "where" not in step_text and "location" not in step_text:
-        return
-
-    raw_answers = state.get("raw_answers", {})
-    for step_id, raw_text in reversed(list(raw_answers.items())):
-        if step_id == next_step.get("id"):
-            continue
-        text = str(raw_text or "").strip()
-        if not _looks_like_body_location_phrase(text):
-            continue
-        interpreted = interpret_user_input_with_options(
-            next_step,
-            text,
-            topic_history=_recent_topic_history(state),
-        )
-        if interpreted not in next_step.get("opts", []):
-            continue
-        coerced = _coerce_structured_answer(
-            topic_key,
-            next_step,
-            interpreted,
-            state["data"],
-            raw_answer=text,
-        )
-        state["data"][next_step["id"]] = coerced
-        state["raw_answers"][next_step["id"]] = text
-        break
-
-
 def _store_followup_prompt(
     topic_key: str,
     state: dict,
@@ -4693,7 +4561,6 @@ def _store_followup_prompt(
     assistant_message: str = "",
     retry_current_step: bool = False,
     allow_other_detail: bool = False,
-    target_step: Optional[dict] = None,
 ):
     state["waiting_for_followup"] = True
     state["pending_followup"] = {
@@ -4703,7 +4570,6 @@ def _store_followup_prompt(
         "assistant_message": assistant_message.strip(),
         "retry_current_step": retry_current_step,
         "allow_other_detail": allow_other_detail,
-        "target_step_id": target_step.get("id") if target_step else None,
     }
     combined_prompt = "\n\n".join([part for part in [assistant_message.strip(), question.strip()] if part])
     _append_assistant_message(state, combined_prompt)
@@ -4832,84 +4698,6 @@ def handle_pending_followup(topic_key: str, answer: str, source: str = "typed"):
             _request_retry_for_step(topic_key, source_step, retry_text, source=source)
             return
 
-    target_step_id = pending.get("target_step_id")
-    target_step = STEP_BY_ID.get(target_step_id) if target_step_id else None
-    if target_step:
-        state["waiting_for_followup"] = False
-        state.pop("pending_followup", None)
-
-        followup_text = (answer or "").strip()
-        if target_step["type"] == "options":
-            interpreted = interpret_user_input_with_options(
-                target_step,
-                followup_text,
-                topic_history=_recent_topic_history(state),
-            )
-            if interpreted in target_step.get("opts", []):
-                handle_answer(
-                    topic_key,
-                    target_step,
-                    interpreted,
-                    source="structured",
-                    raw_answer=followup_text,
-                    display_override=followup_text,
-                )
-                return
-            _request_retry_for_step(topic_key, target_step, followup_text, source=source)
-            return
-
-        if target_step["type"] == "multi_select":
-            parsed = parse_multi_select_typed_input(target_step, followup_text)
-            if parsed:
-                handle_answer(
-                    topic_key,
-                    target_step,
-                    parsed,
-                    source="structured",
-                    raw_answer=followup_text,
-                    display_override=followup_text,
-                )
-                return
-            if "Other" in target_step.get("opts", []) and followup_text:
-                state["data"][f"{target_step['id']}_other_detail"] = followup_text
-                handle_answer(
-                    topic_key,
-                    target_step,
-                    ["Other"],
-                    source="structured",
-                    display_override=followup_text,
-                    raw_answer=followup_text,
-                )
-                return
-            _request_retry_for_step(topic_key, target_step, followup_text, source=source)
-            return
-
-        if target_step["type"] == "number":
-            try:
-                numeric_value = int(float(followup_text))
-            except (TypeError, ValueError):
-                _request_retry_for_step(topic_key, target_step, followup_text, source=source)
-                return
-            handle_answer(
-                topic_key,
-                target_step,
-                numeric_value,
-                source="structured",
-                display_override=followup_text,
-                raw_answer=followup_text,
-            )
-            return
-
-        handle_answer(
-            topic_key,
-            target_step,
-            followup_text,
-            source="free_text",
-            raw_answer=followup_text,
-            display_override=followup_text,
-        )
-        return
-
     state["chat"].append({"role": "user", "content": answer})
     state["data"][answer_key] = answer
     pending_key = f"pending_followup_{topic_key}_{pending.get('answer_key', 'pending')}"
@@ -4992,20 +4780,11 @@ def handle_answer(
         state["data"][f"{step['id']}_other_detail"] = verbatim.strip()
     answer = _coerce_structured_answer(topic_key, step, answer, state["data"], raw_answer=raw_answer)
     state["data"][step["id"]] = answer
-    _capture_rich_answer_into_next_step(topic_key, state, step, answer, verbatim)
-    if topic_key == "pain" and step.get("id") == "pain_medications":
-        meds = answer if isinstance(answer, list) else [answer]
-        if "No pain medication" in meds:
-            for stale_id in ("med_dose_freq", "taking_as_prescribed", "med_adherence_issue", "med_side_effects"):
-                state["data"].pop(stale_id, None)
-                state["raw_answers"].pop(stale_id, None)
     if step.get("id") == "other_pain_desc":
         focus = run_pain_location_focus_agent(verbatim if isinstance(verbatim, str) else str(answer))
         state["data"]["other_pain_head_neck_focused"] = bool(focus.get("head_neck_focused"))
     if isinstance(verbatim, str) and not openai_client:
         _auto_capture_following_answers(topic_key, state, verbatim)
-    next_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
-    _backfill_next_step_from_topic_history(topic_key, state, next_step)
     next_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
     state["status"] = "in_progress"
 
@@ -5103,16 +4882,11 @@ def handle_answer(
                 if _is_redundant_followup(step["text"], answer, fq):
                     pass   # Fall through to assistant_message + next question
                 else:
-                    next_step_action = pipeline.get("next_step_action")
-                    if next_step_action:
-                        _apply_agent_next_step_action(topic_key, state, next_step_action)
-                        next_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
                     # Increment follow-up counter
                     fc = state["followup_counts"]
                     fc[step["id"]] = fc.get(step["id"], 0) + 1
                     _store_followup_prompt(
                         topic_key, state, step, fq, ack,
-                        target_step=next_step,
                     )
                     st.rerun()
                     return
