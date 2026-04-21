@@ -1155,6 +1155,15 @@ div[data-baseweb="select"] > div {
     color: #10375a !important;
 }
 
+.suggested-replies-note {
+    margin: 8px 0 10px 2px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: #6b7d92;
+}
+
 .composer-shell div[data-baseweb="select"] > div {
     border-radius: 16px !important;
     min-height: 46px !important;
@@ -4843,6 +4852,8 @@ def _clear_step_inputs(topic_key: str, step: dict):
         keys_to_clear.extend([
             f"text_{topic_key}_{sid}",
             f"text_{topic_key}_{sid}_submitted",
+            f"suggested_{topic_key}_{sid}",
+            f"suggested_{topic_key}_{sid}_submitted",
             f"_vt_{topic_key}_{sid}_num",
             f"_vh_{topic_key}_{sid}_num",
         ])
@@ -4850,6 +4861,8 @@ def _clear_step_inputs(topic_key: str, step: dict):
         keys_to_clear.extend([
             f"ft_{topic_key}_{sid}",
             f"ft_{topic_key}_{sid}_submitted",
+            f"suggested_{topic_key}_{sid}",
+            f"suggested_{topic_key}_{sid}_submitted",
             f"ft_{topic_key}_{sid}_voice_sync",
             f"_vt_{topic_key}_{sid}",
             f"_vh_{topic_key}_{sid}",
@@ -5281,47 +5294,69 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
         suggestions = _quick_reply_suggestions(button_topic_key, state, button_step)
         if not suggestions:
             return
-        cols_per_row = 2 if len(suggestions) > 1 else 1
-        for idx in range(0, len(suggestions), cols_per_row):
-            row = st.columns(cols_per_row)
-            for offset, suggestion in enumerate(suggestions[idx:idx + cols_per_row]):
-                with row[offset]:
-                    if st.button(
-                        suggestion,
-                        key=f"suggest_{button_topic_key}_{button_step['id']}_{idx + offset}",
-                        use_container_width=True,
-                    ):
-                        if button_step["type"] == "number":
-                            try:
-                                numeric_value = int(float(suggestion))
-                            except (TypeError, ValueError):
-                                handle_answer(
-                                    button_topic_key,
-                                    button_step,
-                                    suggestion,
-                                    source="typed",
-                                    display_override=suggestion,
-                                    raw_answer=suggestion,
-                                )
-                                return
-                            handle_answer(
-                                button_topic_key,
-                                button_step,
-                                numeric_value,
-                                source="typed",
-                                display_override=suggestion,
-                                raw_answer=suggestion,
-                            )
-                            return
-                        handle_answer(
-                            button_topic_key,
-                            button_step,
+        st.markdown('<div class="suggested-replies-note">Suggested replies</div>', unsafe_allow_html=True)
+        pills_key = f"suggested_{button_topic_key}_{button_step['id']}"
+        submitted_key = f"{pills_key}_submitted"
+
+        selected = None
+        if hasattr(st, "pills"):
+            selected = st.pills(
+                "Suggested replies",
+                suggestions,
+                key=pills_key,
+                label_visibility="collapsed",
+            )
+        else:
+            cols_per_row = 2 if len(suggestions) > 1 else 1
+            for idx in range(0, len(suggestions), cols_per_row):
+                row = st.columns(cols_per_row)
+                for offset, suggestion in enumerate(suggestions[idx:idx + cols_per_row]):
+                    with row[offset]:
+                        if st.button(
                             suggestion,
-                            source="free_text",
-                            display_override=suggestion,
-                            raw_answer=suggestion,
-                        )
-                        return
+                            key=f"suggest_{button_topic_key}_{button_step['id']}_{idx + offset}",
+                            use_container_width=True,
+                        ):
+                            selected = suggestion
+                            break
+                if selected:
+                    break
+
+        if not selected or st.session_state.get(submitted_key) == selected:
+            return
+
+        st.session_state[submitted_key] = selected
+        if button_step["type"] == "number":
+            try:
+                numeric_value = int(float(selected))
+            except (TypeError, ValueError):
+                handle_answer(
+                    button_topic_key,
+                    button_step,
+                    selected,
+                    source="typed",
+                    display_override=selected,
+                    raw_answer=selected,
+                )
+                return
+            handle_answer(
+                button_topic_key,
+                button_step,
+                numeric_value,
+                source="typed",
+                display_override=selected,
+                raw_answer=selected,
+            )
+            return
+        handle_answer(
+            button_topic_key,
+            button_step,
+            selected,
+            source="free_text",
+            display_override=selected,
+            raw_answer=selected,
+        )
+        return
 
     # ── Options ─────────────────────────────────────────────────
     if stype == "options":
