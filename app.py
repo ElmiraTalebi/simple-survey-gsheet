@@ -1962,6 +1962,7 @@ For mode=question_rewrite:
     - If the next formal step is already specific and usable as written, stay close to it instead of inventing a bridge question.
     - This rule applies across all topics: do not narrow the same concept through a chain of micro-questions unless the form step itself clearly requires that narrower detail.
     - If recent topic history shows the assistant is circling around the same concept, rewrite the next question in the most direct single-step form possible.
+    - If the patient has effectively said the symptom/problem is absent, okay, manageable, or not concerning, prefer concise wrap-up wording rather than probing for more details.
     - Keep the question concise and conversational.
 
 For mode=clarification:
@@ -1978,6 +1979,7 @@ For mode=clarification:
     - This must generalize to every topic: location, timing, severity, medications, support, bowel habits, hydration, sleep, mood, skin, breathing, hearing, and any other domain.
     - Prefer confirming the closest likely interpretation over re-listing all options when the patient appears to be answering in plain language.
     - Do not create serial narrowing questions about the same detail. One clarification is enough unless the missing detail is high priority.
+    - If the patient's meaning is essentially "it's okay", "no problem", "manageable", or another reassuring negative screen, avoid clarification unless the original question truly cannot be completed safely without it.
     - If the patient sounds frustrated, terse, or resistant, keep the clarification extremely short and avoid drilling deeper.
     - Do not sound robotic or blame the patient.
     - Do not repeat the original question verbatim.
@@ -2502,6 +2504,7 @@ ADAPTATION SIGNALS:
   simplify_next_question: true if patient seems confused or cognitively fatigued
   reduce_follow_up_depth: true if E3/E7 active or engagement declining
   - When reduce_follow_up_depth=true, this means the system should prefer the next formal question or no extra follow-up, not another custom clarification.
+  - If the patient's emotional tone is calm/reassuring and their symptom report suggests they are doing okay, you may support less follow-up depth.
 
 Return ONLY valid JSON:
 {{
@@ -2608,6 +2611,8 @@ FOLLOW-UP RULES:
   - If the patient gives a meaningful negative screen ("no", "not really", "I am okay", "fine") to a broad symptom or emotional check-in question, treat that as a usable answer rather than forcing an unnecessary impact follow-up.
   - If the patient gives a negative screen to a broad opener, set screen_negative_signal=true when the next likely question would otherwise just ask about downstream impact of the same denied problem.
   - If the patient clearly indicates they do not have a problem in that domain, prefer skipping nonessential downstream questions rather than completing the whole branch mechanically.
+  - If the patient indicates the symptom is okay, controlled, mild, manageable, resolved, improving, or not affecting function, strongly prefer ending that branch quickly unless a safety-critical detail is still missing.
+  - In general, follow-up questions are most useful when there is an active problem, worsening symptom, functional impact, uncontrolled symptom, treatment issue, or meaningful uncertainty.
   - Ask only questions that are still clinically necessary after the patient's actual answer.
   - If the patient already explained the reason in their own words, do NOT recommend a generic "what is making this difficult" follow-up.
   - If the patient supplies one detail and explicitly does not know another, accept the known detail and only ask for the missing one if it is truly necessary.
@@ -2622,6 +2627,7 @@ FOLLOW-UP RULES:
   - If the patient already gave a real-world answer that the system can store directly, prefer next_step_action with carry_forward_answer over follow-up.
   - This is especially important after structured option answers like Yes/No or category selections: if the next formal step can ask the next needed detail directly, prefer no custom bridge follow-up.
   - If the current answer already addresses the candidate next step, set next_step_action to skip that step.
+  - If the current answer is reassuring and suggests no active problem, use next_step_action aggressively to skip downstream burden/management questions that only matter when the symptom is present.
   - If several upcoming questions become unnecessary for the same reason, include them in next_step_action.plan.
   - If the patient's raw wording already fully answers the candidate next step, skip that step and carry the raw detail forward instead of asking it again.
   - If the candidate next step, or any proposed follow-up, would substantially repeat a recent question already asked in this topic, suppress it.
@@ -2668,12 +2674,14 @@ next_step_action:
   - This is the main mechanism for skipping downstream impact/management/change questions generically across topics
   - Only use it when the candidate next step would be unnecessary, redundant, or context-mismatched given the current answer and session answers
   - Prefer using next_step_action instead of follow-up whenever the issue is redundant branching rather than truly missing information
+  - When the patient's answer is reassuring or indicates the symptom is okay, controlled, absent, or not bothersome, prefer next_step_action over additional questioning whenever clinically safe
   - Prefer suggested_answer to be an exact option from the candidate next step when obvious, often "No"
   - plan is optional and may list additional upcoming steps that should also be auto-resolved to avoid unnecessary questioning
   - carry_forward_answer is optional and should be used when the patient's current raw answer already provides the value for a downstream step, especially a free-text detail step that would otherwise repeat the same question
   - Good examples:
     - Patient denies emotional distress and next step asks whether anxiety is affecting sleep/eating → skip with suggested_answer "No"
     - Patient denies depression or feeling down and the next questions only elaborate on mood burden or support needs → skip them unless there is another clear concern
+    - Patient says the symptom is mild, okay, or not bothering them and the next questions are about burden, management failure, or escalation → skip those downstream questions
     - Patient answers a location chooser with a specific body part like "nose" and the next step asks which body part hurts → skip that next step and carry forward "nose"
     - Patient says a sore is not painful and next step asks whether treatment for painful sores is helping → skip with suggested_answer "No"
     - Patient says IV fluids are helping and gives no sign they want changes, and next step asks about adjusting frequency → skip with suggested_answer "No"
@@ -2866,6 +2874,7 @@ RULES:
   - If the follow-up goal materially overlaps the candidate next step, return null
   - If recent topic history suggests the patient is getting frustrated by repetition, return null rather than asking another version of the same detail
   - These rules apply across every topic and every question type. When in doubt, avoid repeating the same concept in a new wording.
+  - If the patient appears okay with respect to the symptom being discussed and there is no active problem to explore, return null rather than creating another follow-up.
   - After a structured option answer, do not pre-ask the next formal step in different words just to sound conversational.
   - Never ask the patient to translate their own concrete answer into the form's categories. For example, after a patient says "nose", do not ask "throat, tongue, or somewhere else?" because that classification should happen internally.
   - More generally: do not ask the patient to convert a real-world answer into the app's taxonomy when the system can infer it.
