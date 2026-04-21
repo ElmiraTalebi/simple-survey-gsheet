@@ -2906,6 +2906,7 @@ def _build_prior_baseline(topic_key: str) -> dict:
 
 def _build_all_topic_data() -> dict:
     payload = {}
+    topic_progress = {}
     for _, key in TOPICS:
         topic_state = st.session_state.topic_states[key]
         topic_data = dict(topic_state.get("data", {}))
@@ -2913,6 +2914,13 @@ def _build_all_topic_data() -> dict:
         if raw_answers:
             topic_data["_verbatim_answers"] = dict(raw_answers)
         payload[key] = topic_data
+        answered, applicable = get_topic_progress(key, topic_state.get("data", {}), raw_answers)
+        topic_progress[key] = {
+            "status": topic_state.get("status", "not_started"),
+            "answered": answered,
+            "applicable": applicable,
+        }
+    payload["_topic_progress"] = topic_progress
     return payload
 
 
@@ -3308,7 +3316,7 @@ Patient: [name]  |  Date: [date]
  Written for a clinician who has 10 seconds to orient.]
 
 📊 SYMPTOM DETAILS BY DOMAIN
-[One bold subsection per completed topic. Include:
+[One bold subsection per topic with any current-session data, even if the topic was not fully completed. Include:
  - Symptom presence/severity in clinical language
  - Patient-reported management strategies and medications
  - Functional impact where reported
@@ -3334,6 +3342,7 @@ CLINICAL LANGUAGE RULES:
 - Convert patient language to clinical terms where appropriate
   (e.g., "sore in my mouth" → "oral mucositis", "can't swallow" → "dysphagia")
 - Include patient's own words in quotes only when clinically meaningful
+- Treat partially completed topics as valid current-session data when answers are present
 - Omit topics with no data — do not write "N/A"
 - Third person throughout ("Patient reports…")
 - Never write "Unfortunately" or emotional commentary
