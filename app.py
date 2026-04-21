@@ -2585,8 +2585,6 @@ Rules:
   - Write one natural nurse-like question that asks for the same clinical detail.
   - Use topic history so the question feels like a direct continuation of the conversation.
   - Avoid repeating a recent question from this topic.
-  - Do not rewrite a narrower follow-up detail question back into the broader parent question.
-  - If the patient already named a specific location, medication, symptom, or person, do not turn the next question back into a generic chooser they already answered.
   - Mention last-visit history only when it genuinely helps orient the patient.
   - Never prepend awkward phrases like "Last visit you reported yes."
   - Do not imply symptoms the patient has not endorsed.
@@ -2789,11 +2787,6 @@ MATCHING RULES:
    - When a question asks for a body location, any real body part is a meaningful answer.
      Do NOT reject "hand", "head", "jaw", "neck", "arm", etc. just because it is not
      one of the named specific options.
-   - For location questions with a catch-all option such as "Somewhere else" or "Other",
-     any concrete anatomical location that is not one of the named specific options MUST
-     map to the catch-all option.
-   - This includes locations such as nose, face, cheek, scalp, lip, gums, ear, shoulder,
-     chest, back, stomach, leg, foot, or any other specific body area.
 
 3. CATCH-ALL OPTION RULE (CRITICAL) — if the options list contains a catch-all such
    as "Somewhere else", "Other", "None of these", or "Something else", AND the
@@ -2807,8 +2800,6 @@ MATCHING RULES:
        "shoulder" → "Somewhere else"
        "ear"      → "Somewhere else"
        "neck"     → "Somewhere else"
-       "nose"     → "Somewhere else"
-       "my face"  → "Somewhere else"
    - Examples for options ["Gabapentin", "Oxycodone", "Other"]:
        "Tylenol"  → "Other"
        "ibuprofen"→ "Other"
@@ -2850,8 +2841,6 @@ TOPIC-HISTORY RULES:
     or "every day almost" in context of the current question.
   - Do not treat the patient's answer as unrelated just because it is brief; use the immediate topic history.
   - Do not force a mapping if the answer is meaningful but clearly does not fit any option; prefer the catch-all option when available.
-  - If the patient already gave a concrete location, medication, food type, support source, or other real-world example,
-    preserve that meaning by mapping to the correct catch-all option instead of asking them to classify it themselves.
 
 Return ONLY valid JSON:
 {{
@@ -3240,12 +3229,8 @@ FOLLOW-UP RULES:
   - If the missing detail is something the patient reasonably may not know right now, prefer no follow-up over repetitive questioning.
   - Never imply the presence of a symptom the patient just denied.
   - You will receive recent conversation history for this topic only. Use it to avoid repeated questions.
-  - Do NOT create a custom follow-up whose only purpose is to ask the same thing as the candidate next step in different words.
-  - If the next formal step already covers the natural next question, prefer no custom follow-up and let that next step be asked once.
-  - A patient should never have to answer a natural-language version of a question and then immediately answer the form version of the same question.
   - If the current answer already addresses the candidate next step, set next_step_action to skip that step.
   - If several upcoming questions become unnecessary for the same reason, include them in next_step_action.plan.
-  - If the patient's raw wording already fully answers the candidate next step, skip that step and carry the raw detail forward instead of asking it again.
   - If the candidate next step, or any proposed follow-up, would substantially repeat a recent question already asked in this topic, suppress it.
   - If a natural assistant acknowledgment has already effectively asked the next question, do not ask it again.
   - ONLY recommend follow-up if information_completeness is "partial" or "none"
@@ -3266,11 +3251,9 @@ next_step_action:
   - Only use it when the candidate next step would be unnecessary, redundant, or context-mismatched given the current answer and session answers
   - Prefer suggested_answer to be an exact option from the candidate next step when obvious, often "No"
   - plan is optional and may list additional upcoming steps that should also be auto-resolved to avoid unnecessary questioning
-  - carry_forward_answer is optional and should be used when the patient's current raw answer already provides the value for a downstream step, especially a free-text detail step that would otherwise repeat the same question
   - Good examples:
     - Patient denies emotional distress and next step asks whether anxiety is affecting sleep/eating → skip with suggested_answer "No"
     - Patient denies depression or feeling down and the next questions only elaborate on mood burden or support needs → skip them unless there is another clear concern
-    - Patient answers a location chooser with a specific body part like "nose" and the next step asks which body part hurts → skip that next step and carry forward "nose"
     - Patient says a sore is not painful and next step asks whether treatment for painful sores is helping → skip with suggested_answer "No"
     - Patient says IV fluids are helping and gives no sign they want changes, and next step asks about adjusting frequency → skip with suggested_answer "No"
     - Patient says medication is not causing drowsiness and next step asks whether drowsiness is affecting schedule → skip with suggested_answer "No"
@@ -3307,12 +3290,10 @@ Return ONLY valid JSON:
     "skip_immediate_next_step": false,
     "suggested_answer": "..." or null,
     "reason": "..." or null,
-    "carry_forward_answer": "..." or null,
     "plan": [
       {{
         "step_id": "...",
         "suggested_answer": "..." or null,
-        "carry_forward_answer": "..." or null,
         "reason": "..." or null
       }}
     ]
@@ -3353,7 +3334,6 @@ def run_doctor_relevance(
             "skip_immediate_next_step": False,
             "suggested_answer": None,
             "reason": None,
-            "carry_forward_answer": None,
             "plan": [],
         },
         "special_signals": {
@@ -3437,8 +3417,6 @@ RULES:
   - You will receive recent topic history and recent question texts from this topic only
   - Do not write a question that substantially repeats any recent question in that history
   - If the candidate next step already asks the same thing, return null instead of paraphrasing it
-  - Never ask the patient to translate their own concrete answer into the form's categories. For example, after a patient says "nose", do not ask "throat, tongue, or somewhere else?" because that classification should happen internally.
-  - If the patient's answer already gives a concrete real-world example, assume the system can preserve it and ask only the next clinically meaningful question.
   - If prior-comparison context is clinically useful, you may briefly reflect it in a natural way, but only as conversational context, never as a rigid template
   - Write in second person, conversational language
   - Never use medical jargon without immediate plain explanation
@@ -3548,7 +3526,6 @@ def run_agent_pipeline(
     topic_key: str,
     step: dict,
     answer: str,
-    raw_answer: Optional[str],
     state: dict,
     last_topic_data: dict,
 ) -> dict:
@@ -3579,7 +3556,6 @@ def run_agent_pipeline(
         return _pipeline_default()
 
     question_count = len(state.get("data", {}))
-    current_raw_answer = str(raw_answer if raw_answer is not None else answer)
     session_answers = _build_session_answers(topic_key)
     prior_baseline  = _build_prior_baseline(topic_key)
     followup_count  = state.get("followup_counts", {}).get(step["id"], 0)
@@ -3589,11 +3565,11 @@ def run_agent_pipeline(
     upcoming_steps = get_upcoming_steps(topic_key, state["data"], state.get("raw_answers"), limit=5)
 
     # ── STEP 1: Answer Interpreter (must run first) ────────────────
-    interp = run_answer_interpreter(step, current_raw_answer, topic_history=topic_history)
+    interp = run_answer_interpreter(step, answer, topic_history=topic_history)
     matched = interp.get("matched_option")
     distress = interp.get("distress_flag", False)
     urgency_flag = interp.get("urgency_flag", False)
-    detail_coverage = run_detail_coverage_agent(step, current_raw_answer, topic_history=topic_history, recent_questions=recent_questions)
+    detail_coverage = run_detail_coverage_agent(step, answer, topic_history=topic_history, recent_questions=recent_questions)
 
     # ── STEP 2: Run three agents in parallel ───────────────────────
     # Prior Comparison, Urgency, and Sentiment can all run at once.
@@ -3605,17 +3581,17 @@ def run_agent_pipeline(
     active_sentiment_signals = st.session_state.get("sentiment_state", {}).get("all_signals", [])
 
     def _run_prior():
-        return run_prior_comparison(step, current_raw_answer, last_topic_data)
+        return run_prior_comparison(step, answer, last_topic_data)
 
     def _run_urgency():
         return run_urgency_agent(
-            step, current_raw_answer, matched, session_answers, prior_baseline,
+            step, answer, matched, session_answers, prior_baseline,
             active_urgency_signals, distress, urgency_flag
         )
 
     def _run_sentiment():
         return run_sentiment_agent(
-            step, current_raw_answer, session_answers, active_sentiment_signals, question_count
+            step, answer, session_answers, active_sentiment_signals, question_count
         )
 
     with _futures.ThreadPoolExecutor(max_workers=3) as pool:
@@ -3644,7 +3620,7 @@ def run_agent_pipeline(
 
     # ── STEP 4: Doctor-Relevance ───────────────────────────────────
     dr_out = run_doctor_relevance(
-        step, current_raw_answer, matched, prior_comp, session_answers, followup_count,
+        step, answer, matched, prior_comp, session_answers, followup_count,
         topic_history=topic_history, recent_questions=recent_questions,
         detail_coverage=detail_coverage, candidate_next_step=candidate_next_step,
         upcoming_steps=upcoming_steps,
@@ -3688,7 +3664,7 @@ def run_agent_pipeline(
         tone = adapt.get("tone_profile", "standard")
         simplify = adapt.get("simplify_next_question", False)
         nm_out = run_next_move_agent(
-            step, current_raw_answer, followup_goal, tone, simplify,
+            step, answer, followup_goal, tone, simplify,
             topic_history=topic_history, recent_questions=recent_questions,
             candidate_next_step=candidate_next_step,
         )
@@ -4506,7 +4482,6 @@ def _apply_agent_next_step_action(topic_key: str, state: dict, action: Optional[
             plan.append({
                 "step_id": next_step.get("id"),
                 "suggested_answer": action.get("suggested_answer"),
-                "carry_forward_answer": action.get("carry_forward_answer"),
                 "reason": action.get("reason"),
             })
     for item in action.get("plan", []) or []:
@@ -4518,31 +4493,25 @@ def _apply_agent_next_step_action(topic_key: str, state: dict, action: Optional[
         step = STEP_BY_ID.get(step_id)
         if not step or step_id in state["data"]:
             continue
-        if step.get("type") == "free_text":
-            carry = item.get("carry_forward_answer")
-            if isinstance(carry, str) and carry.strip():
-                value = carry.strip()
-                state["data"][step_id] = value
-                state["raw_answers"][step_id] = value
+        if step.get("type") != "options":
             continue
-        if step.get("type") == "options":
-            opts = step.get("opts", [])
-            suggested = item.get("suggested_answer")
-            chosen = None
-            if suggested in opts:
-                chosen = suggested
+        opts = step.get("opts", [])
+        suggested = item.get("suggested_answer")
+        chosen = None
+        if suggested in opts:
+            chosen = suggested
+        else:
+            normalized_opts = {_norm_text(opt): opt for opt in opts}
+            if "no" in normalized_opts:
+                chosen = normalized_opts["no"]
             else:
-                normalized_opts = {_norm_text(opt): opt for opt in opts}
-                if "no" in normalized_opts:
-                    chosen = normalized_opts["no"]
-                else:
-                    for opt in opts:
-                        if _norm_text(opt).startswith("no"):
-                            chosen = opt
-                            break
-            if chosen:
-                state["data"][step_id] = chosen
-                state["raw_answers"][step_id] = chosen
+                for opt in opts:
+                    if _norm_text(opt).startswith("no"):
+                        chosen = opt
+                        break
+        if chosen:
+            state["data"][step_id] = chosen
+            state["raw_answers"][step_id] = chosen
 
 
 def _apply_generic_fallback_next_step_action(topic_key: str, state: dict):
@@ -4826,7 +4795,6 @@ def handle_answer(
                     topic_key=topic_key,
                     step=step,
                     answer=answer,
-                    raw_answer=verbatim if isinstance(verbatim, str) else str(verbatim),
                     state=state,
                     last_topic_data=last_topic_data,
                 )
