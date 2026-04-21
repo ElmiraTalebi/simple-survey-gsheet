@@ -4850,6 +4850,29 @@ def _render_suggested_reply_buttons(
                     return
 
 
+def _render_inline_option_buttons(
+    topic_key: str,
+    step: dict,
+    on_select,
+    key_prefix: str,
+):
+    opts = step.get("opts", [])
+    if not opts:
+        return
+    cols_per_row = 2 if len(opts) > 1 else 1
+    for idx in range(0, len(opts), cols_per_row):
+        row = st.columns(cols_per_row)
+        for offset, opt in enumerate(opts[idx:idx + cols_per_row]):
+            with row[offset]:
+                if st.button(
+                    opt,
+                    key=f"{key_prefix}_{topic_key}_{step['id']}_{idx + offset}",
+                    use_container_width=True,
+                ):
+                    on_select(opt)
+                    return
+
+
 def handle_pending_followup(topic_key: str, answer: str, source: str = "typed"):
     state = st.session_state.topic_states[topic_key]
     pending = state.get("pending_followup") or {}
@@ -5524,6 +5547,7 @@ def render_topic_detail(topic_label: str, topic_key: str):
         pending_suffix = pending.get("answer_key", "pending")
         pending_key = f"pending_followup_{topic_key}_{pending_suffix}"
         pending_submit_key = f"{pending_key}_submitted"
+        source_step = STEP_BY_ID.get(pending.get("source_step_id"))
         if pending_key not in st.session_state:
             st.session_state[pending_key] = ""
         st.markdown('</div><div class="composer-wrap">', unsafe_allow_html=True)
@@ -5536,12 +5560,22 @@ def render_topic_detail(topic_label: str, topic_key: str):
             "placeholder": "Type or speak your answer here...",
             "opts": [],
         }
-        pending_suggestions = _suggested_replies_for_step(
-            topic_key,
-            followup_step,
-            state,
-            cache_key=f"pending::{pending_suffix}",
-        )
+        pending_suggestions = []
+        source_has_predefined_replies = bool(source_step and source_step.get("opts"))
+        if not source_has_predefined_replies:
+            pending_suggestions = _suggested_replies_for_step(
+                topic_key,
+                followup_step,
+                state,
+                cache_key=f"pending::{pending_suffix}",
+            )
+        if source_has_predefined_replies:
+            _render_inline_option_buttons(
+                topic_key,
+                source_step,
+                on_select=lambda opt: handle_pending_followup(topic_key, opt, source="structured"),
+                key_prefix="pending_source_option",
+            )
         with st.container():
             pending_text = st.text_input(
                 "Reply",
