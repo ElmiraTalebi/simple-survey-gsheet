@@ -3063,6 +3063,8 @@ FOLLOW-UP RULES:
   - Do NOT create a custom follow-up whose only purpose is to ask the same thing as the candidate next step in different words.
   - If the next formal step already covers the natural next question, prefer no custom follow-up and let that next step be asked once.
   - A patient should never have to answer a natural-language version of a question and then immediately answer the form version of the same question.
+  - This is especially important after structured option answers like Yes/No or other menu choices: do not generate an extra conversational bridge question when the next formal step already asks for the needed detail.
+  - After a structured option answer that already resolves the current step, prefer follow_up_recommended=false when the candidate next step can ask the next detail directly.
   - If the current answer already addresses the candidate next step, set next_step_action to skip that step.
   - If several upcoming questions become unnecessary for the same reason, include them in next_step_action.plan.
   - If the patient's raw wording already fully answers the candidate next step, skip that step and carry the raw detail forward instead of asking it again.
@@ -3261,6 +3263,7 @@ RULES:
   - You will receive recent topic history and recent question texts from this topic only
   - Do not write a question that substantially repeats any recent question in that history
   - If the candidate next step already asks the same thing, return null instead of paraphrasing it
+  - If the current step was already resolved by a structured option or clear yes/no answer and there is a candidate next step, do not write a bridge question that pre-asks that next formal step.
   - Never ask the patient to translate their own concrete answer into the form's categories. For example, after a patient says "nose", do not ask "throat, tongue, or somewhere else?" because that classification should happen internally.
   - If the patient's answer already gives a concrete real-world example, assume the system can preserve it and ask only the next clinically meaningful question.
   - If prior-comparison context is clinically useful, you may briefly reflect it in a natural way, but only as conversational context, never as a rigid template
@@ -3505,6 +3508,14 @@ def run_agent_pipeline(
     if reduce and priority != "high":
         suppress = True
     if sigs.get("E3_resistance") and priority != "high":
+        suppress = True
+    if (
+        step.get("type") == "options"
+        and candidate_next_step
+        and matched in (step.get("opts") or [])
+        and dr_out.get("information_completeness") == "complete"
+        and not force_followup
+    ):
         suppress = True
 
     do_follow_up = (force_followup or dr_recommends) and not suppress
@@ -4426,6 +4437,7 @@ def _store_followup_prompt(
     assistant_message: str = "",
     retry_current_step: bool = False,
     allow_other_detail: bool = False,
+    target_step: Optional[dict] = None,
 ):
     state["waiting_for_followup"] = True
     state["pending_followup"] = {
@@ -4435,6 +4447,7 @@ def _store_followup_prompt(
         "assistant_message": assistant_message.strip(),
         "retry_current_step": retry_current_step,
         "allow_other_detail": allow_other_detail,
+        "target_step_id": target_step.get("id") if target_step else None,
     }
     combined_prompt = "\n\n".join([part for part in [assistant_message.strip(), question.strip()] if part])
     _append_assistant_message(state, combined_prompt)
@@ -4562,6 +4575,85 @@ def handle_pending_followup(topic_key: str, answer: str, source: str = "typed"):
                 return
             _request_retry_for_step(topic_key, source_step, retry_text, source=source)
             return
+
+    target_step_id = pending.get("target_step_id")
+    target_step = STEP_BY_ID.get(target_step_id) if target_step_id else None
+    if target_step:
+        state["waiting_for_followup"] = False
+        state.pop("pending_followup", None)
+
+        followup_text = (answer or "").strip()
+        if target_step["type"] == "options":
+            interpreted = interpret_user_input_with_options(
+                target_step,
+                followup_text,
+                topic_key=topic_key,
+                topic_history=_recent_topic_history(state),
+            )
+            if interpreted in target_step.get("opts", []):
+                handle_answer(
+                    topic_key,
+                    target_step,
+                    interpreted,
+                    source="structured",
+                    raw_answer=followup_text,
+                    display_override=followup_text,
+                )
+                return
+            _request_retry_for_step(topic_key, target_step, followup_text, source=source)
+            return
+
+        if target_step["type"] == "multi_select":
+            parsed = parse_multi_select_typed_input(target_step, followup_text)
+            if parsed:
+                handle_answer(
+                    topic_key,
+                    target_step,
+                    parsed,
+                    source="structured",
+                    raw_answer=followup_text,
+                    display_override=followup_text,
+                )
+                return
+            if "Other" in target_step.get("opts", []) and followup_text:
+                state["data"][f"{target_step['id']}_other_detail"] = followup_text
+                handle_answer(
+                    topic_key,
+                    target_step,
+                    ["Other"],
+                    source="structured",
+                    display_override=followup_text,
+                    raw_answer=followup_text,
+                )
+                return
+            _request_retry_for_step(topic_key, target_step, followup_text, source=source)
+            return
+
+        if target_step["type"] == "number":
+            try:
+                numeric_value = int(float(followup_text))
+            except (TypeError, ValueError):
+                _request_retry_for_step(topic_key, target_step, followup_text, source=source)
+                return
+            handle_answer(
+                topic_key,
+                target_step,
+                numeric_value,
+                source="structured",
+                display_override=followup_text,
+                raw_answer=followup_text,
+            )
+            return
+
+        handle_answer(
+            topic_key,
+            target_step,
+            followup_text,
+            source="free_text",
+            raw_answer=followup_text,
+            display_override=followup_text,
+        )
+        return
 
     state["chat"].append({"role": "user", "content": answer})
     state["data"][answer_key] = answer
@@ -4746,7 +4838,12 @@ def handle_answer(
                     fc = state["followup_counts"]
                     fc[step["id"]] = fc.get(step["id"], 0) + 1
                     _store_followup_prompt(
-                        topic_key, state, step, fq, ack,
+                        topic_key,
+                        state,
+                        step,
+                        fq,
+                        ack,
+                        target_step=next_step if step.get("type") == "options" else None,
                     )
                     st.rerun()
                     return
