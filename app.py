@@ -4834,6 +4834,10 @@ def handle_answer(
                 if _is_redundant_followup(step["text"], answer, fq):
                     pass   # Fall through to assistant_message + next question
                 else:
+                    next_step_action = pipeline.get("next_step_action")
+                    if next_step_action:
+                        _apply_agent_next_step_action(topic_key, state, next_step_action)
+                        next_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
                     # Increment follow-up counter
                     fc = state["followup_counts"]
                     fc[step["id"]] = fc.get(step["id"], 0) + 1
@@ -4843,7 +4847,7 @@ def handle_answer(
                         step,
                         fq,
                         ack,
-                        target_step=next_step if step.get("type") == "options" else None,
+                        target_step=next_step,
                     )
                     st.rerun()
                     return
