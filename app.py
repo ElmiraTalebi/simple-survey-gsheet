@@ -5561,15 +5561,19 @@ def render_topic_detail(topic_label: str, topic_key: str):
             "opts": [],
         }
         pending_suggestions = []
-        source_has_predefined_replies = bool(source_step and source_step.get("opts"))
-        if not source_has_predefined_replies:
+        reuse_source_step_replies = bool(
+            pending.get("retry_current_step")
+            and source_step
+            and source_step.get("opts")
+        )
+        if not reuse_source_step_replies:
             pending_suggestions = _suggested_replies_for_step(
                 topic_key,
                 followup_step,
                 state,
                 cache_key=f"pending::{pending_suffix}",
             )
-        if source_has_predefined_replies:
+        if reuse_source_step_replies:
             _render_inline_option_buttons(
                 topic_key,
                 source_step,
