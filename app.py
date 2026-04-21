@@ -1155,15 +1155,6 @@ div[data-baseweb="select"] > div {
     color: #10375a !important;
 }
 
-.suggested-replies-note {
-    margin: 8px 0 10px 2px;
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    color: #6b7d92;
-}
-
 .composer-shell div[data-baseweb="select"] > div {
     border-radius: 16px !important;
     min-height: 46px !important;
@@ -2692,74 +2683,6 @@ def run_clarification_writer_agent(step: dict, patient_reply: str, topic_history
         "recent_topic_history": topic_history,
     }, max_tokens=120)
     return {**default, **result} if result else default
-
-
-_QUICK_REPLY_SUGGESTER_SYS = """
-You suggest clickable quick-reply buttons for a clinical chatbot question.
-
-You will receive:
-  - question_text
-  - question_type
-  - predefined_options
-  - placeholder
-  - min_value
-  - max_value
-  - recent_topic_history
-  - recent_question_texts
-
-Rules:
-  - Return 2 to 4 short patient-style reply options when helpful.
-  - These are suggestion buttons, not the only valid answers. Free text will still be available.
-  - Suggestions must fit the current question naturally and must not contradict the recent topic history.
-  - Do not repeat a detail the patient already gave as if it still needs to be answered.
-  - If predefined_options already exist, return an empty list.
-  - For number questions, suggestions must be numeric strings within range.
-  - For free-text questions, keep suggestions short and natural, like something a patient would actually tap.
-  - Prefer suggestions that help the patient answer quickly, not a full exhaustive list.
-  - If no helpful suggestions are obvious, return an empty list.
-
-Return ONLY valid JSON:
-{
-  "suggestions": ["...", "..."]
-}
-"""
-
-
-def run_quick_reply_suggester_agent(step: dict, topic_history: list[dict[str, str]], recent_questions: list[str]) -> dict:
-    default = {"suggestions": []}
-    if not openai_client:
-        return default
-    result = _call_agent(_QUICK_REPLY_SUGGESTER_SYS, {
-        "question_text": step.get("text", ""),
-        "question_type": step.get("type", "free_text"),
-        "predefined_options": step.get("opts", []),
-        "placeholder": step.get("placeholder"),
-        "min_value": step.get("min_v"),
-        "max_value": step.get("max_v"),
-        "recent_topic_history": topic_history,
-        "recent_question_texts": recent_questions,
-    }, max_tokens=140)
-    if not result:
-        return default
-
-    suggestions = result.get("suggestions", [])
-    if not isinstance(suggestions, list):
-        return default
-
-    cleaned = []
-    seen = set()
-    for item in suggestions:
-        text = str(item or "").strip()
-        if not text:
-            continue
-        key = _norm_text(text)
-        if key in seen:
-            continue
-        seen.add(key)
-        cleaned.append(text)
-        if len(cleaned) >= 4:
-            break
-    return {"suggestions": cleaned}
 
 
 _TOPIC_SUMMARY_SYS = """
@@ -4762,28 +4685,6 @@ def _backfill_next_step_from_topic_history(topic_key: str, state: dict, next_ste
         break
 
 
-def _quick_reply_suggestions(topic_key: str, state: dict, step: dict) -> list[str]:
-    if step.get("opts"):
-        return []
-    if step.get("type") not in {"free_text", "number"}:
-        return []
-    cache = state.setdefault("generated_quick_replies", {})
-    cached = cache.get(step["id"])
-    if isinstance(cached, list):
-        return cached
-
-    result = run_quick_reply_suggester_agent(
-        step,
-        topic_history=_recent_topic_history(state),
-        recent_questions=_recent_topic_questions(state),
-    )
-    suggestions = result.get("suggestions", []) if isinstance(result, dict) else []
-    if not isinstance(suggestions, list):
-        suggestions = []
-    cache[step["id"]] = suggestions
-    return suggestions
-
-
 def _store_followup_prompt(
     topic_key: str,
     state: dict,
@@ -4854,8 +4755,6 @@ def _clear_step_inputs(topic_key: str, step: dict):
         keys_to_clear.extend([
             f"text_{topic_key}_{sid}",
             f"text_{topic_key}_{sid}_submitted",
-            f"suggested_{topic_key}_{sid}",
-            f"suggested_{topic_key}_{sid}_submitted",
             f"_vt_{topic_key}_{sid}_num",
             f"_vh_{topic_key}_{sid}_num",
         ])
@@ -4863,8 +4762,6 @@ def _clear_step_inputs(topic_key: str, step: dict):
         keys_to_clear.extend([
             f"ft_{topic_key}_{sid}",
             f"ft_{topic_key}_{sid}_submitted",
-            f"suggested_{topic_key}_{sid}",
-            f"suggested_{topic_key}_{sid}_submitted",
             f"ft_{topic_key}_{sid}_voice_sync",
             f"_vt_{topic_key}_{sid}",
             f"_vh_{topic_key}_{sid}",
@@ -5074,8 +4971,6 @@ def handle_answer(
         state["last_prompted_text"] = ""
     if "generated_prompts" not in state:
         state["generated_prompts"] = {}
-    if "generated_quick_replies" not in state:
-        state["generated_quick_replies"] = {}
     if state.get("last_prompted_step_id") == step.get("id"):
         _remember_prompted_step(state, None, "")
     _clear_step_inputs(topic_key, step)
@@ -5292,76 +5187,6 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
                         handle_answer(button_topic_key, button_step, payload, source="structured")
                         return
 
-    def render_suggested_buttons(button_topic_key: str, button_step: dict):
-        if button_step.get("opts") or button_step.get("type") not in {"free_text", "number"}:
-            return
-        suggestions = _quick_reply_suggestions(button_topic_key, state, button_step)
-        if not suggestions:
-            return
-        st.markdown('<div class="suggested-replies-note">Suggested replies</div>', unsafe_allow_html=True)
-        pills_key = f"suggested_{button_topic_key}_{button_step['id']}"
-        submitted_key = f"{pills_key}_submitted"
-
-        selected = None
-        if hasattr(st, "pills"):
-            selected = st.pills(
-                "Suggested replies",
-                suggestions,
-                key=pills_key,
-                label_visibility="collapsed",
-            )
-        else:
-            cols_per_row = 2 if len(suggestions) > 1 else 1
-            for idx in range(0, len(suggestions), cols_per_row):
-                row = st.columns(cols_per_row)
-                for offset, suggestion in enumerate(suggestions[idx:idx + cols_per_row]):
-                    with row[offset]:
-                        if st.button(
-                            suggestion,
-                            key=f"suggest_{button_topic_key}_{button_step['id']}_{idx + offset}",
-                            use_container_width=True,
-                        ):
-                            selected = suggestion
-                            break
-                if selected:
-                    break
-
-        if not selected or st.session_state.get(submitted_key) == selected:
-            return
-
-        st.session_state[submitted_key] = selected
-        if button_step["type"] == "number":
-            try:
-                numeric_value = int(float(selected))
-            except (TypeError, ValueError):
-                handle_answer(
-                    button_topic_key,
-                    button_step,
-                    selected,
-                    source="typed",
-                    display_override=selected,
-                    raw_answer=selected,
-                )
-                return
-            handle_answer(
-                button_topic_key,
-                button_step,
-                numeric_value,
-                source="typed",
-                display_override=selected,
-                raw_answer=selected,
-            )
-            return
-        handle_answer(
-            button_topic_key,
-            button_step,
-            selected,
-            source="free_text",
-            display_override=selected,
-            raw_answer=selected,
-        )
-        return
-
     # ── Options ─────────────────────────────────────────────────
     if stype == "options":
         st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
@@ -5451,7 +5276,6 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
             label_visibility="collapsed",
             placeholder=f"Enter a number ({int(step['min_v'])}-{int(step['max_v'])})"
         )
-        render_suggested_buttons(topic_key, step)
         with st.container():
             voice_text = voice_widget(f"{topic_key}_{sid}_num", label="Mic")
 
@@ -5490,7 +5314,6 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
                 key=widget_key,
                 label_visibility="collapsed",
             )
-        render_suggested_buttons(topic_key, step)
         with st.container():
             voice_text = voice_widget(f"{topic_key}_{sid}", label="Mic")
         if voice_text and voice_text != st.session_state.get(f"{widget_key}_voice_sync"):
