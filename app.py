@@ -302,6 +302,230 @@ def _norm_text(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).strip()
 
 
+_STOPWORDS = {
+    "a", "an", "and", "are", "at", "be", "been", "but", "by", "do", "does", "did",
+    "for", "from", "had", "has", "have", "how", "i", "if", "in", "is", "it", "its",
+    "me", "my", "of", "on", "or", "so", "that", "the", "their", "them", "there",
+    "this", "to", "up", "was", "were", "what", "when", "where", "which", "with",
+    "you", "your", "all", "any", "only", "mostly", "just", "today", "right", "now",
+}
+
+_YES_PHRASES = {
+    "yes", "yeah", "yep", "yup", "sure", "absolutely", "definitely", "i do",
+    "i am", "it is", "it does", "correct", "affirmative", "sometimes",
+}
+
+_NO_PHRASES = {
+    "no", "nope", "nah", "not really", "i dont", "i don't", "none", "nothing",
+    "never", "not at all", "no thanks",
+}
+
+_NEGATIVE_SCREEN_PHRASES = {
+    "fine", "doing okay", "doing ok", "okay", "ok", "all right", "alright",
+    "not worried", "not anxious", "not really anxious", "not feeling down",
+    "not depressed", "no concerns", "nothing really", "i am okay", "im okay",
+    "i'm okay", "i am fine", "i'm fine",
+}
+
+_MULTISELECT_SYNONYMS = {
+    "nausea_vomiting": {
+        "Nausea": ["nausea", "nauseous", "queasy", "sick to my stomach", "upset stomach"],
+        "Vomiting": ["vomiting", "vomit", "throwing up", "throw up", "threw up", "emesis"],
+        "Diarrhea": ["diarrhea", "diarrhoea", "loose stool", "loose stools", "watery stool", "watery stools"],
+        "None of these": ["none of these", "none", "no nausea", "no vomiting", "no diarrhea", "no gi issues"],
+    },
+    "pain_medications": {
+        "Gabapentin": ["gabapentin", "gaba"],
+        "Oxycodone": ["oxycodone", "oxy"],
+        "Butrans patch": ["butrans", "buprenorphine patch", "pain patch"],
+        "No pain medication": ["no pain medication", "not taking anything for pain", "nothing for pain", "no meds for pain"],
+        "Other": ["tylenol", "advil", "ibuprofen", "acetaminophen", "morphine", "tramadol"],
+    },
+}
+
+
+def _simple_stem(token: str) -> str:
+    token = token.strip().lower()
+    for suffix in ("ing", "ers", "er", "ies", "ied", "ed", "es", "s"):
+        if len(token) > 4 and token.endswith(suffix):
+            if suffix == "ies":
+                return token[:-3] + "y"
+            return token[:-len(suffix)]
+    return token
+
+
+def _keyword_tokens(text: str) -> set[str]:
+    normalized = _norm_text(text)
+    if not normalized:
+        return set()
+    return {
+        _simple_stem(token)
+        for token in normalized.split()
+        if token and token not in _STOPWORDS
+    }
+
+
+def _contains_any_phrase(text: str, phrases: set[str] | list[str] | tuple[str, ...]) -> bool:
+    normalized = f" {_norm_text(text)} "
+    for phrase in phrases:
+        norm_phrase = _norm_text(phrase)
+        if norm_phrase and f" {norm_phrase} " in normalized:
+            return True
+    return False
+
+
+def _extract_numeric_value(text: str) -> Optional[int]:
+    if text is None:
+        return None
+    match = re.search(r"-?\d+(?:\.\d+)?", str(text))
+    if not match:
+        return None
+    try:
+        return int(round(float(match.group(0))))
+    except (TypeError, ValueError):
+        return None
+
+
+def _binary_option_match(step: dict, user_input: str) -> Optional[str]:
+    opts = step.get("opts", [])
+    normalized = _norm_text(user_input)
+    if not normalized:
+        return None
+    token_count = len(normalized.split())
+
+    yes_opt = next((opt for opt in opts if _norm_text(opt).startswith("yes")), None)
+    no_opt = next((opt for opt in opts if _norm_text(opt).startswith("no")), None)
+    if not yes_opt and not no_opt:
+        return None
+
+    if _contains_any_phrase(normalized, _YES_PHRASES) and (token_count <= 4 or normalized.startswith("yes")):
+        return yes_opt
+    if _contains_any_phrase(normalized, _NO_PHRASES) and (token_count <= 4 or normalized.startswith("no")):
+        return no_opt
+    return None
+
+
+def _option_overlap_match(step: dict, user_input: str) -> Optional[str]:
+    opts = step.get("opts", [])
+    user_norm = _norm_text(user_input)
+    user_tokens = _keyword_tokens(user_input)
+    if not user_norm or not user_tokens:
+        return None
+
+    both_opt = next((opt for opt in opts if _norm_text(opt) == "both"), None)
+    if both_opt:
+        specific_hits = []
+        for opt in opts:
+            if opt == both_opt:
+                continue
+            opt_norm = _norm_text(opt)
+            if not opt_norm:
+                continue
+            if opt_norm in user_norm:
+                specific_hits.append(opt)
+                continue
+            opt_tokens = _keyword_tokens(opt)
+            if opt_tokens and (user_tokens & opt_tokens):
+                specific_hits.append(opt)
+        if len(set(specific_hits)) >= 2 or ("both" in user_tokens and specific_hits):
+            return both_opt
+
+    scored: list[tuple[float, str]] = []
+    for opt in opts:
+        opt_norm = _norm_text(opt)
+        if not opt_norm or opt_norm in {"other", "somewhere else", "something else", "none of these"}:
+            continue
+        if opt_norm in user_norm or user_norm in opt_norm:
+            scored.append((1.0, opt))
+            continue
+        opt_tokens = _keyword_tokens(opt)
+        if not opt_tokens:
+            continue
+        overlap = len(user_tokens & opt_tokens)
+        if overlap == 0:
+            continue
+        coverage = overlap / max(1, len(opt_tokens))
+        if coverage >= 0.6 or (overlap >= 2 and coverage >= 0.4):
+            scored.append((coverage, opt))
+
+    if not scored:
+        return None
+
+    scored.sort(key=lambda item: item[0], reverse=True)
+    if len(scored) == 1:
+        return scored[0][1]
+    top_score, top_opt = scored[0]
+    next_score = scored[1][0]
+    if top_score >= 0.8 or top_score > next_score:
+        return top_opt
+    return None
+
+
+def _hardcoded_option_match(step: dict, user_input: str) -> Optional[str]:
+    text = str(user_input or "").strip()
+    if not text:
+        return None
+
+    for opt in step.get("opts", []):
+        if _norm_text(opt) == _norm_text(text):
+            return opt
+
+    binary = _binary_option_match(step, text)
+    if binary in step.get("opts", []):
+        return binary
+
+    overlap = _option_overlap_match(step, text)
+    if overlap in step.get("opts", []):
+        return overlap
+
+    opts = step.get("opts", [])
+    question_text = step.get("text", "")
+    if (
+        "Somewhere else" in opts
+        and _looks_like_body_location_phrase(text)
+        and ("where" in _norm_text(question_text) or "location" in _norm_text(question_text))
+    ):
+        return "Somewhere else"
+
+    if "Other" in opts and text and not _contains_any_phrase(text, _NO_PHRASES):
+        return "Other"
+
+    return None
+
+
+def _follow_up_goal_matches_step(follow_up_goal: str, step: Optional[dict]) -> bool:
+    if not follow_up_goal or not step:
+        return False
+    goal_tokens = _keyword_tokens(follow_up_goal)
+    step_tokens = _keyword_tokens(step.get("text", ""))
+    if not goal_tokens or not step_tokens:
+        return False
+    overlap = goal_tokens & step_tokens
+    if len(overlap) >= 2:
+        return True
+    return len(overlap) / max(1, min(len(goal_tokens), len(step_tokens))) >= 0.6
+
+
+def _looks_like_negative_screen(text: str) -> bool:
+    normalized = _norm_text(text)
+    if not normalized:
+        return False
+    if normalized in {"fine", "okay", "ok", "good"}:
+        return True
+    return _contains_any_phrase(normalized, _NEGATIVE_SCREEN_PHRASES)
+
+
+def _is_binary_option_step(step: Optional[dict]) -> bool:
+    if not step:
+        return False
+    opts = step.get("opts", [])
+    if len(opts) != 2:
+        return False
+    return any(_norm_text(opt).startswith("yes") for opt in opts) and any(
+        _norm_text(opt).startswith("no") for opt in opts
+    )
+
+
 _BODY_LOCATION_PATTERN = re.compile(
     r"\b("
     r"head|face|nose|ear|ears|jaw|chin|mouth|tongue|throat|neck|shoulder|arm|elbow|wrist|hand|hands|finger|fingers|"
@@ -417,6 +641,22 @@ def parse_multi_select_typed_input(step: dict, user_input: str):
     for item in resolved:
         if item not in deduped:
             deduped.append(item)
+
+    synonyms = _MULTISELECT_SYNONYMS.get(step.get("id"), {})
+    normalized = _norm_text(user_input)
+    for opt in step.get("opts", []):
+        phrases = synonyms.get(opt, [])
+        if not phrases:
+            continue
+        if _contains_any_phrase(normalized, phrases):
+            if opt not in deduped:
+                deduped.append(opt)
+
+    if deduped and "None of these" in deduped and len(deduped) > 1:
+        deduped = [item for item in deduped if item != "None of these"]
+    if deduped and "No pain medication" in deduped and len(deduped) > 1:
+        deduped = [item for item in deduped if item != "No pain medication"]
+
     return deduped
 
 
@@ -1746,6 +1986,25 @@ def voice_widget(key_suffix: str, label: str = "Speak your answer") -> Optional[
 # ══════════════════════════════════════════════════════════════════
 
 def _step_is_relevant(topic_key: str, step: dict, data: dict, raw_answers: Optional[dict] = None) -> bool:
+    raw_answers = raw_answers or {}
+    step_id = step.get("id")
+
+    if topic_key == "nutrition" and step_id == "iv_adjust":
+        return data.get("iv_helping") != "Yes"
+
+    if topic_key == "fatigue" and step_id == "drowsy_schedule":
+        return data.get("sleep_quality") == "No" and data.get("medication_drowsy") in {"Yes", "Sometimes"}
+
+    if topic_key == "oral" and step_id == "oral_rinse_open":
+        has_oral_symptom = any(
+            data.get(key) == "Yes"
+            for key in ("mouth_sores", "dry_mouth", "mucus_issues", "teeth_gum_issues")
+        )
+        return has_oral_symptom
+
+    if topic_key == "mood" and step_id == "anxiety_impact":
+        return not _looks_like_negative_screen(raw_answers.get("emotional_state", ""))
+
     return True
 
 
@@ -1952,6 +2211,8 @@ For mode=question_rewrite:
     - Mention last-visit history only when it genuinely helps orient the patient.
     - Never prepend awkward phrases like "Last visit you reported yes."
     - Do not imply symptoms the patient has not endorsed.
+    - Do not turn one patient answer into two questions. Ask one clear question only.
+    - If the next formal step is already specific and usable as written, stay close to it instead of inventing a bridge question.
     - Keep the question concise and conversational.
 
 For mode=clarification:
@@ -1960,6 +2221,9 @@ For mode=clarification:
     - Ask for the same missing information more clearly, not a different detail.
     - Be warm and brief.
     - If options exist, you may gently restate the kind of answer needed.
+    - Ask for only one missing detail.
+    - Never ask the patient to repeat details they already gave.
+    - If the reply is partially usable, ask only for the missing part rather than restarting the whole question.
     - Do not sound robotic or blame the patient.
     - Do not repeat the original question verbatim.
 
@@ -2186,6 +2450,11 @@ MATCHING RULES:
    - For location questions with a catch-all option such as "Somewhere else" or "Other",
      any concrete anatomical location that is not one of the named specific options MUST
      map to the catch-all option.
+   - If the patient wording directly names one of the listed specific options in natural language,
+     prefer that specific option over the catch-all.
+   - For yes/no options, treat brief natural replies as valid:
+     "fine", "not really", "none", "no issues", "doing okay" should map to the appropriate negative option
+     when they clearly answer the current symptom question.
    - This includes locations such as nose, face, cheek, scalp, lip, gums, ear, shoulder,
      chest, back, stomach, leg, foot, or any other specific body area.
 
@@ -2243,6 +2512,7 @@ TOPIC-HISTORY RULES:
   - Use it to resolve conversational replies like "yes", "no", "only soup", "my sister helps some",
     or "every day almost" in context of the current question.
   - Do not treat the patient's answer as unrelated just because it is brief; use the immediate topic history.
+  - Prefer the most specific valid option, not the most generic one.
   - Do not force a mapping if the answer is meaningful but clearly does not fit any option; prefer the catch-all option when available.
   - If the patient already gave a concrete location, medication, food type, support source, or other real-world example,
     preserve that meaning by mapping to the correct catch-all option instead of asking them to classify it themselves.
@@ -2552,6 +2822,7 @@ You evaluate patient answers from the physician's perspective in one pass. Your 
 FOLLOW-UP RULES:
   - The question list is a question bank, not a rigid script. Judge the current answer
     like a clinician deciding whether anything important is still missing.
+  - Follow-up should be rare. If the next formal step already gathers the missing detail, do not request a custom follow-up.
   - A meaningful free-text answer in the patient's own words is clinically usable even if it does not match the option wording.
   - If a free-text question contains yes/no wording and the patient gives a simple "yes" or "no", treat that as minimally usable data unless the question clearly asked for a descriptive detail like where, when, how often, or what kind.
   - If the patient gave a broad but meaningful answer, break down what is missing conceptually; do NOT treat it as meaningless.
@@ -2567,6 +2838,7 @@ FOLLOW-UP RULES:
   - Do NOT create a custom follow-up whose only purpose is to ask the same thing as the candidate next step in different words.
   - If the next formal step already covers the natural next question, prefer no custom follow-up and let that next step be asked once.
   - A patient should never have to answer a natural-language version of a question and then immediately answer the form version of the same question.
+  - If the patient already gave a real-world answer that the system can store directly, prefer next_step_action with carry_forward_answer over follow-up.
   - This is especially important after structured option answers like Yes/No or category selections: if the next formal step can ask the next needed detail directly, prefer no custom bridge follow-up.
   - If the current answer already addresses the candidate next step, set next_step_action to skip that step.
   - If several upcoming questions become unnecessary for the same reason, include them in next_step_action.plan.
@@ -2613,6 +2885,7 @@ next_step_action:
   - Use this to suppress an immediate next question when it no longer makes clinical sense
   - This is the main mechanism for skipping downstream impact/management/change questions generically across topics
   - Only use it when the candidate next step would be unnecessary, redundant, or context-mismatched given the current answer and session answers
+  - Prefer using next_step_action instead of follow-up whenever the issue is redundant branching rather than truly missing information
   - Prefer suggested_answer to be an exact option from the candidate next step when obvious, often "No"
   - plan is optional and may list additional upcoming steps that should also be auto-resolved to avoid unnecessary questioning
   - carry_forward_answer is optional and should be used when the patient's current raw answer already provides the value for a downstream step, especially a free-text detail step that would otherwise repeat the same question
@@ -2808,6 +3081,7 @@ RULES:
   - You will receive recent topic history and recent question texts from this topic only
   - Do not write a question that substantially repeats any recent question in that history
   - If the candidate next step already asks the same thing, return null instead of paraphrasing it
+  - If the follow-up goal materially overlaps the candidate next step, return null
   - After a structured option answer, do not pre-ask the next formal step in different words just to sound conversational.
   - Never ask the patient to translate their own concrete answer into the form's categories. For example, after a patient says "nose", do not ask "throat, tongue, or somewhere else?" because that classification should happen internally.
   - If the patient's answer already gives a concrete real-world example, assume the system can preserve it and ask only the next clinically meaningful question.
@@ -3058,6 +3332,8 @@ def run_agent_pipeline(
         and not force_followup
     ):
         suppress = True
+    if _should_suppress_custom_followup(step, candidate_next_step, dr_out, force_followup):
+        suppress = True
 
     do_follow_up = (force_followup or dr_recommends) and not suppress
 
@@ -3193,18 +3469,9 @@ def interpret_user_input_with_options(step, user_input, topic_history: Optional[
     if not step.get("opts"):
         return user_input
 
-    normalized = _norm_text(user_input)
-    for opt in step.get("opts", []):
-        if _norm_text(opt) == normalized:
-            return opt
-
-    opts = step.get("opts", [])
-    if (
-        "Somewhere else" in opts
-        and _looks_like_body_location_phrase(user_input)
-        and ("where" in _norm_text(step.get("text", "")) or "location" in _norm_text(step.get("text", "")))
-    ):
-        return "Somewhere else"
+    hardcoded = _hardcoded_option_match(step, user_input)
+    if hardcoded in step.get("opts", []):
+        return hardcoded
 
     if not openai_client:
         return user_input
@@ -3941,6 +4208,30 @@ def _maybe_apply_prompt_driven_skip(topic_key: str, state: dict, pipeline: dict)
     return
 
 
+def _should_suppress_custom_followup(
+    step: dict,
+    candidate_next_step: Optional[dict],
+    dr_out: dict,
+    force_followup: bool,
+) -> bool:
+    if force_followup:
+        return False
+    if not candidate_next_step:
+        return False
+
+    followup_goal = dr_out.get("follow_up_goal") or ""
+    if _follow_up_goal_matches_step(followup_goal, candidate_next_step):
+        return True
+
+    if step.get("type") == "options":
+        return True
+
+    if dr_out.get("information_completeness") == "complete":
+        return True
+
+    return False
+
+
 def _capture_rich_answer_into_next_step(
     topic_key: str,
     state: dict,
@@ -3966,6 +4257,8 @@ def _capture_rich_answer_into_next_step(
     if not next_step or next_step.get("id") in state["data"]:
         return
     if next_step.get("type") != "options":
+        return
+    if _is_binary_option_step(next_step):
         return
 
     interpreted = interpret_user_input_with_options(
@@ -4125,9 +4418,8 @@ def _process_multiselect_submission(
 def _process_number_submission(topic_key: str, step: dict, candidate: str, submitted_key: str) -> bool:
     if not _mark_submission_once(submitted_key, candidate):
         return False
-    try:
-        value = int(float(candidate))
-    except ValueError:
+    value = _extract_numeric_value(candidate)
+    if value is None:
         st.warning("Please enter a number.")
         return True
     if value < step["min_v"] or value > step["max_v"]:
@@ -4341,9 +4633,8 @@ def handle_pending_followup(topic_key: str, answer: str, source: str = "typed"):
             return
 
         if target_step["type"] == "number":
-            try:
-                numeric_value = int(float(followup_text))
-            except (TypeError, ValueError):
+            numeric_value = _extract_numeric_value(followup_text)
+            if numeric_value is None:
                 _request_retry_for_step(topic_key, target_step, followup_text, source=source)
                 return
             handle_answer(
