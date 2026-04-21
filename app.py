@@ -81,6 +81,13 @@ def _safe_int(val, default=0):
     except (TypeError, ValueError):
         return default
 
+
+def _safe_float(val, default: Optional[float] = None) -> Optional[float]:
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return default
+
 FLOW_PAIN = [
     _q("has_pain", "Do you have any pain today?", opts=["Yes", "No"]),
     _q("pain_location", "Where are you feeling the pain?", opts=["Throat", "Tongue", "Somewhere else"], when=lambda d: d.get("has_pain") == "Yes"),
@@ -115,7 +122,7 @@ FLOW_NUTRITION = [
     _q("tube_issues", "Is the tube feeding going well — no blockages, leaks, or discomfort around the site?", opts=["Working fine", "Some issues — leaking or blockage", "Discomfort/soreness around the tube"], when=lambda d: d.get("eating_ability") == "Not eating — using a feeding tube only"),
     _q("tube_oral_sips", "Are you still able to take any sips of water or liquids by mouth at all?", opts=["Yes, small amounts", "Very occasionally for comfort", "No, nothing by mouth"], when=lambda d: d.get("eating_ability") == "Not eating — using a feeding tube only"),
     _q("weight", "What has your weight been recently? (Enter in pounds)", type="number", min_v=50, max_v=500, default_v=150),
-    _q("weight_impact", "Has any weight change been affecting how you feel or your energy levels?", opts=["Yes, I've noticed a difference", "Not really"]),
+    _q("weight_impact", "Your weight is lower than last time. Has that been affecting how you feel or your energy?", opts=["Yes, I've noticed a difference", "Not really"]),
     _q("swallowing_difficulty", "Are you having any difficulty swallowing — liquids, food, or pills?", opts=["Yes", "No"]),
     _q("swallowing_type", "Is it painful to swallow, or just mechanically difficult?", opts=["Painful to swallow", "Mechanically difficult"], when=lambda d: d.get("swallowing_difficulty") == "Yes"),
     _q("choking_with_eating", "Do you cough or choke when you eat?", opts=["Yes", "No"], when=lambda d: d.get("swallowing_difficulty") == "Yes"),
@@ -1636,7 +1643,7 @@ _openai_error: Optional[str] = None
 
 # Performance defaults: keep the common path fast.
 ENABLE_DYNAMIC_PROMPT_REWRITE = False
-ENABLE_LLM_SEMANTIC_REDUNDANCY = False
+ENABLE_LLM_SEMANTIC_REDUNDANCY = True
 ENABLE_FULL_PIPELINE_FOR_EXACT_STRUCTURED_OPTIONS = False
 
 if OPENAI_API_KEY:
@@ -1759,6 +1766,15 @@ def voice_widget(key_suffix: str, label: str = "Speak your answer") -> Optional[
 # ══════════════════════════════════════════════════════════════════
 
 def _step_is_relevant(topic_key: str, step: dict, data: dict, raw_answers: Optional[dict] = None) -> bool:
+    if topic_key == "nutrition" and step.get("id") == "weight_impact":
+        current_weight = _safe_float(data.get("weight"))
+        prior_weight = _safe_float(
+            st.session_state.get("last_checkin", {}).get("nutrition", {}).get("weight")
+        )
+        if current_weight is None or prior_weight is None:
+            return False
+        return current_weight < prior_weight
+
     return True
 
 
@@ -1970,6 +1986,9 @@ For mode=question_rewrite:
     - This rule applies across all topics: do not narrow the same concept through a chain of micro-questions unless the form step itself clearly requires that narrower detail.
     - If recent topic history shows the assistant is circling around the same concept, rewrite the next question in the most direct single-step form possible.
     - If the patient has effectively said the symptom/problem is absent, okay, manageable, or not concerning, prefer concise wrap-up wording rather than probing for more details.
+    - If last_visit_same_question_answer is provided and is meaningfully comparable, use it to orient the wording naturally when helpful.
+    - Good uses of history: ask whether something is the same, better, worse, lower, higher, more frequent, or less frequent than last time.
+    - Do not force history into the wording when it adds no value or would sound awkward.
     - Keep the question concise and conversational.
 
 For mode=clarification:
@@ -2670,6 +2689,7 @@ FOLLOW-UP RULES:
 
 PRIOR-COMPARISON RULES:
   - You will receive last_checkin_answer for this same question when available.
+  - You should actively use comparable prior data when it exists; comparison is not optional background.
   - Compare current answer to the same question from the prior visit.
   - change_direction:
       improved       — current answer suggests less pain / better status
@@ -2686,6 +2706,7 @@ PRIOR-COMPARISON RULES:
       one short natural sentence only when the comparison adds value
       good uses: weight up/down, pain improved/worsened, symptom burden better/worse
       do NOT use for trivial yes/no comparisons like "Last time you said yes"
+  - If there is no comparable prior answer for this exact question but related prior topic data suggests a meaningful comparison, you may use that context conservatively in your reasoning.
   - patient_acknowledgment:
       optional short acknowledgment when uncertainty itself should be accepted naturally
       example: "Thanks for sharing that. It's okay if you're not sure of the exact dose."
@@ -2904,6 +2925,9 @@ RULES:
   - These rules apply across every topic and every question type. When in doubt, avoid repeating the same concept in a new wording.
   - If the patient appears okay with respect to the symptom being discussed and there is no active problem to explore, return null rather than creating another follow-up.
   - Be strict: if there is credible evidence the patient wants less questioning, return null unless the missing detail is urgent.
+  - If comparable last-visit information is provided and it helps make the question clearer, you may use it briefly to frame the question naturally.
+  - Good uses of prior history: "Is that still about the same as last time?" or "Is this lower than your usual weight?" when such wording is directly supported by the provided history.
+  - Do not mention prior history if it would sound awkward, speculative, or repetitive.
   - After a structured option answer, do not pre-ask the next formal step in different words just to sound conversational.
   - Never ask the patient to translate their own concrete answer into the form's categories. For example, after a patient says "nose", do not ask "throat, tongue, or somewhere else?" because that classification should happen internally.
   - More generally: do not ask the patient to convert a real-world answer into the app's taxonomy when the system can infer it.
@@ -2935,6 +2959,8 @@ def run_next_move_agent(
     topic_history: list[dict[str, str]],
     recent_questions: list[str],
     candidate_next_step: Optional[dict],
+    last_checkin_answer: Optional[str] = None,
+    candidate_next_step_last_answer: Optional[str] = None,
 ) -> dict:
     """
     Agent 6: Author the follow-up question in natural language.
@@ -2947,12 +2973,14 @@ def run_next_move_agent(
         "simplify": simplify,
         "recent_topic_history": topic_history,
         "recent_question_texts": recent_questions,
+        "last_checkin_answer": last_checkin_answer,
         "candidate_next_step": {
             "id": candidate_next_step.get("id"),
             "text": candidate_next_step.get("text"),
             "type": candidate_next_step.get("type"),
             "options": candidate_next_step.get("opts", []),
         } if candidate_next_step else None,
+        "candidate_next_step_last_answer": candidate_next_step_last_answer,
     }, max_tokens=120)
 
     if result and "follow_up_question" in result:
@@ -2999,6 +3027,15 @@ def _build_prior_baseline(topic_key: str) -> dict:
     # Return key fields only to keep the payload small
     keys = list(last.keys())[:10]
     return {k: str(last[k]) for k in keys}
+
+
+def _last_checkin_answer(topic_key: str, step_id: Optional[str]) -> Optional[str]:
+    if not topic_key or not step_id:
+        return None
+    value = st.session_state.get("last_checkin", {}).get(topic_key, {}).get(step_id)
+    if value is None:
+        return None
+    return str(value)
 
 
 def _build_all_topic_data() -> dict:
@@ -3059,10 +3096,15 @@ def run_agent_pipeline(
     current_raw_answer = str(raw_answer if raw_answer is not None else answer)
     session_answers = _build_session_answers(topic_key)
     prior_baseline  = _build_prior_baseline(topic_key)
+    last_step_answer = _last_checkin_answer(topic_key, step.get("id"))
     followup_count  = state.get("followup_counts", {}).get(step["id"], 0)
     topic_history = _build_topic_history(topic_key)
     recent_questions = _build_recent_question_texts(topic_key)
     candidate_next_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
+    candidate_next_step_last_answer = _last_checkin_answer(
+        topic_key,
+        candidate_next_step.get("id") if candidate_next_step else None,
+    )
     upcoming_steps = get_upcoming_steps(topic_key, state["data"], state.get("raw_answers"), limit=5)
 
     # ── STEP 1: Answer Interpreter (must run first) ────────────────
@@ -3167,6 +3209,8 @@ def run_agent_pipeline(
             step, current_raw_answer, followup_goal, tone, simplify,
             topic_history=topic_history, recent_questions=recent_questions,
             candidate_next_step=candidate_next_step,
+            last_checkin_answer=last_step_answer,
+            candidate_next_step_last_answer=candidate_next_step_last_answer,
         )
         preamble = nm_out.get("preamble") or ""
         fq = nm_out.get("follow_up_question", "")
@@ -4157,24 +4201,42 @@ def _mark_submission_once(submitted_key: str, candidate: str) -> bool:
     return True
 
 
-def _looks_like_control_signal(text: str) -> bool:
+def _looks_like_engagement_strain_signal(text: str) -> bool:
     normalized = _norm_text(text)
     if not normalized:
         return False
-    signals = (
+    explicit_control = (
         "stop", "pause", "skip", "move on", "enough", "done",
         "cant do this", "can't do this", "no more", "leave it",
+        "leave me alone", "go away", "forget it", "nevermind", "never mind",
     )
-    return any(signal in normalized for signal in signals)
+    if any(signal in normalized for signal in explicit_control):
+        return True
+
+    uncertainty = (
+        "not sure", "dont know", "don't know", "i dont know", "i don't know",
+        "idk", "maybe", "whatever", "i guess", "not really", "hard to say",
+    )
+    if any(signal in normalized for signal in uncertainty):
+        return True
+
+    # In the retry/unmatched-option path, very short non-specific replies often
+    # reflect frustration, confusion, or a wish to stop narrowing the same point.
+    token_count = len(normalized.split())
+    if token_count <= 2 and normalized not in {"yes", "no", "left", "right", "both"}:
+        return True
+
+    return False
 
 
 def _respect_patient_control_signal(topic_key: str, step: dict, candidate: str) -> bool:
     """
-    Let the existing sentiment agent intercept control-language such as
-    "stop" or "move on" before the app falls into a retry loop.
+    Let the existing sentiment agent intercept replies that may reflect
+    frustration, uncertainty, or a wish to stop/shorten the interaction
+    before the app falls into a retry loop.
     """
     text = str(candidate or "").strip()
-    if not text or not openai_client or not _looks_like_control_signal(text):
+    if not text or not openai_client or not _looks_like_engagement_strain_signal(text):
         return False
 
     state = st.session_state.topic_states[topic_key]
@@ -4282,6 +4344,8 @@ def _process_number_submission(topic_key: str, step: dict, candidate: str, submi
     try:
         value = int(float(candidate))
     except ValueError:
+        if _respect_patient_control_signal(topic_key, step, candidate):
+            return True
         st.warning("Please enter a number.")
         return True
     if value < step["min_v"] or value > step["max_v"]:
@@ -4520,6 +4584,8 @@ def handle_pending_followup(topic_key: str, answer: str, source: str = "typed"):
             try:
                 numeric_value = int(float(followup_text))
             except (TypeError, ValueError):
+                if _respect_patient_control_signal(topic_key, target_step, followup_text):
+                    return
                 _request_retry_for_step(topic_key, target_step, followup_text, source=source)
                 return
             handle_answer(
