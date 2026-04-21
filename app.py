@@ -65,12 +65,14 @@ TOPIC_INTROS = {
 }
 
 def _q(id, text, type="options", opts=None, when=None,
-       placeholder="Please describe...", min_v=0, max_v=10, default_v=0):
+       placeholder="Please describe...", min_v=0, max_v=10, default_v=0,
+       suggestions=None):
     return {
         "id": id, "text": text, "type": type,
         "opts": opts or [], "when": when,
         "placeholder": placeholder,
         "min_v": min_v, "max_v": max_v, "default_v": default_v,
+        "suggestions": suggestions or [],
     }
 
 def _safe_int(val, default=0):
@@ -4029,21 +4031,17 @@ def _quick_reply_suggestions(topic_key: str, state: dict, step: dict) -> list[st
         return []
     if step.get("type") not in {"free_text", "number"}:
         return []
-    cache = state.setdefault("generated_quick_replies", {})
-    cached = cache.get(step["id"])
-    if isinstance(cached, list):
-        return cached
 
-    result = run_quick_reply_suggester_agent(
-        step,
-        topic_history=_recent_topic_history(state),
-        recent_questions=_recent_topic_questions(state),
-    )
-    suggestions = result.get("suggestions", []) if isinstance(result, dict) else []
-    if not isinstance(suggestions, list):
-        suggestions = []
-    cache[step["id"]] = suggestions
-    return suggestions
+    explicit = step.get("suggestions")
+    if not isinstance(explicit, (list, tuple)):
+        return []
+
+    cleaned = []
+    for item in explicit:
+        text = str(item or "").strip()
+        if text:
+            cleaned.append(text)
+    return cleaned
 
 
 def _mark_submission_once(submitted_key: str, candidate: str) -> bool:
