@@ -2321,21 +2321,17 @@ TASK 1 — CLASSIFY THE ANSWER
 
 First: if expected_answer_type is not "any", check whether the patient answered
 the right kind of thing. If they gave timing when asked for location, or a body
-part when asked for a severity number, that is a type_mismatch. Return that and
-explain the mismatch clearly in reasoning.
+part when asked for a severity number, that is a type_mismatch.
 
-If the type is correct, find the best match from these categories:
+If the type is correct, decide whether the answer is meaningful for this question.
 
-  exact    — word-for-word match ignoring capitalisation and minor punctuation
-  semantic — answer clearly means the same as one option in natural language
+If options exist, find the closest matching option when possible.
+  Accept: exact wording, natural-language equivalents, typos, shorthand,
+  speech-to-text substitutions, and clear synonyms.
     Accept: "yeah / yep / yup / sure" → Yes
     Accept: "nope / nah / not really / no issues / fine" → No
-    Accept: typos, synonyms, speech-to-text phonetic substitutions
     Accept: any recognisable body part, medication name, or food as a valid answer
     Accept: numbers within a range as matching the appropriate range option
-  no_match — genuinely ambiguous between two specific options, or unrelated
-  off_topic — answer has nothing to do with the question at all
-  invalid  — empty string or pure gibberish
 
 Use recent_topic_history to understand short contextual replies.
 "yes", "that one", "same as before" — resolve against what was just discussed.
@@ -2351,13 +2347,12 @@ Do not rephrase, abbreviate, or paraphrase it. If nothing matches, set it to nul
 
 Return only this JSON — no other text:
 {{
-  "match_type": "exact|semantic|no_match|type_mismatch|off_topic|invalid",
+  "is_meaningful_for_question": false,
   "matched_option": null,
-  "confidence": 0.0,
-  "candidates": [],
+  "confidence": "high|somewhat|low",
+  "off_topic": false,
   "distress_flag": false,
-  "urgency_flag": false,
-  "reasoning": "One sentence explaining the classification decision."
+  "urgency_flag": false
 }}
 """
 
@@ -2372,13 +2367,17 @@ def run_answer_interpreter(
     Control logic enforced in Python. Model only handles language judgment.
     """
     default = {
-        "match_type": "no_match", "matched_option": None, "confidence": 0.0,
-        "candidates": [], "distress_flag": False, "urgency_flag": False,
-        "reasoning": "Agent unavailable.",
+        "match_type": "no_match",
+        "matched_option": None,
+        "confidence": "low",
+        "is_meaningful_for_question": False,
+        "off_topic": False,
+        "distress_flag": False,
+        "urgency_flag": False,
     }
 
     if not patient_answer.strip():
-        return {**default, "match_type": "invalid", "reasoning": "Empty answer."}
+        return {**default, "match_type": "invalid", "off_topic": False}
 
     opts = step.get("opts", [])
     question_type = step.get("type", "options")
@@ -2393,8 +2392,8 @@ def run_answer_interpreter(
                 **default,
                 "match_type": "exact",
                 "matched_option": opt,
-                "confidence": 1.0,
-                "reasoning": "Exact match after normalisation.",
+                "confidence": "high",
+                "is_meaningful_for_question": True,
             }
 
     if not openai_client:
@@ -2412,44 +2411,47 @@ def run_answer_interpreter(
     if not result:
         return default
 
-    match_type = result.get("match_type", "no_match")
+    confidence = str(result.get("confidence", "low")).strip().lower()
+    if confidence not in {"high", "somewhat", "low"}:
+        confidence = "low"
+
     mo = result.get("matched_option")
-    confidence = result.get("confidence", 0.0)
+    meaningful = bool(result.get("is_meaningful_for_question", False))
+    off_topic = bool(result.get("off_topic", False))
 
     if mo and question_type != "multi_select":
         if mo not in opts:
             mo = None
-            match_type = "no_match"
-            result["reasoning"] = (
-                result.get("reasoning", "")
-                + " [matched_option rejected — not verbatim from options list]"
-            )
+            meaningful = False
 
     if (
-        match_type == "no_match"
+        not meaningful
         and catchall_option
-        and match_type not in ("type_mismatch", "off_topic", "invalid")
-        and confidence >= 0.25
+        and not off_topic
+        and confidence in {"high", "somewhat"}
         and expected_type in ("location", "any")
     ):
         mo = catchall_option
-        match_type = "semantic"
-        confidence = 0.85
-        result["reasoning"] = (
-            result.get("reasoning", "")
-            + f" [catch-all '{catchall_option}' applied by code rule]"
-        )
+        meaningful = True
+        confidence = "high"
 
     if question_type == "multi_select":
         if isinstance(mo, str):
             mo = [mo]
         mo = [m for m in (mo or []) if m in opts] or None
-        if mo:
-            match_type = "exact" if len(mo) > 0 else "no_match"
+        meaningful = bool(mo)
+
+    match_type = "off_topic" if off_topic else "no_match"
+    if meaningful:
+        match_type = "semantic" if mo else "exact"
+    if question_type == "multi_select" and mo:
+        match_type = "exact"
 
     result["match_type"] = match_type
     result["matched_option"] = mo
     result["confidence"] = confidence
+    result["is_meaningful_for_question"] = meaningful
+    result["off_topic"] = off_topic
 
     return {**default, **result}
 
@@ -2523,9 +2525,9 @@ Do not write the patient-facing message text in your output.
 
 Return only this JSON — no other text:
 {{
+  "urgency_flag": false,
   "safety_level": 0,
-  "new_signals": [],
-  "reason": null,
+  "confidence": "high|somewhat|low",
   "message_key": null
 }}
 """
@@ -2546,7 +2548,10 @@ def run_urgency_agent(
     Control logic (message lookup, keep_going, signal accumulation) enforced in code.
     """
     default = {
-        "safety_level": 0, "new_signals": [], "reason": None,
+        "urgency_flag": False,
+        "safety_level": 0,
+        "confidence": "low",
+        "new_signals": [],
         "message_key": None, "patient_message": None, "keep_going": True,
     }
 
@@ -2580,9 +2585,10 @@ def run_urgency_agent(
 
     return {
         **default,
+        "urgency_flag": level >= 2,
         "safety_level": level,
+        "confidence": str(result.get("confidence", "low")).strip().lower() if result.get("confidence") else "low",
         "new_signals": result.get("new_signals", []),
-        "reason": result.get("reason"),
         "message_key": message_key,
         "patient_message": patient_message,
         "keep_going": keep_going,
@@ -2594,11 +2600,11 @@ def run_urgency_agent(
 # ══════════════════════════════════════════════════════════════════
 
 _SENTIMENT_SYS = f"""
-You monitor patient emotional state and engagement for a clinical chatbot used by
+You monitor patient engagement for a clinical chatbot used by
 head and neck cancer patients. {_HNC_CONTEXT}
 
 You do not make safety decisions — the Urgency Agent handles those.
-Your outputs tell the other agents how to adapt their tone and follow-up behavior.
+Keep your output minimal and direct.
 
 You will receive resistance_detection_active in the input. If it is false,
 do not flag E3_resistance regardless of what you observe in the answer.
@@ -2611,70 +2617,34 @@ Emotional flooding (unusually long, distressed answers) needs a warm acknowledgm
 before the next question is asked.
 
 ---
-EMOTIONAL STATE — pick one:
-  positive, neutral, fatigued, distressed, frustrated, anxious, overwhelmed, resigned
-
 ENGAGEMENT LEVEL — pick one:
-  high, moderate, low, resistant, confused
-
-ENGAGEMENT TREND — pick one:
-  stable, improving, declining, not enough information yet
+  high, somewhat, low
 
 ---
-SIGNALS TO DETECT — set to true only if clearly present in this answer:
+DETECT THESE ONLY IF CLEARLY PRESENT IN THIS ANSWER:
 
-E3_resistance:
-  Patient is explicitly pushing back on being questioned — "I already told you that",
-  "can we be done with this", or terse dismissive replies after the chatbot has
-  probed the same topic area multiple times in a row. A short factual answer or
-  a brief negative screen ("no", "fine") does not count as resistance.
-
-E7_wants_to_stop:
+wants_to_stop:
   Patient is directing the INTERVIEW ITSELF to stop, pause, or move on.
   Counts: "I'm done answering", "skip this section", "stop asking me", "can we move on".
   Does NOT count: "make the pain stop", "I want this treatment to be over",
   "I wish this would end" — those refer to their physical situation, not the chat.
   When the language is ambiguous between the interview and their situation, do not flag.
 
-EM1_pain_frustration: patient venting about ongoing pain beyond just reporting it
-EM2_sadness_grief: expressing loss or grief about what they can no longer do
-EM6_emotional_flooding: answer is unusually long and emotionally intense
+needs_warmth:
+  true only if this answer is clearly emotionally heavy and the next question
+  should be softened with a short warm line first.
 
----
-ADAPTATION OUTPUTS:
-
-tone: standard | warm | gentle | simplified
-  standard   — patient seems calm, neutral, or positive
-  warm       — patient seems tired or anxious
-  gentle     — patient seems distressed or overwhelmed
-  simplified — patient seems confused or cognitively exhausted
-
-If EM1, EM2, or EM6 is present in THIS answer (not a prior one):
-  say_something_warm_first = true
-  warm_message: 25 words or less. Responds to how the patient FEELS.
-    Good: "That sounds really hard to carry. Thank you for sharing that."
-    Bad:  "I see you reported severe pain and difficulty eating." (that is clinical data)
+warm_message:
+  Use only if needs_warmth=true. Maximum 20 words.
+  Respond to how the patient feels, not to the clinical facts.
 
 Return only this JSON — no other text:
 {{
-  "emotional_state": "neutral",
-  "engagement_level": "moderate",
-  "engagement_trend": "not enough information yet",
-  "signals": {{
-    "E3_resistance": false,
-    "E7_wants_to_stop": false,
-    "EM1_pain_frustration": false,
-    "EM2_sadness_grief": false,
-    "EM6_emotional_flooding": false
-  }},
-  "adaptation": {{
-    "tone": "standard",
-    "say_something_warm_first": false,
-    "warm_message": null,
-    "simplify_next_question": false,
-    "reduce_follow_up": false
-  }},
-  "note_for_doctor": null
+  "engagement_level": "somewhat",
+  "confidence": "high|somewhat|low",
+  "wants_to_stop": false,
+  "needs_warmth": false,
+  "warm_message": null
 }}
 """
 
@@ -2693,8 +2663,10 @@ def run_sentiment_agent(
     Resistance detection threshold enforced in code.
     """
     default = {
-        "emotional_state": "neutral", "engagement_level": "moderate",
+        "emotional_state": "neutral", "engagement_level": "high",
         "engagement_trend": "not enough information yet",
+        "engagement_confidence": "low",
+        "wants_to_stop": False,
         "signals": {
             "E3_resistance": False, "E7_wants_to_stop": False,
             "EM1_pain_frustration": False, "EM2_sadness_grief": False,
@@ -2735,17 +2707,29 @@ def run_sentiment_agent(
             "engagement_note_for_doctor": default["note_for_doctor"],
         }
 
-    if not resistance_detection_active:
-        result.setdefault("signals", {})["E3_resistance"] = False
+    level = str(result.get("engagement_level", "high")).strip().lower()
+    if level not in {"high", "somewhat", "low"}:
+        level = "high"
+    confidence = str(result.get("confidence", "low")).strip().lower()
+    if confidence not in {"high", "somewhat", "low"}:
+        confidence = "low"
+    wants_to_stop = bool(result.get("wants_to_stop", False))
+    needs_warmth = bool(result.get("needs_warmth", False))
+    warm_message = result.get("warm_message")
 
     merged = {**default}
-    for key in ("emotional_state", "engagement_level", "engagement_trend", "note_for_doctor"):
-        if key in result:
-            merged[key] = result[key]
-    if "signals" in result and isinstance(result["signals"], dict):
-        merged["signals"] = {**default["signals"], **result["signals"]}
-    if "adaptation" in result and isinstance(result["adaptation"], dict):
-        merged["adaptation"] = {**default["adaptation"], **result["adaptation"]}
+    merged["engagement_level"] = level
+    merged["engagement_confidence"] = confidence
+    merged["wants_to_stop"] = wants_to_stop
+    merged["signals"]["E7_wants_to_stop"] = wants_to_stop
+    merged["signals"]["E3_resistance"] = resistance_detection_active and level == "low" and not wants_to_stop
+    merged["adaptation"]["say_something_warm_first"] = needs_warmth
+    merged["adaptation"]["warm_message"] = warm_message if needs_warmth else None
+    merged["adaptation"]["tone"] = "gentle" if level == "low" else ("warm" if level == "somewhat" else "standard")
+    merged["adaptation"]["simplify_next_question"] = level != "high"
+    merged["adaptation"]["reduce_follow_up"] = level != "high" or wants_to_stop
+    merged["emotional_state"] = "distressed" if level == "low" else ("anxious" if level == "somewhat" else "neutral")
+    merged["engagement_trend"] = "declining" if level != "high" else "stable"
 
     merged["engagement_trajectory"] = merged.get("engagement_trend", "not enough information yet")
     merged["engagement_note_for_doctor"] = merged.get("note_for_doctor")
@@ -2760,83 +2744,31 @@ _DOCTOR_RELEVANCE_SYS = f"""
 You evaluate a patient's answer from a physician's perspective for a clinical
 chatbot serving head and neck cancer patients. {_HNC_CONTEXT}
 
+Keep the output minimal.
+
 You will receive candidate_next_step_covers_gap (boolean, pre-computed by the system).
 If true, the next scheduled question already asks for the missing detail — do not
 recommend a custom follow-up.
 
-YOUR THREE TASKS:
+Return only the simplest clinically useful decision:
+  - answer_complete: true if the answer is enough for this question
+  - recommend_follow_up: true only if an important detail is still missing
+  - follow_up_goal: a short description of the missing detail, not a question
+  - priority: high / medium / low
+  - patient_note: short sentence only if useful to show the patient
+  - doctor_note: short factual sentence only if useful for the report
+  - skip: whether the next planned question should be skipped
+  - flags.medication_stopped: true only if clearly present
 
-TASK 1 — CLINICAL COMPLETENESS
-  Decide whether this answer gives a doctor what they need to understand
-  the patient's status on this specific question.
-
-  answer_completeness: complete / partial / none
-
-  If partial or none, describe what is missing in what_is_missing.
-  Describe the information gap, not the question to ask.
-    Good: "Numeric severity score — patient described pain without rating it."
-    Bad:  "Ask the patient to rate their pain on a scale of 0 to 10."
-
-  Only set recommend_follow_up = true when ALL of the following are true:
-    — answer_completeness is partial or none
-    — candidate_next_step_covers_gap is false
-    — the patient gave a real answer (not a negative screen like "no" or "I'm fine")
-    — the missing detail is clinically meaningful, not just completionist
-
-TASK 2 — PRIOR VISIT COMPARISON
-  Compare to last_checkin_answer when it is provided.
-  change_direction: improved / worsened / neutral_change / no_change / no_prior_data
-  change_size:      large / moderate / small / none
-    For numbers: large = 3+ difference, moderate = 2, small = 1, none = 0
-
-  patient_comparison_note: one short sentence, only when genuinely useful to the patient.
-  Good uses: weight trend, pain trajectory, meaningful symptom change.
-  Do not write this for trivial yes/no comparisons.
-
-TASK 3 — DOCTOR NOTE
-  Maximum 35 words. Third person. Factual only.
-  Based only on what the patient explicitly said — do not infer, extrapolate,
-  or add clinical conclusions not present in their actual answers.
-  When uncertain, use the patient's own words in quotation marks.
-
-SKIP LOGIC
-  If the patient's current answer makes the next planned question unnecessary,
-  set skip.skip = true and provide auto_fill_answer (usually "No").
-  Use carry_forward when the patient's answer already contains the exact text
-  a later free-text question would ask for.
-  List additional steps to skip in also_skip — maximum 3 entries.
-
-  Good skip examples:
-    Patient denies anxiety → skip "Is anxiety affecting your sleep?" with "No"
-    Patient says "my nose hurts" → skip "which body part?" carry forward "nose"
-    Patient says medication is helping → skip "would you adjust frequency?" with "No"
-
-  Do not skip structurally essential questions: first severity rating for an
-  active symptom, new symptom location on first report, safety screening.
-
-FLAGS — set if clearly present:
-  trajectory_mismatch:          patient says improving but data shows worsening
-  medication_stopped:           stopped a prescription without explanation
-  medication_making_things_worse: medication is worsening their symptoms
-  underreporting_severity:      low rating but severe functional impact described
-  negative_screen:              answer effectively rules out this whole symptom area
+Keep follow_up_goal and notes short. Do not add extra explanation.
 
 Return only this JSON — no other text:
 {{
-  "answer_completeness": "complete|partial|none",
-  "clinical_value": 0.0,
+  "answer_complete": true,
   "recommend_follow_up": false,
-  "what_is_missing": null,
-  "patient_note": null,
-  "has_prior_data": false,
-  "prior_answer": null,
-  "change_detected": false,
-  "change_direction": "no_prior_data",
-  "change_size": "none",
-  "clinical_note": null,
-  "patient_comparison_note": null,
-  "change_significance": "no_baseline",
+  "follow_up_goal": null,
   "priority": "medium",
+  "patient_note": null,
   "doctor_note": null,
   "skip": {{
     "skip": false,
@@ -2845,11 +2777,7 @@ Return only this JSON — no other text:
     "also_skip": []
   }},
   "flags": {{
-    "trajectory_mismatch": false,
-    "medication_stopped": false,
-    "medication_making_things_worse": false,
-    "underreporting_severity": false,
-    "negative_screen": false
+    "medication_stopped": false
   }}
 }}
 """
@@ -2874,22 +2802,18 @@ def run_doctor_relevance(
     Agent only performs language judgment tasks.
     """
     default = {
-        "answer_completeness": "complete", "clinical_value": 0.7,
-        "recommend_follow_up": False, "what_is_missing": None,
-        "patient_note": None, "has_prior_data": False,
-        "prior_answer": None, "change_detected": False,
-        "change_direction": "no_prior_data", "change_size": "none",
-        "clinical_note": None, "patient_comparison_note": None,
-        "change_significance": "no_baseline", "priority": "medium",
+        "answer_complete": True,
+        "recommend_follow_up": False,
+        "follow_up_goal": None,
+        "priority": "medium",
+        "patient_note": None,
         "doctor_note": None,
         "skip": {
             "skip": False, "auto_fill_answer": None,
             "carry_forward": None, "also_skip": [],
         },
         "flags": {
-            "trajectory_mismatch": False, "medication_stopped": False,
-            "medication_making_things_worse": False,
-            "underreporting_severity": False, "negative_screen": False,
+            "medication_stopped": False,
         },
     }
 
@@ -2920,10 +2844,7 @@ def run_doctor_relevance(
             prior_answer = str(raw)
 
     if not openai_client:
-        merged = {**default}
-        merged["has_prior_data"] = bool(prior_answer)
-        merged["prior_answer"] = prior_answer
-        return merged
+        return {**default}
 
     result = _call_agent(_DOCTOR_RELEVANCE_SYS, {
         "question_text": step.get("text", ""),
@@ -2943,14 +2864,11 @@ def run_doctor_relevance(
     }, max_tokens=380)
 
     if not result:
-        merged = {**default}
-        merged["has_prior_data"] = bool(prior_answer)
-        merged["prior_answer"] = prior_answer
-        return merged
+        return {**default}
 
     if force_no_followup:
         result["recommend_follow_up"] = False
-        result["what_is_missing"] = None
+        result["follow_up_goal"] = None
 
     skip_block = result.get("skip", {})
     if isinstance(skip_block.get("also_skip"), list):
@@ -2961,8 +2879,6 @@ def run_doctor_relevance(
         merged["skip"] = {**default["skip"], **result["skip"]}
     if "flags" in result and isinstance(result["flags"], dict):
         merged["flags"] = {**default["flags"], **result["flags"]}
-    merged["has_prior_data"] = bool(prior_answer)
-    merged["prior_answer"] = prior_answer
     return merged
 
 
@@ -2975,7 +2891,7 @@ You write one follow-up question for a symptom check-in chatbot used by head and
 neck cancer patients. {_HNC_CONTEXT}
 
 The decision to ask a follow-up has already been made by another agent.
-Your only job is to write one natural, conversational question.
+Your only job is to write one short natural question.
 
 You will receive:
   follow_up_goal:            what information is still needed (not the question)
@@ -2984,7 +2900,6 @@ You will receive:
   recent_topic_history:      recent back-and-forth in this topic
   recent_question_texts:     questions already asked recently
   candidate_next_step_text:  the next scheduled question (avoid duplicating it)
-  last_checkin_answer:       patient's answer to this question at last visit (may be null)
 
 TONE PROFILES:
   standard   — professional, warm, clear
@@ -3007,20 +2922,9 @@ WRITE THE QUESTION SO THAT IT:
 If follow_up_goal substantially overlaps with candidate_next_step_text,
 return null — the scheduled question will handle it.
 
-If last_checkin_answer is provided and referencing it would make the question
-feel more natural, use it briefly. Good: "Is that about the same as last time?"
-Skip it if it would sound forced or awkward.
-
-intro: add a brief transitional phrase (10 words maximum) only when:
-  — the patient expressed emotion in their answer, AND
-  — jumping straight to the question would feel abrupt
-Good: "I hear you." / "That makes sense." / "Thanks for telling me."
-Do not add an intro after factual or neutral answers.
-
 Return only this JSON — no other text:
 {{
-  "question": null,
-  "intro": null
+  "question": null
 }}
 """
 
@@ -3055,7 +2959,7 @@ def run_next_move_agent(
     Agent 5: Write the follow-up question in natural language.
     Urgency gate and duplicate-question check enforced in code.
     """
-    null_result = {"question": None, "intro": None}
+    null_result = {"question": None}
 
     if urgency_tier >= 2:
         return null_result
@@ -3065,7 +2969,7 @@ def run_next_move_agent(
         tone_profile = "standard"
 
     if not openai_client:
-        return {"question": "Could you tell me a bit more about that?", "intro": None}
+        return {"question": "Could you tell me a bit more about that?"}
 
     result = _call_agent(_NEXT_MOVE_SYS, {
         "original_question": step.get("text", ""),
@@ -3076,7 +2980,6 @@ def run_next_move_agent(
         "recent_topic_history": topic_history,
         "recent_question_texts": recent_questions,
         "candidate_next_step_text": candidate_next_step.get("text") if candidate_next_step else None,
-        "last_checkin_answer": last_checkin_answer,
     }, max_tokens=90)
 
     if not result or not result.get("question"):
@@ -3092,7 +2995,7 @@ def run_next_move_agent(
         ):
             return null_result
 
-    return {"question": result.get("question"), "intro": result.get("intro")}
+    return {"question": result.get("question")}
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -3168,6 +3071,7 @@ def run_agent_pipeline(
     raw_answer: Optional[str],
     state: dict,
     last_topic_data: dict,
+    source: str = "typed",
 ) -> dict:
     """
     Orchestrator: coordinates all agents.
@@ -3199,6 +3103,7 @@ def run_agent_pipeline(
 
     active_urgency_sigs = st.session_state.get("urgency_state", {}).get("all_signals", [])
     active_sentiment_sigs = st.session_state.get("sentiment_state", {}).get("all_signals", [])
+    should_run_sentiment = source in {"typed", "voice", "free_text"}
 
     urgency_out = {}
     sentiment_out = {}
@@ -3210,6 +3115,27 @@ def run_agent_pipeline(
         )
 
     def _run_sentiment():
+        if not should_run_sentiment:
+            return {
+                "emotional_state": "neutral",
+                "engagement_level": "high",
+                "engagement_trend": "stable",
+                "engagement_trajectory": "stable",
+                "engagement_confidence": "high",
+                "wants_to_stop": False,
+                "signals": {
+                    "E3_resistance": False, "E7_wants_to_stop": False,
+                    "EM1_pain_frustration": False, "EM2_sadness_grief": False,
+                    "EM6_emotional_flooding": False,
+                },
+                "adaptation": {
+                    "tone": "standard", "say_something_warm_first": False,
+                    "warm_message": None, "simplify_next_question": False,
+                    "reduce_follow_up": False,
+                },
+                "note_for_doctor": None,
+                "engagement_note_for_doctor": None,
+            }
         return run_sentiment_agent(
             step, current_raw, session_answers, active_sentiment_sigs,
             question_count, topic_history=topic_history,
@@ -3247,12 +3173,16 @@ def run_agent_pipeline(
     sigs = sentiment_out.get("signals", {})
     reduce = adapt.get("reduce_follow_up", False)
     wants_stop = sigs.get("E7_wants_to_stop", False)
+    if should_run_sentiment and _engagement_stop_now(sentiment_out):
+        wants_stop = True
+        reduce = True
+        sentiment_out.setdefault("signals", {})["E7_wants_to_stop"] = True
     dr_recommends = dr_out.get("recommend_follow_up", False)
-    followup_goal = dr_out.get("what_is_missing", "")
+    followup_goal = dr_out.get("follow_up_goal", "")
     priority = dr_out.get("priority", "medium")
 
     force_followup = False
-    if step.get("type") == "number" and dr_out.get("answer_completeness") != "complete":
+    if step.get("type") == "number" and not dr_out.get("answer_complete", True):
         force_followup = True
     if dr_out.get("flags", {}).get("medication_stopped") and followup_count == 0:
         force_followup = True
@@ -3268,7 +3198,6 @@ def run_agent_pipeline(
     do_follow_up = (force_followup or dr_recommends) and not suppress
 
     follow_up_question = ""
-    follow_up_intro = ""
     if do_follow_up and followup_goal:
         tone = adapt.get("tone", "standard")
         simplify = adapt.get("simplify_next_question", False)
@@ -3281,15 +3210,12 @@ def run_agent_pipeline(
             urgency_tier=tier,
         )
         follow_up_question = nm_out.get("question") or ""
-        follow_up_intro = nm_out.get("intro") or ""
         if not follow_up_question:
             do_follow_up = False
 
     assistant_message = ""
     if not do_follow_up:
-        change_dir = dr_out.get("change_direction", "no_prior_data")
-        prev_answer = dr_out.get("prior_answer", "")
-        patient_note = (dr_out.get("patient_comparison_note") or "").strip()
+        patient_note = (dr_out.get("patient_note") or "").strip()
         emotional = sentiment_out.get("emotional_state", "neutral")
 
         if adapt.get("say_something_warm_first") and adapt.get("warm_message"):
@@ -3300,10 +3226,6 @@ def run_agent_pipeline(
             assistant_message = "That sounds really difficult. I've made a note for your care team."
         elif emotional in ("anxious", "overwhelmed"):
             assistant_message = "I hear you — I've noted that for your care team."
-        elif change_dir == "worsened" and prev_answer:
-            assistant_message = "I've noted that, and I can see things have been harder than last time."
-        elif change_dir == "improved":
-            assistant_message = "That's helpful to know — it sounds like there's been some improvement."
         else:
             assistant_message = _default_chatty_reply(topic_key, answer, step, last_topic_data)
 
@@ -3326,14 +3248,12 @@ def run_agent_pipeline(
         compat_next_step_action = {
             "skip_immediate_next_step": bool(skip_action.get("skip")),
             "suggested_answer": skip_action.get("auto_fill_answer"),
-            "reason": None,
             "carry_forward_answer": skip_action.get("carry_forward"),
             "plan": [
                 {
                     "step_id": step_id,
                     "suggested_answer": None,
                     "carry_forward_answer": None,
-                    "reason": None,
                 }
                 for step_id in (skip_action.get("also_skip") or [])[:3]
             ],
@@ -3345,7 +3265,7 @@ def run_agent_pipeline(
         "matched_option":       matched,
         "follow_up":            do_follow_up,
         "follow_up_question":   follow_up_question,
-        "follow_up_intro":      follow_up_intro,
+        "follow_up_intro":      "",
         "acknowledgment":       acknowledgment,
         "assistant_message":    assistant_message,
         "urgency_tier":         tier,
@@ -3355,18 +3275,14 @@ def run_agent_pipeline(
         "doctor_note": dr_out.get("doctor_note"),
         "priority":             priority,
         "clinical_priority":    priority,
-        "change_significance":  dr_out.get("change_significance", "no_baseline"),
-        "change_note":          dr_out.get("clinical_note", ""),
-        "change_clinical_note": dr_out.get("clinical_note", ""),
+        "change_significance":  "no_baseline",
+        "change_note":          "",
+        "change_clinical_note": "",
         "skip_action":          skip_action,
         "flags":                flags,
         "next_step_action":     compat_next_step_action,
         "special_signals": {
-            "trajectory_mismatch": flags.get("trajectory_mismatch", False),
             "medication_stop_signal": flags.get("medication_stopped", False),
-            "aggravating_medication_signal": flags.get("medication_making_things_worse", False),
-            "severity_underreporting": flags.get("underreporting_severity", False),
-            "screen_negative_signal": flags.get("negative_screen", False),
         },
         "sentiment_note":       sentiment_out.get("note_for_doctor"),
     }
@@ -3408,7 +3324,29 @@ def _merge_sentiment_state(sentiment_out: dict):
     state["all_signals"] = list(set(existing + new_sigs))
     state["engagement_trajectory"] = sentiment_out.get("engagement_trajectory", "insufficient_data")
     state["emotional_state"] = sentiment_out.get("emotional_state", "neutral")
+    level = sentiment_out.get("engagement_level")
+    if level == "low":
+        state["engagement_low_count"] = int(state.get("engagement_low_count", 0)) + 1
+    elif level == "somewhat":
+        state["engagement_somewhat_count"] = int(state.get("engagement_somewhat_count", 0)) + 1
     st.session_state["sentiment_state"] = state
+
+
+def _engagement_stop_now(sentiment_out: dict) -> bool:
+    """
+    Hard-stop burden control:
+    - more than 2 low-engagement answers => stop
+    - more than 4 somewhat-engagement answers => stop
+    """
+    state = st.session_state.get("sentiment_state", {})
+    low_count = int(state.get("engagement_low_count", 0))
+    somewhat_count = int(state.get("engagement_somewhat_count", 0))
+    level = sentiment_out.get("engagement_level")
+
+    projected_low = low_count + (1 if level == "low" else 0)
+    projected_somewhat = somewhat_count + (1 if level == "somewhat" else 0)
+
+    return projected_low > 2 or projected_somewhat > 4
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -4116,7 +4054,6 @@ def _apply_agent_next_step_action(topic_key: str, state: dict, action: Optional[
                 "step_id": next_step.get("id"),
                 "suggested_answer": action.get("suggested_answer"),
                 "carry_forward_answer": action.get("carry_forward_answer"),
-                "reason": action.get("reason"),
             })
     for item in action.get("plan", []) or []:
         if isinstance(item, dict) and item.get("step_id"):
@@ -4844,6 +4781,7 @@ def handle_answer(
                     raw_answer=verbatim if isinstance(verbatim, str) else str(verbatim),
                     state=state,
                     last_topic_data=last_topic_data,
+                    source=source,
                 )
 
             # ── Emergency: terminate session ──────────────────────
