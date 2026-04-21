@@ -335,7 +335,7 @@ def _is_semantically_redundant_question(text_a: str, text_b: str) -> bool:
         return False
     if a == b or a in b or b in a:
         return True
-    if not openai_client:
+    if not openai_client or not ENABLE_LLM_SEMANTIC_REDUNDANCY:
         return False
     relation = run_question_relation_agent(text_a, text_b)
     return bool(relation.get("same_intent"))
@@ -1509,6 +1509,8 @@ def render_active_question(question: str, label: str = "Current question"):
 
 def _dynamic_step_text(topic_key: Optional[str], step: dict, state: Optional[dict] = None) -> str:
     question_text = step["text"]
+    if not ENABLE_DYNAMIC_PROMPT_REWRITE:
+        return question_text
     if not state or not topic_key or not openai_client:
         return question_text
 
@@ -1631,6 +1633,11 @@ def _secret(*keys, default=None):
 OPENAI_API_KEY = _secret("openai_api_key", "OPENAI_API_KEY", "openai_key")
 openai_client: Optional[OpenAI] = None
 _openai_error: Optional[str] = None
+
+# Performance defaults: keep the common path fast.
+ENABLE_DYNAMIC_PROMPT_REWRITE = False
+ENABLE_LLM_SEMANTIC_REDUNDANCY = False
+ENABLE_FULL_PIPELINE_FOR_EXACT_STRUCTURED_OPTIONS = False
 
 if OPENAI_API_KEY:
     try:
@@ -2343,7 +2350,9 @@ neck cancer patients. {_HNC_CONTEXT}
 
 You monitor patient safety. Read ALL raw answers across the session — urgency
 signals often appear in free-text not captured by structured options.
-When in doubt, flag. A false positive is far less harmful than a missed crisis.
+Be conservative about calling something urgent. Use Tier 2 only for clearly serious,
+time-sensitive problems that likely require same-day outreach. When in doubt between
+Tier 1 and Tier 2, prefer Tier 1 unless there is a strong acute-risk signal.
 
 RED FLAGS TO DETECT:
 {_RED_FLAGS}
@@ -2354,6 +2363,12 @@ TIER DEFINITIONS:
   2 — URGENT: Care team must contact patient today. Continue session.
        Show one care team message to the patient.
   3 — EMERGENCY: Immediate threat. Terminate session. Patient to emergency services.
+
+STRICT TIERING PRINCIPLE:
+  - Tier 2 should be used only for clearly acute, high-risk, or rapidly worsening problems.
+  - Moderate symptoms, expected treatment side effects, partial information, or manageable problems
+    should usually stay at Tier 0 or Tier 1.
+  - Do not use Tier 2 just because something sounds clinically important; use it only when it sounds truly urgent.
 
 SIGNAL RULES:
 
@@ -2366,33 +2381,36 @@ SIGNAL RULES:
   Medical signals:
     M1 — SEVERE UNCONTROLLED PAIN:
       Tier 1 (WATCH): Pain 7-9/10 alone, without other signals.
-      Tier 2 (URGENT): Pain 7-9/10 AND at least one of:
+      Tier 2 (URGENT): Pain 7-9/10 AND strong acute-risk evidence such as:
         - Patient states nothing helps OR medication is not working
-        - Patient cannot eat, sleep, or perform basic activities because of pain
-        - Pain is new or suddenly much worse than their baseline
+        - Patient cannot eat or drink at all because of pain
+        - Pain is suddenly much worse than baseline
         - Fever/chills present alongside severe pain
+      Tier 1 (WATCH): Pain disrupting sleep or daily activities but still sounding manageable / expected during treatment
       Tier 2 (URGENT): Pain reported as 10/10 or "worst of my life" or "unbearable"
     M2: Sudden new severe pain in head/neck — Tier 2
     M3: Fever with chills in an HNC patient (immunocompromised) — Tier 2 always
     M4: Complete inability to swallow ANY liquids — Tier 2
     M5: Breathing difficulty at rest or wheezing — Tier 2
-    M6: Prescription medication suddenly stopped — Tier 2
+    M6: Prescription medication suddenly stopped — Tier 2 only if it is clearly causing uncontrolled symptoms or creates clear immediate risk; otherwise Tier 1
     M7: Reported falls — Tier 1
-    M8: Significant functional disruption (3+ nights no sleep, cannot eat for days) — Tier 2
+    M8: Significant functional disruption (3+ nights no sleep, cannot eat for days, or similarly severe prolonged disruption) — Tier 2
   
   Psychological signals:
     P1: Explicit suicidal ideation or self-harm intent → TIER 3 ALWAYS
     P2: Passive death wish ("I don't care if I make it") → Tier 2
     P3: Crisis desperation ("I can't take this anymore" about life, not just pain) → Tier 2
-    P4: Complete isolation ("no one to help me") with high pain → Tier 2
+    P4: Complete isolation ("no one to help me") with high pain → Tier 2 only if the overall picture sounds unstable or unsafe; otherwise Tier 1
 
-  Accumulation: 3+ Tier 1 signals in same session → escalate to Tier 2.
+  Accumulation: multiple Tier 1 signals alone do NOT automatically require Tier 2 unless together they create a clearly urgent picture.
 
 IMPORTANT NON-ESCALATION GUARDRAILS:
   - Do NOT escalate just because an answer is brief, partial, or missing one detail.
   - Do NOT escalate just because the patient does not remember a dose, timing, or exact amount.
   - Do NOT escalate just because a patient reports PRN or non-daily use without saying it is prescribed daily.
   - Do NOT treat "every 2 days", "sometimes", or similar medication-use frequency by itself as urgent.
+  - Do NOT escalate expected but moderate treatment side effects to Tier 2 unless they sound severe, acute, or clearly unsafe.
+  - Do NOT escalate manageable pain, manageable nausea, manageable fatigue, or mild functional impact to Tier 2.
   - Medication adherence becomes urgent only if the patient clearly reports they stopped an important prescribed medication,
     cannot access it, or their symptoms are uncontrolled because they are missing it.
   - If the patient gives usable but incomplete information, continue normally unless another red flag is clearly present.
@@ -2481,6 +2499,7 @@ CONTEXT RULES:
   - If the assistant has asked very similar clarification questions more than once and the patient replies tersely,
     you may treat that as resistance or declining engagement.
   - Apply this consistently across every topic, not just emotional topics. Repetition-driven frustration can happen anywhere in the interview.
+  - Be strict and safety-biased about conversational burden: if there is meaningful evidence that the patient wants less questioning, treat it as real.
 
 DIMENSION SCORES:
   emotional_state: positive|neutral|fatigued|distressed|frustrated|anxious|overwhelmed|resigned
@@ -2490,7 +2509,12 @@ DIMENSION SCORES:
 SIGNALS TO DETECT (set to true if present):
   E3_resistance: patient explicitly pushes back ("I already told you", "can we be done")
     or gives terse/frustrated replies after repeated similar clarifications in the same topic
-  E7_wants_to_stop: "I need to stop", "I'm done", "I can't do this right now"
+  E7_wants_to_stop: patient clearly wants the conversation paused, stopped, or shortened
+    Examples include: "stop", "pause", "skip this", "move on", "enough", "I'm done",
+    "I need to stop", "I can't do this right now", or similarly clear control statements
+    about how the chat should continue.
+    Treat this strictly: if the patient uses short control language that reasonably sounds like ending, pausing,
+    or cutting down the questioning, prefer E7_wants_to_stop=true over continuing the interview.
   EM1_pain_frustration: venting about their pain situation
   EM2_sadness_grief: expressing loss or grief about what they can no longer do
   EM6_emotional_flooding: unusually long, distressed, emotionally dense answer
@@ -2505,6 +2529,8 @@ ADAPTATION SIGNALS:
   reduce_follow_up_depth: true if E3/E7 active or engagement declining
   - When reduce_follow_up_depth=true, this means the system should prefer the next formal question or no extra follow-up, not another custom clarification.
   - If the patient's emotional tone is calm/reassuring and their symptom report suggests they are doing okay, you may support less follow-up depth.
+  - If E7_wants_to_stop is true, the chat should pause rather than continue probing that topic.
+  - If E3_resistance is true and the current question is non-urgent, strongly favor reducing or ending further probing in that topic.
 
 Return ONLY valid JSON:
 {{
@@ -2605,6 +2631,7 @@ FOLLOW-UP RULES:
     like a clinician deciding whether anything important is still missing.
   - Follow-up should be rare. If the next formal step already gathers the missing detail, do not request a custom follow-up.
   - These follow-up rules must generalize across all topics and all question types. Do not rely on topic-specific assumptions.
+  - Be strict about reducing conversational burden: when there is evidence of frustration, resistance, or a desire to stop, bias strongly toward no follow-up.
   - A meaningful free-text answer in the patient's own words is clinically usable even if it does not match the option wording.
   - If a free-text question contains yes/no wording and the patient gives a simple "yes" or "no", treat that as minimally usable data unless the question clearly asked for a descriptive detail like where, when, how often, or what kind.
   - If the patient gave a broad but meaningful answer, break down what is missing conceptually; do NOT treat it as meaningless.
@@ -2634,6 +2661,7 @@ FOLLOW-UP RULES:
   - If a natural assistant acknowledgment has already effectively asked the next question, do not ask it again.
   - If the patient explicitly says they do not know a detail, treat that as usable uncertainty rather than pushing repeatedly.
   - If the patient appears frustrated, resistant, or terse after repeated questioning, downgrade nonessential follow-up across any topic.
+  - If the patient appears frustrated, resistant, or controlling the pace of the chat, recommend follow-up only for urgent or clearly high-value missing information.
   - If the patient provided some but not all of the detail, mark it as partial and describe the single missing detail in follow_up_goal.
   - ONLY recommend follow-up if information_completeness is "partial" or "none"
     AND follow_up_count is 0 AND the missing info is clinically meaningful
@@ -2875,6 +2903,7 @@ RULES:
   - If recent topic history suggests the patient is getting frustrated by repetition, return null rather than asking another version of the same detail
   - These rules apply across every topic and every question type. When in doubt, avoid repeating the same concept in a new wording.
   - If the patient appears okay with respect to the symptom being discussed and there is no active problem to explore, return null rather than creating another follow-up.
+  - Be strict: if there is credible evidence the patient wants less questioning, return null unless the missing detail is urgent.
   - After a structured option answer, do not pre-ask the next formal step in different words just to sound conversational.
   - Never ask the patient to translate their own concrete answer into the form's categories. For example, after a patient says "nose", do not ask "throat, tongue, or somewhere else?" because that classification should happen internally.
   - More generally: do not ask the patient to convert a real-world answer into the app's taxonomy when the system can infer it.
@@ -4128,6 +4157,59 @@ def _mark_submission_once(submitted_key: str, candidate: str) -> bool:
     return True
 
 
+def _looks_like_control_signal(text: str) -> bool:
+    normalized = _norm_text(text)
+    if not normalized:
+        return False
+    signals = (
+        "stop", "pause", "skip", "move on", "enough", "done",
+        "cant do this", "can't do this", "no more", "leave it",
+    )
+    return any(signal in normalized for signal in signals)
+
+
+def _respect_patient_control_signal(topic_key: str, step: dict, candidate: str) -> bool:
+    """
+    Let the existing sentiment agent intercept control-language such as
+    "stop" or "move on" before the app falls into a retry loop.
+    """
+    text = str(candidate or "").strip()
+    if not text or not openai_client or not _looks_like_control_signal(text):
+        return False
+
+    state = st.session_state.topic_states[topic_key]
+    session_answers = _build_session_answers(topic_key)
+    topic_history = _recent_topic_history(state)
+    recent_questions = _recent_topic_questions(state)
+    active_sentiment_signals = st.session_state.get("sentiment_state", {}).get("all_signals", [])
+    question_count = len(state.get("data", {}))
+
+    sentiment_out = run_sentiment_agent(
+        step,
+        text,
+        session_answers,
+        active_sentiment_signals,
+        question_count,
+        topic_history=topic_history,
+        recent_questions=recent_questions,
+    )
+    _merge_sentiment_state(sentiment_out)
+
+    signals = sentiment_out.get("signals", {})
+    if signals.get("E7_wants_to_stop"):
+        state["chat"].append({"role": "user", "content": text})
+        acknowledgment = sentiment_out.get("adaptation", {}).get("acknowledgment_text")
+        closing = "Of course — we'll pause here. The answers you've shared have been saved for your care team."
+        if acknowledgment:
+            closing = f"{acknowledgment}\n\n{closing}"
+        state["chat"].append({"role": "assistant", "content": closing})
+        state["status"] = "completed"
+        st.rerun()
+        return True
+
+    return False
+
+
 def _render_choice_button_grid(options: list[str], key_prefix: str) -> Optional[str]:
     if not options:
         return None
@@ -4162,6 +4244,8 @@ def _process_option_submission(
             raw_answer=candidate,
         )
     else:
+        if _respect_patient_control_signal(topic_key, step, candidate):
+            return True
         _request_retry_for_step(topic_key, step, candidate, source=source)
     return True
 
@@ -4186,6 +4270,8 @@ def _process_multiselect_submission(
             raw_answer=candidate,
         )
     else:
+        if _respect_patient_control_signal(topic_key, step, candidate):
+            return True
         _request_retry_for_step(topic_key, step, candidate, source=source)
     return True
 
@@ -4203,6 +4289,19 @@ def _process_number_submission(topic_key: str, step: dict, candidate: str, submi
         return True
     handle_answer(topic_key, step, value, source="typed")
     return True
+
+
+def _is_exact_structured_option_reply(answer: Any, raw_answer: Any, step: dict, source: str) -> bool:
+    if source != "structured":
+        return False
+    if not isinstance(answer, str):
+        return False
+    if step.get("type") != "options":
+        return False
+    raw_text = str(raw_answer if raw_answer is not None else answer).strip()
+    if not raw_text:
+        return False
+    return _norm_text(raw_text) == _norm_text(answer)
 
 
 def _store_followup_prompt(
@@ -4332,6 +4431,8 @@ def handle_pending_followup(topic_key: str, answer: str, source: str = "typed"):
                     display_override=retry_text,
                 )
                 return
+            if _respect_patient_control_signal(topic_key, source_step, retry_text):
+                return
             _request_retry_for_step(topic_key, source_step, retry_text, source=source)
             return
 
@@ -4383,6 +4484,8 @@ def handle_pending_followup(topic_key: str, answer: str, source: str = "typed"):
                     raw_answer=followup_text,
                     display_override=followup_text,
                 )
+                return
+            if _respect_patient_control_signal(topic_key, target_step, followup_text):
                 return
             _request_retry_for_step(topic_key, target_step, followup_text, source=source)
             return
@@ -4539,6 +4642,22 @@ def handle_answer(
     state["status"] = "in_progress"
 
     last_topic_data = st.session_state.last_checkin.get(topic_key, {})
+
+    if (
+        _is_exact_structured_option_reply(answer, verbatim, step, source)
+        and not ENABLE_FULL_PIPELINE_FOR_EXACT_STRUCTURED_OPTIONS
+    ):
+        if topic_is_complete(topic_key, state["data"], state.get("raw_answers")):
+            state["status"] = "completed"
+            state["chat"].append({
+                "role": "assistant",
+                "content": "✅ Thank you — I have everything I need for this topic.",
+            })
+            st.rerun()
+            return
+        _append_next_question(topic_key, state, next_step)
+        st.rerun()
+        return
 
     # ══════════════════════════════════════════════════════════════
     # BRANCH A — Structured non-string answers (fast path)
