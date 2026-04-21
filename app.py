@@ -1972,7 +1972,9 @@ For mode=quick_replies:
     - For number questions, suggestions must be numeric strings within range.
     - For free-text questions, keep suggestions short and natural, like something a patient would actually tap.
     - Prefer suggestions that help the patient answer quickly, not a full exhaustive list.
-    - If no helpful suggestions are obvious, return an empty list.
+    - For free-text or number questions without predefined options, always return 2 to 4 suggestions.
+    - Use examples from the placeholder text when they fit.
+    - If the best suggestions are uncertain, simple options like "not sure" are acceptable.
 
 Return ONLY valid JSON with the fields needed for the mode:
 {
@@ -4024,6 +4026,109 @@ def _resolve_next_step(topic_key: str, state: dict) -> Optional[dict]:
     return get_next_step(topic_key, state["data"], state.get("raw_answers"))
 
 
+def _clean_quick_reply_list(items: list[Any], max_items: int = 4) -> list[str]:
+    cleaned = []
+    seen = set()
+    for item in items:
+        text = str(item or "").strip()
+        if not text:
+            continue
+        key = _norm_text(text)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        cleaned.append(text)
+        if len(cleaned) >= max_items:
+            break
+    return cleaned
+
+
+def _placeholder_example_suggestions(step: dict) -> list[str]:
+    placeholder = str(step.get("placeholder") or "").strip()
+    if not placeholder:
+        return []
+    lowered = placeholder.lower()
+    if "e.g." in lowered:
+        example_part = placeholder[lowered.index("e.g.") + 4:]
+    elif "eg." in lowered:
+        example_part = placeholder[lowered.index("eg.") + 3:]
+    else:
+        return []
+    example_part = re.sub(r"[.…]+$", "", example_part).strip(" :.-")
+    if not example_part:
+        return []
+    parts = re.split(r",|/|;|\bor\b|\band\b", example_part)
+    return _clean_quick_reply_list(parts, max_items=4)
+
+
+def _fallback_number_quick_replies(step: dict, state: dict) -> list[str]:
+    min_v = int(step.get("min_v", 0) or 0)
+    max_v = int(step.get("max_v", 10) or 10)
+    default_v = int(step.get("default_v", min_v) or min_v)
+    question = _norm_text(f"{step.get('text', '')} {step.get('placeholder', '')}")
+
+    values: list[int] = []
+    if "weight" in question or "pound" in question or "lb" in question:
+        try:
+            prior = int((state.get("last_checkin") or {}).get(step.get("id")))
+        except (TypeError, ValueError):
+            prior = default_v
+        center = prior if prior >= min_v else default_v
+        values = [center - 5, center, center + 5]
+    elif max_v <= 10 or "scale" in question or "0 to 10" in question or "0-10" in question:
+        mid = int(round((min_v + max_v) / 2))
+        upper = min(max_v, max(mid + 3, min_v))
+        lower = max(min_v, min(mid - 2, max_v))
+        values = [lower, mid, upper]
+    else:
+        mid = int(round((min_v + max_v) / 2))
+        upper = min(max_v, max(mid + 1, min_v))
+        values = [default_v, mid, upper]
+
+    clamped = [str(min(max(v, min_v), max_v)) for v in values]
+    return _clean_quick_reply_list(clamped, max_items=4)
+
+
+def _fallback_free_text_quick_replies(step: dict, state: dict) -> list[str]:
+    placeholder_suggestions = _placeholder_example_suggestions(step)
+    if len(placeholder_suggestions) >= 2:
+        return placeholder_suggestions
+
+    question = _norm_text(f"{step.get('text', '')} {step.get('placeholder', '')}")
+    recent_answers = [
+        str(entry.get("answer") or "").strip()
+        for entry in _recent_topic_history(state)
+        if str(entry.get("speaker") or "") == "user"
+    ]
+    last_answer = recent_answers[-1] if recent_answers else ""
+
+    if any(term in question for term in ["where", "which body part", "where exactly", "located", "hurting"]):
+        base = [last_answer] if last_answer else []
+        return _clean_quick_reply_list(base + placeholder_suggestions + ["throat", "jaw", "wrist", "not sure"], max_items=4)
+    if any(term in question for term in ["when", "start", "started", "begin", "began", "how long", "since when"]):
+        return _clean_quick_reply_list(placeholder_suggestions + ["today", "yesterday", "about a week ago", "not sure"], max_items=4)
+    if any(term in question for term in ["how often", "frequency", "how many times", "how many per day"]):
+        return _clean_quick_reply_list(placeholder_suggestions + ["every day", "a few times a day", "once a day", "not sure"], max_items=4)
+    if any(term in question for term in ["what are you using", "what are you taking", "what are you doing", "manage", "management", "medication"]):
+        return _clean_quick_reply_list(placeholder_suggestions + ["nothing right now", "it helps a little", "not sure it's helping", "not sure"], max_items=4)
+    if any(term in question for term in ["who", "support", "helping support", "talk to"]):
+        return _clean_quick_reply_list(placeholder_suggestions + ["family", "friend", "caregiver", "not sure"], max_items=4)
+
+    if placeholder_suggestions:
+        return placeholder_suggestions
+    return _clean_quick_reply_list(["not sure", "about the same", "a little worse", "a few days ago"], max_items=4)
+
+
+def _fallback_quick_reply_suggestions(topic_key: str, state: dict, step: dict) -> list[str]:
+    if step.get("opts"):
+        return []
+    if step.get("type") == "number":
+        return _fallback_number_quick_replies(step, state)
+    if step.get("type") == "free_text":
+        return _fallback_free_text_quick_replies(step, state)
+    return []
+
+
 def _quick_reply_suggestions(topic_key: str, state: dict, step: dict) -> list[str]:
     if step.get("opts"):
         return []
@@ -4042,6 +4147,9 @@ def _quick_reply_suggestions(topic_key: str, state: dict, step: dict) -> list[st
     suggestions = result.get("suggestions", []) if isinstance(result, dict) else []
     if not isinstance(suggestions, list):
         suggestions = []
+    suggestions = _clean_quick_reply_list(suggestions, max_items=4)
+    if not suggestions:
+        suggestions = _fallback_quick_reply_suggestions(topic_key, state, step)
     cache[step["id"]] = suggestions
     return suggestions
 
