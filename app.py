@@ -1767,10 +1767,16 @@ def voice_widget(key_suffix: str, label: str = "Speak your answer") -> Optional[
 
 def _step_is_relevant(topic_key: str, step: dict, data: dict, raw_answers: Optional[dict] = None) -> bool:
     if topic_key == "nutrition" and step.get("id") == "weight_impact":
-        current_weight = _safe_float(data.get("weight"))
-        prior_weight = _safe_float(
-            st.session_state.get("last_checkin", {}).get("nutrition", {}).get("weight")
-        )
+        try:
+            current_weight = float(data.get("weight"))
+        except (TypeError, ValueError):
+            current_weight = None
+        try:
+            prior_weight = float(
+                st.session_state.get("last_checkin", {}).get("nutrition", {}).get("weight")
+            )
+        except (TypeError, ValueError):
+            prior_weight = None
         if current_weight is None or prior_weight is None:
             return False
         return current_weight < prior_weight
