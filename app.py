@@ -4765,6 +4765,8 @@ def _backfill_next_step_from_topic_history(topic_key: str, state: dict, next_ste
 def _quick_reply_suggestions(topic_key: str, state: dict, step: dict) -> list[str]:
     if step.get("opts"):
         return []
+    if step.get("type") not in {"free_text", "number"}:
+        return []
     cache = state.setdefault("generated_quick_replies", {})
     cached = cache.get(step["id"])
     if isinstance(cached, list):
@@ -5291,6 +5293,8 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
                         return
 
     def render_suggested_buttons(button_topic_key: str, button_step: dict):
+        if button_step.get("opts") or button_step.get("type") not in {"free_text", "number"}:
+            return
         suggestions = _quick_reply_suggestions(button_topic_key, state, button_step)
         if not suggestions:
             return
