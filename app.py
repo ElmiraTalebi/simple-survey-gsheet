@@ -40,6 +40,22 @@ def _norm_text(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).strip()
 
 
+_BODY_LOCATION_PATTERN = re.compile(
+    r"\b("
+    r"head|face|nose|ear|ears|jaw|chin|mouth|tongue|throat|neck|shoulder|arm|elbow|wrist|hand|hands|finger|fingers|"
+    r"chest|back|side|stomach|belly|abdomen|hip|leg|legs|knee|knees|ankle|ankles|foot|feet|toe|toes|rib|ribs|"
+    r"cheek|lip|lips|gum|gums|tooth|teeth|palate|scalp"
+    r")\b"
+)
+
+
+def _looks_like_body_location_phrase(text: str) -> bool:
+    normalized = _norm_text(text)
+    if not normalized:
+        return False
+    return bool(_BODY_LOCATION_PATTERN.search(normalized))
+
+
 def _is_redundant_followup(original_question: str, answer: str, followup_question: str) -> bool:
     oq = _norm_text(original_question)
     fq = _norm_text(followup_question)
@@ -1674,17 +1690,27 @@ FLOW_PAIN = [
     # Main 38 — Adherence
     _q("taking_as_prescribed",
        "Are you taking your medications as prescribed?",
-       opts=["Yes", "No"]),
+       opts=["Yes", "No"],
+       when=lambda d: (bool(d.get("pain_medications"))
+                       and "No pain medication" not in (d.get("pain_medications") or []))),
 
     _q("med_adherence_issue",
        "What is making it difficult to take your medications?",
        opts=["Side effects", "Schedule", "Access issues", "Other"],
-       when=lambda d: d.get("taking_as_prescribed") == "No"),
+       when=lambda d: (
+           d.get("taking_as_prescribed") == "No"
+           and bool(d.get("pain_medications"))
+           and "No pain medication" not in (d.get("pain_medications") or [])
+       )),
 
     _q("med_side_effects",
        "Are you experiencing any side effects from your medications?",
        opts=["Yes", "No"],
-       when=lambda d: d.get("taking_as_prescribed") == "Yes"),
+       when=lambda d: (
+           d.get("taking_as_prescribed") == "Yes"
+           and bool(d.get("pain_medications"))
+           and "No pain medication" not in (d.get("pain_medications") or [])
+       )),
 ]
 
 # ── NUTRITION & FLUIDS (Main 5, 6, 8, 25, 26, 27, 34) ─────────────
@@ -2585,6 +2611,8 @@ Rules:
   - Write one natural nurse-like question that asks for the same clinical detail.
   - Use topic history so the question feels like a direct continuation of the conversation.
   - Avoid repeating a recent question from this topic.
+  - Do not rewrite a narrower follow-up detail question back into the broader parent question.
+  - If the patient already named a specific location, medication, symptom, or person, do not turn the next question back into a generic chooser they already answered.
   - Mention last-visit history only when it genuinely helps orient the patient.
   - Never prepend awkward phrases like "Last visit you reported yes."
   - Do not imply symptoms the patient has not endorsed.
@@ -2787,6 +2815,11 @@ MATCHING RULES:
    - When a question asks for a body location, any real body part is a meaningful answer.
      Do NOT reject "hand", "head", "jaw", "neck", "arm", etc. just because it is not
      one of the named specific options.
+   - For location questions with a catch-all option such as "Somewhere else" or "Other",
+     any concrete anatomical location that is not one of the named specific options MUST
+     map to the catch-all option.
+   - This includes locations such as nose, face, cheek, scalp, lip, gums, ear, shoulder,
+     chest, back, stomach, leg, foot, or any other specific body area.
 
 3. CATCH-ALL OPTION RULE (CRITICAL) — if the options list contains a catch-all such
    as "Somewhere else", "Other", "None of these", or "Something else", AND the
@@ -2800,6 +2833,8 @@ MATCHING RULES:
        "shoulder" → "Somewhere else"
        "ear"      → "Somewhere else"
        "neck"     → "Somewhere else"
+       "nose"     → "Somewhere else"
+       "my face"  → "Somewhere else"
    - Examples for options ["Gabapentin", "Oxycodone", "Other"]:
        "Tylenol"  → "Other"
        "ibuprofen"→ "Other"
@@ -2841,6 +2876,8 @@ TOPIC-HISTORY RULES:
     or "every day almost" in context of the current question.
   - Do not treat the patient's answer as unrelated just because it is brief; use the immediate topic history.
   - Do not force a mapping if the answer is meaningful but clearly does not fit any option; prefer the catch-all option when available.
+  - If the patient already gave a concrete location, medication, food type, support source, or other real-world example,
+    preserve that meaning by mapping to the correct catch-all option instead of asking them to classify it themselves.
 
 Return ONLY valid JSON:
 {{
@@ -3229,8 +3266,13 @@ FOLLOW-UP RULES:
   - If the missing detail is something the patient reasonably may not know right now, prefer no follow-up over repetitive questioning.
   - Never imply the presence of a symptom the patient just denied.
   - You will receive recent conversation history for this topic only. Use it to avoid repeated questions.
+  - Do NOT create a custom follow-up whose only purpose is to ask the same thing as the candidate next step in different words.
+  - If the next formal step already covers the natural next question, prefer no custom follow-up and let that next step be asked once.
+  - A patient should never have to answer a natural-language version of a question and then immediately answer the form version of the same question.
+  - This is especially important after structured option answers like Yes/No or category selections: if the next formal step can ask the next needed detail directly, prefer no custom bridge follow-up.
   - If the current answer already addresses the candidate next step, set next_step_action to skip that step.
   - If several upcoming questions become unnecessary for the same reason, include them in next_step_action.plan.
+  - If the patient's raw wording already fully answers the candidate next step, skip that step and carry the raw detail forward instead of asking it again.
   - If the candidate next step, or any proposed follow-up, would substantially repeat a recent question already asked in this topic, suppress it.
   - If a natural assistant acknowledgment has already effectively asked the next question, do not ask it again.
   - ONLY recommend follow-up if information_completeness is "partial" or "none"
@@ -3251,9 +3293,11 @@ next_step_action:
   - Only use it when the candidate next step would be unnecessary, redundant, or context-mismatched given the current answer and session answers
   - Prefer suggested_answer to be an exact option from the candidate next step when obvious, often "No"
   - plan is optional and may list additional upcoming steps that should also be auto-resolved to avoid unnecessary questioning
+  - carry_forward_answer is optional and should be used when the patient's current raw answer already provides the value for a downstream step, especially a free-text detail step that would otherwise repeat the same question
   - Good examples:
     - Patient denies emotional distress and next step asks whether anxiety is affecting sleep/eating → skip with suggested_answer "No"
     - Patient denies depression or feeling down and the next questions only elaborate on mood burden or support needs → skip them unless there is another clear concern
+    - Patient answers a location chooser with a specific body part like "nose" and the next step asks which body part hurts → skip that next step and carry forward "nose"
     - Patient says a sore is not painful and next step asks whether treatment for painful sores is helping → skip with suggested_answer "No"
     - Patient says IV fluids are helping and gives no sign they want changes, and next step asks about adjusting frequency → skip with suggested_answer "No"
     - Patient says medication is not causing drowsiness and next step asks whether drowsiness is affecting schedule → skip with suggested_answer "No"
@@ -3290,10 +3334,12 @@ Return ONLY valid JSON:
     "skip_immediate_next_step": false,
     "suggested_answer": "..." or null,
     "reason": "..." or null,
+    "carry_forward_answer": "..." or null,
     "plan": [
       {{
         "step_id": "...",
         "suggested_answer": "..." or null,
+        "carry_forward_answer": "..." or null,
         "reason": "..." or null
       }}
     ]
@@ -3334,6 +3380,7 @@ def run_doctor_relevance(
             "skip_immediate_next_step": False,
             "suggested_answer": None,
             "reason": None,
+            "carry_forward_answer": None,
             "plan": [],
         },
         "special_signals": {
@@ -3417,6 +3464,9 @@ RULES:
   - You will receive recent topic history and recent question texts from this topic only
   - Do not write a question that substantially repeats any recent question in that history
   - If the candidate next step already asks the same thing, return null instead of paraphrasing it
+  - After a structured option answer, do not pre-ask the next formal step in different words just to sound conversational.
+  - Never ask the patient to translate their own concrete answer into the form's categories. For example, after a patient says "nose", do not ask "throat, tongue, or somewhere else?" because that classification should happen internally.
+  - If the patient's answer already gives a concrete real-world example, assume the system can preserve it and ask only the next clinically meaningful question.
   - If prior-comparison context is clinically useful, you may briefly reflect it in a natural way, but only as conversational context, never as a rigid template
   - Write in second person, conversational language
   - Never use medical jargon without immediate plain explanation
@@ -3526,6 +3576,7 @@ def run_agent_pipeline(
     topic_key: str,
     step: dict,
     answer: str,
+    raw_answer: Optional[str],
     state: dict,
     last_topic_data: dict,
 ) -> dict:
@@ -3556,6 +3607,7 @@ def run_agent_pipeline(
         return _pipeline_default()
 
     question_count = len(state.get("data", {}))
+    current_raw_answer = str(raw_answer if raw_answer is not None else answer)
     session_answers = _build_session_answers(topic_key)
     prior_baseline  = _build_prior_baseline(topic_key)
     followup_count  = state.get("followup_counts", {}).get(step["id"], 0)
@@ -3565,11 +3617,11 @@ def run_agent_pipeline(
     upcoming_steps = get_upcoming_steps(topic_key, state["data"], state.get("raw_answers"), limit=5)
 
     # ── STEP 1: Answer Interpreter (must run first) ────────────────
-    interp = run_answer_interpreter(step, answer, topic_history=topic_history)
+    interp = run_answer_interpreter(step, current_raw_answer, topic_history=topic_history)
     matched = interp.get("matched_option")
     distress = interp.get("distress_flag", False)
     urgency_flag = interp.get("urgency_flag", False)
-    detail_coverage = run_detail_coverage_agent(step, answer, topic_history=topic_history, recent_questions=recent_questions)
+    detail_coverage = run_detail_coverage_agent(step, current_raw_answer, topic_history=topic_history, recent_questions=recent_questions)
 
     # ── STEP 2: Run three agents in parallel ───────────────────────
     # Prior Comparison, Urgency, and Sentiment can all run at once.
@@ -3581,17 +3633,17 @@ def run_agent_pipeline(
     active_sentiment_signals = st.session_state.get("sentiment_state", {}).get("all_signals", [])
 
     def _run_prior():
-        return run_prior_comparison(step, answer, last_topic_data)
+        return run_prior_comparison(step, current_raw_answer, last_topic_data)
 
     def _run_urgency():
         return run_urgency_agent(
-            step, answer, matched, session_answers, prior_baseline,
+            step, current_raw_answer, matched, session_answers, prior_baseline,
             active_urgency_signals, distress, urgency_flag
         )
 
     def _run_sentiment():
         return run_sentiment_agent(
-            step, answer, session_answers, active_sentiment_signals, question_count
+            step, current_raw_answer, session_answers, active_sentiment_signals, question_count
         )
 
     with _futures.ThreadPoolExecutor(max_workers=3) as pool:
@@ -3620,7 +3672,7 @@ def run_agent_pipeline(
 
     # ── STEP 4: Doctor-Relevance ───────────────────────────────────
     dr_out = run_doctor_relevance(
-        step, answer, matched, prior_comp, session_answers, followup_count,
+        step, current_raw_answer, matched, prior_comp, session_answers, followup_count,
         topic_history=topic_history, recent_questions=recent_questions,
         detail_coverage=detail_coverage, candidate_next_step=candidate_next_step,
         upcoming_steps=upcoming_steps,
@@ -3655,6 +3707,14 @@ def run_agent_pipeline(
         suppress = True
     if sigs.get("E3_resistance") and priority != "high":
         suppress = True
+    if (
+        step.get("type") == "options"
+        and candidate_next_step
+        and matched in (step.get("opts") or [])
+        and dr_out.get("information_completeness") == "complete"
+        and not force_followup
+    ):
+        suppress = True
 
     do_follow_up = (force_followup or dr_recommends) and not suppress
 
@@ -3664,7 +3724,7 @@ def run_agent_pipeline(
         tone = adapt.get("tone_profile", "standard")
         simplify = adapt.get("simplify_next_question", False)
         nm_out = run_next_move_agent(
-            step, answer, followup_goal, tone, simplify,
+            step, current_raw_answer, followup_goal, tone, simplify,
             topic_history=topic_history, recent_questions=recent_questions,
             candidate_next_step=candidate_next_step,
         )
@@ -3794,6 +3854,14 @@ def interpret_user_input_with_options(step, user_input, topic_history: Optional[
     for opt in step.get("opts", []):
         if _norm_text(opt) == normalized:
             return opt
+
+    opts = step.get("opts", [])
+    if (
+        "Somewhere else" in opts
+        and _looks_like_body_location_phrase(user_input)
+        and ("where" in _norm_text(step.get("text", "")) or "location" in _norm_text(step.get("text", "")))
+    ):
+        return "Somewhere else"
 
     if not openai_client:
         return user_input
@@ -4482,6 +4550,7 @@ def _apply_agent_next_step_action(topic_key: str, state: dict, action: Optional[
             plan.append({
                 "step_id": next_step.get("id"),
                 "suggested_answer": action.get("suggested_answer"),
+                "carry_forward_answer": action.get("carry_forward_answer"),
                 "reason": action.get("reason"),
             })
     for item in action.get("plan", []) or []:
@@ -4493,25 +4562,31 @@ def _apply_agent_next_step_action(topic_key: str, state: dict, action: Optional[
         step = STEP_BY_ID.get(step_id)
         if not step or step_id in state["data"]:
             continue
-        if step.get("type") != "options":
+        if step.get("type") == "free_text":
+            carry = item.get("carry_forward_answer")
+            if isinstance(carry, str) and carry.strip():
+                value = carry.strip()
+                state["data"][step_id] = value
+                state["raw_answers"][step_id] = value
             continue
-        opts = step.get("opts", [])
-        suggested = item.get("suggested_answer")
-        chosen = None
-        if suggested in opts:
-            chosen = suggested
-        else:
-            normalized_opts = {_norm_text(opt): opt for opt in opts}
-            if "no" in normalized_opts:
-                chosen = normalized_opts["no"]
+        if step.get("type") == "options":
+            opts = step.get("opts", [])
+            suggested = item.get("suggested_answer")
+            chosen = None
+            if suggested in opts:
+                chosen = suggested
             else:
-                for opt in opts:
-                    if _norm_text(opt).startswith("no"):
-                        chosen = opt
-                        break
-        if chosen:
-            state["data"][step_id] = chosen
-            state["raw_answers"][step_id] = chosen
+                normalized_opts = {_norm_text(opt): opt for opt in opts}
+                if "no" in normalized_opts:
+                    chosen = normalized_opts["no"]
+                else:
+                    for opt in opts:
+                        if _norm_text(opt).startswith("no"):
+                            chosen = opt
+                            break
+            if chosen:
+                state["data"][step_id] = chosen
+                state["raw_answers"][step_id] = chosen
 
 
 def _apply_generic_fallback_next_step_action(topic_key: str, state: dict):
@@ -4522,6 +4597,94 @@ def _maybe_apply_prompt_driven_skip(topic_key: str, state: dict, pipeline: dict)
     return
 
 
+def _capture_rich_answer_into_next_step(
+    topic_key: str,
+    state: dict,
+    current_step: dict,
+    resolved_answer: Any,
+    raw_answer: Any,
+):
+    """
+    If a patient answers an option question with richer free text that already
+    answers the immediate next step, capture that detail now so the app does not
+    ask for it again in a different form.
+    """
+    if current_step.get("type") != "options":
+        return
+
+    raw_text = str(raw_answer or "").strip()
+    if not raw_text:
+        return
+    if isinstance(resolved_answer, str) and _norm_text(raw_text) == _norm_text(resolved_answer):
+        return
+
+    next_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
+    if not next_step or next_step.get("id") in state["data"]:
+        return
+    if next_step.get("type") != "options":
+        return
+
+    interpreted = interpret_user_input_with_options(
+        next_step,
+        raw_text,
+        topic_history=_recent_topic_history(state),
+    )
+    if interpreted not in next_step.get("opts", []):
+        return
+
+    coerced = _coerce_structured_answer(
+        topic_key,
+        next_step,
+        interpreted,
+        state["data"],
+        raw_answer=raw_text,
+    )
+    state["data"][next_step["id"]] = coerced
+    state["raw_answers"][next_step["id"]] = raw_text
+
+
+def _backfill_next_step_from_topic_history(topic_key: str, state: dict, next_step: Optional[dict]):
+    """
+    Safety net: if the next unresolved step is a location chooser with a catch-all
+    and the patient already named a concrete body part earlier in this topic,
+    resolve it internally instead of surfacing the chooser again.
+    """
+    if not next_step or next_step.get("id") in state["data"]:
+        return
+    if next_step.get("type") != "options":
+        return
+    if "Somewhere else" not in (next_step.get("opts") or []):
+        return
+    step_text = _norm_text(next_step.get("text", ""))
+    if "where" not in step_text and "location" not in step_text:
+        return
+
+    raw_answers = state.get("raw_answers", {})
+    for step_id, raw_text in reversed(list(raw_answers.items())):
+        if step_id == next_step.get("id"):
+            continue
+        text = str(raw_text or "").strip()
+        if not _looks_like_body_location_phrase(text):
+            continue
+        interpreted = interpret_user_input_with_options(
+            next_step,
+            text,
+            topic_history=_recent_topic_history(state),
+        )
+        if interpreted not in next_step.get("opts", []):
+            continue
+        coerced = _coerce_structured_answer(
+            topic_key,
+            next_step,
+            interpreted,
+            state["data"],
+            raw_answer=text,
+        )
+        state["data"][next_step["id"]] = coerced
+        state["raw_answers"][next_step["id"]] = text
+        break
+
+
 def _store_followup_prompt(
     topic_key: str,
     state: dict,
@@ -4530,6 +4693,7 @@ def _store_followup_prompt(
     assistant_message: str = "",
     retry_current_step: bool = False,
     allow_other_detail: bool = False,
+    target_step: Optional[dict] = None,
 ):
     state["waiting_for_followup"] = True
     state["pending_followup"] = {
@@ -4539,6 +4703,7 @@ def _store_followup_prompt(
         "assistant_message": assistant_message.strip(),
         "retry_current_step": retry_current_step,
         "allow_other_detail": allow_other_detail,
+        "target_step_id": target_step.get("id") if target_step else None,
     }
     combined_prompt = "\n\n".join([part for part in [assistant_message.strip(), question.strip()] if part])
     _append_assistant_message(state, combined_prompt)
@@ -4667,6 +4832,84 @@ def handle_pending_followup(topic_key: str, answer: str, source: str = "typed"):
             _request_retry_for_step(topic_key, source_step, retry_text, source=source)
             return
 
+    target_step_id = pending.get("target_step_id")
+    target_step = STEP_BY_ID.get(target_step_id) if target_step_id else None
+    if target_step:
+        state["waiting_for_followup"] = False
+        state.pop("pending_followup", None)
+
+        followup_text = (answer or "").strip()
+        if target_step["type"] == "options":
+            interpreted = interpret_user_input_with_options(
+                target_step,
+                followup_text,
+                topic_history=_recent_topic_history(state),
+            )
+            if interpreted in target_step.get("opts", []):
+                handle_answer(
+                    topic_key,
+                    target_step,
+                    interpreted,
+                    source="structured",
+                    raw_answer=followup_text,
+                    display_override=followup_text,
+                )
+                return
+            _request_retry_for_step(topic_key, target_step, followup_text, source=source)
+            return
+
+        if target_step["type"] == "multi_select":
+            parsed = parse_multi_select_typed_input(target_step, followup_text)
+            if parsed:
+                handle_answer(
+                    topic_key,
+                    target_step,
+                    parsed,
+                    source="structured",
+                    raw_answer=followup_text,
+                    display_override=followup_text,
+                )
+                return
+            if "Other" in target_step.get("opts", []) and followup_text:
+                state["data"][f"{target_step['id']}_other_detail"] = followup_text
+                handle_answer(
+                    topic_key,
+                    target_step,
+                    ["Other"],
+                    source="structured",
+                    display_override=followup_text,
+                    raw_answer=followup_text,
+                )
+                return
+            _request_retry_for_step(topic_key, target_step, followup_text, source=source)
+            return
+
+        if target_step["type"] == "number":
+            try:
+                numeric_value = int(float(followup_text))
+            except (TypeError, ValueError):
+                _request_retry_for_step(topic_key, target_step, followup_text, source=source)
+                return
+            handle_answer(
+                topic_key,
+                target_step,
+                numeric_value,
+                source="structured",
+                display_override=followup_text,
+                raw_answer=followup_text,
+            )
+            return
+
+        handle_answer(
+            topic_key,
+            target_step,
+            followup_text,
+            source="free_text",
+            raw_answer=followup_text,
+            display_override=followup_text,
+        )
+        return
+
     state["chat"].append({"role": "user", "content": answer})
     state["data"][answer_key] = answer
     pending_key = f"pending_followup_{topic_key}_{pending.get('answer_key', 'pending')}"
@@ -4749,11 +4992,20 @@ def handle_answer(
         state["data"][f"{step['id']}_other_detail"] = verbatim.strip()
     answer = _coerce_structured_answer(topic_key, step, answer, state["data"], raw_answer=raw_answer)
     state["data"][step["id"]] = answer
+    _capture_rich_answer_into_next_step(topic_key, state, step, answer, verbatim)
+    if topic_key == "pain" and step.get("id") == "pain_medications":
+        meds = answer if isinstance(answer, list) else [answer]
+        if "No pain medication" in meds:
+            for stale_id in ("med_dose_freq", "taking_as_prescribed", "med_adherence_issue", "med_side_effects"):
+                state["data"].pop(stale_id, None)
+                state["raw_answers"].pop(stale_id, None)
     if step.get("id") == "other_pain_desc":
         focus = run_pain_location_focus_agent(verbatim if isinstance(verbatim, str) else str(answer))
         state["data"]["other_pain_head_neck_focused"] = bool(focus.get("head_neck_focused"))
     if isinstance(verbatim, str) and not openai_client:
         _auto_capture_following_answers(topic_key, state, verbatim)
+    next_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
+    _backfill_next_step_from_topic_history(topic_key, state, next_step)
     next_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
     state["status"] = "in_progress"
 
@@ -4795,6 +5047,7 @@ def handle_answer(
                     topic_key=topic_key,
                     step=step,
                     answer=answer,
+                    raw_answer=verbatim if isinstance(verbatim, str) else str(verbatim),
                     state=state,
                     last_topic_data=last_topic_data,
                 )
@@ -4850,11 +5103,16 @@ def handle_answer(
                 if _is_redundant_followup(step["text"], answer, fq):
                     pass   # Fall through to assistant_message + next question
                 else:
+                    next_step_action = pipeline.get("next_step_action")
+                    if next_step_action:
+                        _apply_agent_next_step_action(topic_key, state, next_step_action)
+                        next_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
                     # Increment follow-up counter
                     fc = state["followup_counts"]
                     fc[step["id"]] = fc.get(step["id"], 0) + 1
                     _store_followup_prompt(
                         topic_key, state, step, fq, ack,
+                        target_step=next_step,
                     )
                     st.rerun()
                     return
@@ -5628,4 +5886,3 @@ elif stage == "report":
     screen_report()
 else:
     screen_login()
-
