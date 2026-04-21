@@ -4,7 +4,6 @@ import io
 import json
 import re
 import concurrent.futures as _futures
-from difflib import get_close_matches
 from datetime import datetime
 from typing import Any, Optional
 
@@ -37,42 +36,34 @@ def _extract_json_object(text: str) -> dict[str, Any]:
         return {}
 
 
-def _short_prev_answer(value: Any) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, list):
-        value = ", ".join(str(v) for v in value)
-    text = str(value).strip()
-    if len(text) > 160:
-        text = text[:157] + "..."
-    return text
-
-
 def _norm_text(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).strip()
 
 
+_BODY_LOCATION_PATTERN = re.compile(
+    r"\b("
+    r"head|face|nose|ear|ears|jaw|chin|mouth|tongue|throat|neck|shoulder|arm|elbow|wrist|hand|hands|finger|fingers|"
+    r"chest|back|side|stomach|belly|abdomen|hip|leg|legs|knee|knees|ankle|ankles|foot|feet|toe|toes|rib|ribs|"
+    r"cheek|lip|lips|gum|gums|tooth|teeth|palate|scalp"
+    r")\b"
+)
+
+
+def _looks_like_body_location_phrase(text: str) -> bool:
+    normalized = _norm_text(text)
+    if not normalized:
+        return False
+    return bool(_BODY_LOCATION_PATTERN.search(normalized))
+
+
 def _is_redundant_followup(original_question: str, answer: str, followup_question: str) -> bool:
     oq = _norm_text(original_question)
-    aq = _norm_text(answer)
     fq = _norm_text(followup_question)
     if not fq:
         return True
     if fq == oq or fq in oq or oq in fq:
         return True
-
-    answer_words = set(aq.split())
-    follow_words = set(fq.split())
-
-    location_terms = {
-        "hand", "hands", "jaw", "ear", "ears", "tongue", "throat", "mouth",
-        "neck", "face", "lip", "lips", "gum", "gums", "shoulder", "chest",
-        "arm", "arms", "leg", "legs", "back", "head",
-    }
-    if answer_words & location_terms and ("where" in follow_words or "located" in follow_words):
-        return True
-
-    return False
+    return _is_semantically_redundant_question(original_question, followup_question)
 
 
 def _is_semantically_redundant_question(text_a: str, text_b: str) -> bool:
@@ -82,132 +73,120 @@ def _is_semantically_redundant_question(text_a: str, text_b: str) -> bool:
         return False
     if a == b or a in b or b in a:
         return True
-
-    stop = {
-        "are", "you", "having", "have", "had", "any", "right", "now", "can",
-        "could", "tell", "me", "about", "before", "please", "noticed", "notice",
-        "your", "the", "do", "did", "is", "it", "feels", "feel",
-    }
-    a_words = {w for w in a.split() if w not in stop}
-    b_words = {w for w in b.split() if w not in stop}
-    if not a_words or not b_words:
+    if not openai_client:
         return False
-    overlap = len(a_words & b_words)
-    smallest = min(len(a_words), len(b_words))
-    return overlap >= 2 and overlap >= smallest - 1
+    relation = run_question_relation_agent(text_a, text_b)
+    return bool(relation.get("same_intent"))
 
 
-def _coerce_structured_answer(topic_key: str, step: dict, answer: Any, current_data: dict) -> Any:
+def _coerce_structured_answer(
+    topic_key: str,
+    step: dict,
+    answer: Any,
+    current_data: dict,
+    raw_answer: Any = None,
+) -> Any:
     if not isinstance(answer, str):
         return answer
 
-    raw = answer.strip()
+    raw = str(raw_answer if raw_answer is not None else answer).strip()
     if not raw:
         return answer
 
-    if topic_key == "pain" and step["id"] == "pain_location":
-        normalized = _norm_text(raw)
-        if normalized in {"throat", "my throat"}:
-            return "Throat"
-        if normalized in {"tongue", "my tongue"}:
-            return "Tongue"
-        current_data["other_pain_desc"] = raw
-        return "Somewhere else"
+    if topic_key == "pain" and step["id"] == "pain_location" and answer == "Somewhere else":
+        if raw not in ("Somewhere else", "somewhere else"):
+            current_data["pain_location_raw"] = raw
+            current_data["other_pain_desc"] = raw
+        return answer
 
     return answer
 
+_DETAIL_COVERAGE_SYS = """
+You are the Detail-Coverage Agent for a clinical chatbot serving head and neck
+cancer patients.
 
-def _looks_vague_answer(answer: Any) -> bool:
-    if not isinstance(answer, str):
-        return False
-    text = _norm_text(answer)
-    if not text:
-        return True
+Your task is to judge whether the patient's answer already contains the clinically
+important detail(s) requested by the current question.
 
-    vague_phrases = {
-        "idk", "i dont know", "dont know", "not sure", "unsure", "maybe",
-        "kinda", "kind of", "sort of", "bad", "worse", "same", "fine",
-        "ok", "okay", "ugh", "hard", "stuff", "things", "whatever",
+You will receive:
+  - question_text
+  - question_type
+  - options
+  - patient_answer
+  - recent_topic_history: recent assistant questions and patient answers from this topic
+  - recent_question_texts: recent assistant question texts from this topic
+
+RULES:
+  - Work semantically, not by keyword matching.
+  - Treat natural patient language as valid clinical information.
+  - Infer from the question what kind of detail is being asked for.
+  - If the patient provided some but not all of that detail, mark it as partial and describe the single missing detail in plain language.
+  - If the patient explicitly says they do not know a detail, treat that as usable uncertainty rather than pushing repeatedly.
+  - Do not ask for details the patient already provided in plain language.
+  - Do not recommend a follow-up that repeats a recent question from this topic.
+  - Be conservative about follow-up: only recommend it when a meaningful detail is actually still missing.
+
+Return ONLY valid JSON:
+{{
+  "information_completeness": "complete|partial|none",
+  "follow_up_recommended": true/false,
+  "follow_up_goal": "..." or null,
+  "patient_acknowledgment": "..." or null,
+  "answered_with_uncertainty": false
+}}
+"""
+
+
+def run_detail_coverage_agent(step: dict, answer: str, topic_history: list[dict[str, str]], recent_questions: list[str]) -> dict:
+    default = {
+        "information_completeness": "complete",
+        "follow_up_recommended": False,
+        "follow_up_goal": None,
+        "patient_acknowledgment": None,
+        "answered_with_uncertainty": False,
     }
-    if text in vague_phrases:
-        return True
+    if not openai_client:
+        return default
 
-    words = text.split()
-    if len(words) == 1 and words[0] in {"bad", "worse", "same", "fine", "hard"}:
-        return True
-    if len(words) >= 1:
-        unique_chars = set(text.replace(" ", ""))
-        if len(unique_chars) <= 2 and len(text.replace(" ", "")) >= 4:
-            return True
-        if re.fullmatch(r"[a-zA-Z]{1,2,}", text):
-            return True
-    if len(words) <= 2 and not any(ch.isdigit() for ch in answer):
-        return text in vague_phrases
-    return False
+    result = _call_agent(_DETAIL_COVERAGE_SYS, {
+        "question_text": step.get("text", ""),
+        "question_type": step.get("type", "free_text"),
+        "options": step.get("opts", []),
+        "patient_answer": answer,
+        "recent_topic_history": topic_history,
+        "recent_question_texts": recent_questions,
+    }, max_tokens=250)
+
+    if not result:
+        return default
+
+    return {**default, **result}
 
 
 def _fallback_clarifying_question(step: dict) -> str:
     text = step.get("text", "").strip()
-    if not text:
-        return "Could you tell me a little more about that so I can capture it accurately for your care team?"
-    lower = _norm_text(text)
-    if "where" in lower and "pain" in lower:
-        return "Could you tell me where the pain is located?"
-    if "pain" in lower:
-        return "Could you tell me a bit more about the pain you're having right now?"
-    return "Could you tell me a little more about that?"
+    if text:
+        return f"I didn't quite catch that. Could you answer this part again: {text}"
+    return "I didn't quite catch that. Could you tell me a little more about that?"
 
 
-def _suggest_step_options(step: dict, user_input: str, limit: int = 3) -> list[str]:
-    raw = _norm_text(user_input)
-    if not raw:
-        return []
-
-    candidate_options = [
-        opt for opt in step.get("opts", [])
-        if _norm_text(opt) not in {"other", "somewhere else"}
-    ]
-    if not candidate_options:
-        return []
-
-    normalized_to_option = {_norm_text(opt): opt for opt in candidate_options}
-    matches = get_close_matches(raw, list(normalized_to_option.keys()), n=limit, cutoff=0.45)
-    suggestions = [normalized_to_option[m] for m in matches]
-
-    if suggestions:
-        return suggestions
-
-    raw_words = set(raw.split())
-    token_matches = []
-    for opt in candidate_options:
-        opt_words = set(_norm_text(opt).split())
-        if raw_words & opt_words:
-            token_matches.append(opt)
-    return token_matches[:limit]
-
-
-def _build_retry_prompt(step: dict, user_input: str) -> str:
-    if _looks_vague_answer(user_input):
-        return "I didn’t quite catch that. Could you please say it again?"
-
-    suggestions = _suggest_step_options(step, user_input)
-    if suggestions:
-        if len(suggestions) == 1:
-            return f"I want to make sure I record that correctly. Did you mean {suggestions[0]}?"
-        if len(suggestions) == 2:
-            return f"I want to make sure I record that correctly. Did you mean {suggestions[0]} or {suggestions[1]}?"
-        return (
-            f"I want to make sure I record that correctly. Did you mean "
-            f"{suggestions[0]}, {suggestions[1]}, or {suggestions[2]}?"
+def _build_retry_prompt(step: dict, user_input: str, topic_history: Optional[list[dict[str, str]]] = None) -> str:
+    if openai_client:
+        result = run_clarification_writer_agent(
+            step,
+            user_input,
+            topic_history=topic_history or [],
         )
+        clarification = str(result.get("clarification_question") or "").strip()
+        if clarification:
+            return clarification
+    return _fallback_clarifying_question(step)
 
-    if "Other" in step.get("opts", []):
-        return (
-            "I didn’t find a clear match in the quick options. "
-            "Please type it again, and if it’s a different medication I’ll record it as another one."
-        )
 
-    return "I didn’t find a clear match there. Could you please say it again or choose the closest option?"
+def _auto_capture_following_answers(topic_key: str, state: dict, seed_text: str):
+    # Disabled in normal operation: silent auto-filling made the conversation feel
+    # presumptive and could create unrelated or repeated questions.
+    return
 
 
 
@@ -222,6 +201,7 @@ def parse_multi_select_typed_input(step: dict, user_input: str):
     lowered_map = {opt.lower(): opt for opt in step.get("opts", [])}
     parts = [p.strip() for p in re.split(r",|/|;|\n", user_input) if p.strip()]
     resolved = []
+    has_other = "Other" in step.get("opts", [])
     for part in parts:
         match = lowered_map.get(part.lower())
         if match:
@@ -230,6 +210,8 @@ def parse_multi_select_typed_input(step: dict, user_input: str):
             interpreted = interpret_user_input_with_options(step, part)
             if interpreted in step.get("opts", []):
                 resolved.append(interpreted)
+            elif has_other and part.strip():
+                resolved.append("Other")
 
     deduped = []
     for item in resolved:
@@ -444,48 +426,175 @@ div[data-baseweb="select"] > div {
     border-left: none;
 }
 
+.chat-shell {
+    background:
+        radial-gradient(circle at top right, rgba(15,108,189,0.07), transparent 32%),
+        linear-gradient(180deg, rgba(255,255,255,0.96) 0%, rgba(248,251,254,0.98) 100%);
+    border: 1px solid #d9e6f0;
+    border-radius: 26px;
+    padding: 0;
+    overflow: hidden;
+    box-shadow: 0 24px 60px rgba(23, 50, 74, 0.09);
+    margin-top: 6px;
+}
+
+.chat-shell-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 14px;
+    border-bottom: 1px solid #e2ebf2;
+    background: linear-gradient(180deg, rgba(255,255,255,0.92) 0%, rgba(245,249,252,0.9) 100%);
+}
+
+.chat-shell-title {
+    display: block;
+    width: 100%;
+}
+
+.chat-shell-name {
+    font-family: 'Manrope', sans-serif;
+    font-size: 15px;
+    font-weight: 800;
+    color: #143551;
+    letter-spacing: -0.03em;
+}
+
+.chat-shell-inline-summary {
+    flex: 0 0 auto;
+}
+
+.chat-shell-inline-summary details {
+    display: inline-block;
+}
+
+.chat-shell-inline-summary summary {
+    list-style: none;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 700;
+    color: #607589;
+    white-space: nowrap;
+}
+
+.chat-shell-inline-summary summary::-webkit-details-marker {
+    display: none;
+}
+
+.chat-shell-inline-summary summary::before {
+    content: "▸";
+    display: inline-block;
+    margin-right: 6px;
+    color: #607589;
+}
+
+.chat-shell-inline-summary details[open] summary::before {
+    content: "▾";
+}
+
+.chat-shell-inline-summary-body {
+    padding: 10px 14px 8px 14px;
+    border-bottom: 1px solid #e8eef4;
+    background: rgba(247, 251, 254, 0.78);
+}
+
+.chat-history {
+    padding: 14px 14px 8px 14px;
+    min-height: 0;
+    background:
+        linear-gradient(180deg, rgba(250,252,254,0.88) 0%, rgba(244,248,252,0.92) 100%);
+}
+
+.composer-wrap {
+    padding: 0 12px 12px 12px;
+    background: transparent;
+}
+
 .chat-row {
     display: flex !important;
     width: 100% !important;
-    margin-bottom: 10px;
+    margin-bottom: 12px;
     align-items: flex-start;
-}
-
-.chat-row.assistant {
     justify-content: flex-start !important;
-    padding-right: 24%;
+    padding-left: 0 !important;
+    padding-right: 0 !important;
+    gap: 10px;
 }
 
-.chat-row.user {
-    justify-content: flex-end !important;
-    padding-left: 24%;
+.chat-avatar {
+    width: 26px;
+    height: 26px;
+    border-radius: 999px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 26px;
+    font-size: 11px;
+    font-weight: 800;
+    color: white;
+    margin-top: 2px;
+}
+
+.chat-row.assistant .chat-avatar {
+    background: #ef476f;
+}
+
+.chat-row.user .chat-avatar {
+    background: #20262d;
+}
+
+.chat-entry {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-width: min(86%, 860px);
+    min-width: 0;
+}
+
+.chat-meta {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    padding: 0 2px;
+}
+
+.chat-role {
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: none;
+    color: #1d2b36;
+}
+
+.chat-time {
+    font-size: 10px;
+    color: #9aa9b6;
 }
 
 .chat-bubble {
-    display: inline-block;
-    width: auto !important;
-    max-width: min(72%, 680px);
+    display: block;
+    width: 100%;
+    max-width: 100%;
     border-radius: 16px;
-    padding: 0.8rem 0.95rem;
-    border: 1px solid rgba(215, 228, 239, 0.9);
-    background: #ffffff;
-    line-height: 1.65;
+    padding: 0.62rem 0.75rem;
+    border: 1px solid #f4f7fa;
+    line-height: 1.6;
     white-space: pre-wrap;
     word-break: break-word;
+    font-size: 13.5px;
+    box-shadow: none;
+    background: rgba(255,255,255,0.72);
 }
 
 .chat-row.assistant .chat-bubble {
-    margin-left: 0 !important;
-    margin-right: auto !important;
-    border-left: 3px solid #b7d5eb;
+    color: #17324a;
+    border-top-left-radius: 6px;
 }
 
 .chat-row.user .chat-bubble {
-    margin-left: auto !important;
-    margin-right: 0 !important;
-    background: #f8fbfe;
-    border-left: none;
-    border-right: 3px solid #0f6cbd;
+    color: #17324a;
+    border-top-left-radius: 6px;
 }
 
 /* ── Topic status pills ── */
@@ -518,14 +627,6 @@ div[data-baseweb="select"] > div {
     border-radius: 20px;
     padding: 18px 18px;
     box-shadow: var(--shadow-sm);
-}
-
-.chat-shell {
-    background: rgba(255,255,255,0.82);
-    border: 1px solid var(--border);
-    border-radius: 24px;
-    padding: 14px;
-    box-shadow: var(--shadow);
 }
 
 .assistant-chip {
@@ -572,6 +673,205 @@ div[data-baseweb="select"] > div {
     line-height: 1.72;
     white-space: pre-wrap;
     box-shadow: var(--shadow);
+}
+
+.report-dashboard {
+    background:
+        linear-gradient(180deg, rgba(255,255,255,0.98) 0%, rgba(247,250,253,0.98) 100%);
+    border: 1px solid #d8e4ee;
+    border-radius: 28px;
+    padding: 24px 24px 20px 24px;
+    box-shadow: var(--shadow);
+}
+
+.report-summary-banner {
+    background: linear-gradient(180deg, #fff4cf 0%, #fff8e7 100%);
+    border: 1px solid #ebd28a;
+    border-radius: 22px;
+    padding: 18px 20px;
+    margin: 14px 0 18px 0;
+    display: grid;
+    grid-template-columns: 88px 1fr;
+    gap: 16px;
+    align-items: center;
+}
+
+.report-summary-avatar {
+    width: 76px;
+    height: 76px;
+    border-radius: 18px;
+    border: 1px solid #dfc26b;
+    background: linear-gradient(180deg, #fffdf7 0%, #fff4d2 100%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 34px;
+}
+
+.report-summary-copy {
+    color: #5e4a12;
+    font-size: 13px;
+    line-height: 1.65;
+}
+
+.report-summary-title {
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #8b6c1b;
+    margin-bottom: 4px;
+}
+
+.report-topic-card {
+    border-radius: 18px;
+    padding: 0;
+    overflow: hidden;
+    border: 1px solid #d7e1eb;
+    background: #ffffff;
+    min-height: 164px;
+    box-shadow: 0 8px 18px rgba(23, 50, 74, 0.05);
+    margin-bottom: 10px;
+}
+
+.report-topic-card.red {
+    border-color: #ef9c9c;
+    background: linear-gradient(180deg, #fff7f7 0%, #fff1f1 100%);
+}
+
+.report-topic-card.green {
+    border-color: #9fd1a8;
+    background: linear-gradient(180deg, #f6fff7 0%, #effbf1 100%);
+}
+
+.report-topic-strip {
+    padding: 8px 12px;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: white;
+    background: #9aa8b7;
+}
+
+.report-topic-card.red .report-topic-strip {
+    background: #d84c43;
+}
+
+.report-topic-card.green .report-topic-strip {
+    background: #3f8f49;
+}
+
+.report-topic-body {
+    padding: 12px;
+}
+
+.report-topic-name {
+    font-size: 13px;
+    font-weight: 800;
+    color: #16324b;
+    margin-bottom: 8px;
+}
+
+.report-topic-compare {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 8px;
+}
+
+.report-topic-compare-row {
+    border: 1px solid #e4ebf2;
+    border-radius: 14px;
+    padding: 8px 9px;
+    background: rgba(255,255,255,0.86);
+}
+
+.report-topic-compare-label {
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: #8295a9;
+    margin-bottom: 2px;
+}
+
+.report-topic-compare-value {
+    font-size: 12px;
+    line-height: 1.45;
+    color: #18344d;
+}
+
+.report-topic-open {
+    margin-top: -4px;
+    margin-bottom: 12px;
+}
+
+.report-detail-shell {
+    margin-top: 10px;
+    border: 1px solid #d7e2eb;
+    border-radius: 24px;
+    background: linear-gradient(180deg, #ffffff 0%, #f9fbfd 100%);
+    box-shadow: var(--shadow-sm);
+    overflow: hidden;
+}
+
+.report-detail-shell.inline {
+    margin-top: 10px;
+    margin-bottom: 18px;
+    animation: reportSlideDown 180ms ease-out;
+}
+
+.report-detail-header {
+    padding: 16px 18px;
+    border-bottom: 1px solid #e5edf4;
+    background: rgba(255,255,255,0.88);
+}
+
+.report-detail-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+    padding: 16px 18px 6px 18px;
+}
+
+.report-detail-panel {
+    border: 1px solid #e2eaf1;
+    border-radius: 18px;
+    padding: 14px;
+    background: #ffffff;
+}
+
+.report-detail-label {
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #7d90a3;
+    margin-bottom: 6px;
+}
+
+.report-detail-text {
+    font-size: 14px;
+    line-height: 1.6;
+    color: #17324a;
+}
+
+@media (max-width: 900px) {
+    .report-summary-banner,
+    .report-detail-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+@keyframes reportSlideDown {
+    from {
+        opacity: 0;
+        transform: translateY(-6px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
 }
 
 /* ── Progress / completion ── */
@@ -797,15 +1097,16 @@ div[data-baseweb="select"] > div {
 }
 
 .composer-shell {
-    background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
+    background: rgba(255,255,255,0.92);
     border: 1px solid #d9e4ed;
-    border-radius: 24px;
-    padding: 10px;
-    box-shadow: 0 12px 26px rgba(23, 50, 74, 0.05);
+    border-radius: 26px;
+    padding: 12px;
+    box-shadow: 0 18px 36px rgba(23, 50, 74, 0.08);
+    backdrop-filter: blur(10px);
 }
 
 .composer-shell.compact {
-    padding: 8px;
+    padding: 12px;
 }
 
 
@@ -837,12 +1138,21 @@ div[data-baseweb="select"] > div {
 }
 
 .composer-shell div[data-testid="stButton"] > button {
-    width: auto !important;
+    width: 100% !important;
     min-width: 0 !important;
-    padding: 0.46rem 0.9rem !important;
-    border-radius: 999px !important;
+    padding: 0.72rem 0.95rem !important;
+    border-radius: 16px !important;
     font-size: 13px !important;
-    box-shadow: none !important;
+    font-weight: 700 !important;
+    box-shadow: 0 8px 18px rgba(23, 50, 74, 0.06) !important;
+    background: linear-gradient(180deg, #ffffff 0%, #f7fbfe 100%) !important;
+    border: 1px solid #d9e4ed !important;
+}
+
+.composer-shell div[data-testid="stButton"] > button:hover {
+    transform: translateY(-1px);
+    border-color: #9fc1dd !important;
+    color: #10375a !important;
 }
 
 .composer-shell div[data-baseweb="select"] > div {
@@ -860,8 +1170,11 @@ div[data-baseweb="select"] > div {
 }
 
 .composer-shell [data-testid="stTextInput"] input {
-    min-height: 46px !important;
-    height: 46px !important;
+    min-height: 52px !important;
+    height: 52px !important;
+    background: #f9fcff !important;
+    border: 1px solid #d6e4ef !important;
+    padding-left: 16px !important;
 }
 
 .composer-shell [data-testid="stSelectbox"] {
@@ -880,7 +1193,7 @@ div[data-baseweb="select"] > div {
     align-items: center;
     justify-content: center;
     padding: 0;
-    margin: 6px 0 0 0;
+    margin: 10px 0 0 0;
     box-shadow: none !important;
 }
 
@@ -897,13 +1210,38 @@ div[data-baseweb="select"] > div {
 .composer-shell [data-testid="stAudioInput"] button {
     border-radius: 16px !important;
     width: 100% !important;
-    height: 46px !important;
+    height: 48px !important;
     min-width: 100% !important;
     padding: 0 !important;
     margin: 0 !important;
     border: 1px solid #d7e4ee !important;
     background: linear-gradient(180deg, #ffffff 0%, #f5f9fd 100%) !important;
     box-shadow: 0 8px 18px rgba(23, 50, 74, 0.08) !important;
+}
+
+@media (max-width: 768px) {
+    .chat-shell {
+        border-radius: 22px;
+    }
+
+    .chat-shell-header {
+        padding: 9px 10px 9px 10px;
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
+    .chat-history {
+        padding: 12px 10px 8px 10px;
+        min-height: 180px;
+    }
+
+    .composer-wrap {
+        padding: 0 10px 10px 10px;
+    }
+
+    .chat-entry {
+        max-width: 92%;
+    }
 }
 
 .composer-shell [data-testid="stAudioInput"] button::before {
@@ -954,9 +1292,31 @@ def render_active_question(question: str, label: str = "Current question"):
     )
 
 
-def _step_prompt_text(step: dict) -> str:
+def _dynamic_step_text(topic_key: Optional[str], step: dict, state: Optional[dict] = None) -> str:
     question_text = step["text"]
-    if step.get("type") == "options":
+    if not state or not topic_key or not openai_client:
+        return question_text
+
+    prompt_cache = state.setdefault("generated_prompts", {})
+    cached = prompt_cache.get(step["id"])
+    if cached:
+        return cached
+
+    last_visit_same_question_answer = st.session_state.get("last_checkin", {}).get(topic_key, {}).get(step.get("id"))
+    result = run_question_writer_agent(
+        step,
+        topic_history=_recent_topic_history(state),
+        recent_questions=_recent_topic_questions(state),
+        last_visit_same_question_answer=last_visit_same_question_answer,
+    )
+    rewritten = str(result.get("question_text") or question_text).strip() or question_text
+    prompt_cache[step["id"]] = rewritten
+    return rewritten
+
+
+def _step_prompt_text(step: dict, topic_key: Optional[str] = None, state: Optional[dict] = None) -> str:
+    question_text = _dynamic_step_text(topic_key, step, state)
+    if step.get("type") == "options" and step.get("id") != "med_adherence_issue":
         question_text += " (Choose an option below, or answer in your own words if that fits better.)"
     return question_text
 
@@ -970,11 +1330,74 @@ def _append_assistant_message(state: dict, text: str):
     state["chat"].append({"role": "assistant", "content": text})
 
 
+def _remember_prompted_step(state: dict, step: Optional[dict], prompt_text: str = ""):
+    state["last_prompted_step_id"] = step.get("id") if step else None
+    state["last_prompted_text"] = (prompt_text or "").strip()
+
+
+def _ensure_step_prompted(topic_key: str, state: dict, step: Optional[dict]):
+    if not step:
+        return
+    prompt_text = _step_prompt_text(step, topic_key=topic_key, state=state)
+    last_id = state.get("last_prompted_step_id")
+    last_text = state.get("last_prompted_text", "")
+    if last_id == step.get("id") and (
+        last_text == prompt_text or _is_semantically_redundant_question(last_text, prompt_text)
+    ):
+        return
+    _append_assistant_message(state, prompt_text)
+    _remember_prompted_step(state, step, prompt_text)
+
+
+def _recent_topic_history(state: dict, limit: int = 10) -> list[dict[str, str]]:
+    history = []
+    for msg in state.get("chat", [])[-limit:]:
+        role = msg.get("role", "")
+        content = str(msg.get("content", "")).strip()
+        if role and content:
+            history.append({"role": role, "content": content})
+    return history
+
+
+def _recent_topic_questions(state: dict, limit: int = 8) -> list[str]:
+    questions = []
+    for msg in state.get("chat", [])[-limit * 2:]:
+        if msg.get("role") != "assistant":
+            continue
+        content = str(msg.get("content", "")).strip()
+        if not content:
+            continue
+        parts = [part.strip() for part in content.split("\n\n") if part.strip()]
+        for part in parts:
+            if "?" in part:
+                questions.append(part)
+    return questions[-limit:]
+
+
+def _question_already_asked(state: dict, question_text: str) -> bool:
+    candidate = (question_text or "").strip()
+    if not candidate:
+        return False
+    for asked in _recent_topic_questions(state, limit=10):
+        if _is_semantically_redundant_question(asked, candidate):
+            return True
+    return False
+
+
 def render_chat_bubble(role: str, content: str):
     safe = _html.escape(content or "").replace("\n", "<br>")
     role_cls = "user" if role == "user" else "assistant"
+    role_label = "You" if role == "user" else "Care Assistant"
+    avatar_label = "Y" if role == "user" else "I"
+    timestamp = datetime.now().strftime("%H:%M")
     st.markdown(
-        f'<div class="chat-row {role_cls}"><div class="chat-bubble">{safe}</div></div>',
+        f'<div class="chat-row {role_cls}">'
+        f'  <div class="chat-avatar">{avatar_label}</div>'
+        f'  <div class="chat-entry">'
+        f'    <div class="chat-meta"><div class="chat-role">{role_label}</div><div class="chat-time">{timestamp}</div></div>'
+        f'    <div class="chat-bubble">{safe}</div>'
+        f'  </div>'
+        f'</div>',
         unsafe_allow_html=True,
     )
 
@@ -1162,13 +1585,20 @@ def _safe_int(val, default=0):
         return default
 
 
+def _safe_float(val, default: Optional[float] = None) -> Optional[float]:
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return default
+
+
 # ── PAIN & MEDICATIONS (Main 2, 3, 12, 38) ────────────────────────
 FLOW_PAIN = [
     # Main 2
     _q("has_pain", "Do you have any pain today?", opts=["Yes", "No"]),
 
     # Main 3 — location
-    _q("pain_location", "Where exactly is the pain?",
+    _q("pain_location", "Where are you feeling the pain?",
        opts=["Throat", "Tongue", "Somewhere else"],
        when=lambda d: d.get("has_pain") == "Yes"),
 
@@ -1208,22 +1638,36 @@ FLOW_PAIN = [
 
     # ── Somewhere else branch ──
     _q("other_pain_desc",
-       "Can you describe where the pain is?",
+       "Which body part is hurting?",
        type="free_text", placeholder="e.g., near my jaw and ear…",
+       when=lambda d: d.get("pain_location") == "Somewhere else"),
+
+    _q("other_pain_severity",
+       "How bad is that pain at its worst on a 0 to 10 scale?",
+       type="number", min_v=0, max_v=10, default_v=5,
        when=lambda d: d.get("pain_location") == "Somewhere else"),
 
     _q("ear_pain", "Do you have ear pain or hearing changes?",
        opts=["Yes", "No"],
-       when=lambda d: d.get("pain_location") == "Somewhere else"),
+       when=lambda d: (
+           d.get("pain_location") == "Somewhere else"
+           and bool(d.get("other_pain_head_neck_focused"))
+       )),
 
     _q("jaw_swelling", "Do you feel any swelling near your jaw?",
        opts=["Yes", "No"],
-       when=lambda d: d.get("pain_location") == "Somewhere else"),
+       when=lambda d: (
+           d.get("pain_location") == "Somewhere else"
+           and bool(d.get("other_pain_head_neck_focused"))
+       )),
 
     _q("pain_with_chewing",
        "Does the pain worsen when chewing or opening your mouth?",
        opts=["Yes", "No"],
-       when=lambda d: d.get("pain_location") == "Somewhere else"),
+       when=lambda d: (
+           d.get("pain_location") == "Somewhere else"
+           and bool(d.get("other_pain_head_neck_focused"))
+       )),
 
     _q("pain_start",                        # ← added (Main 3, Somewhere else branch)
        "When did this pain start?",
@@ -1246,17 +1690,27 @@ FLOW_PAIN = [
     # Main 38 — Adherence
     _q("taking_as_prescribed",
        "Are you taking your medications as prescribed?",
-       opts=["Yes", "No"]),
+       opts=["Yes", "No"],
+       when=lambda d: (bool(d.get("pain_medications"))
+                       and "No pain medication" not in (d.get("pain_medications") or []))),
 
     _q("med_adherence_issue",
        "What is making it difficult to take your medications?",
        opts=["Side effects", "Schedule", "Access issues", "Other"],
-       when=lambda d: d.get("taking_as_prescribed") == "No"),
+       when=lambda d: (
+           d.get("taking_as_prescribed") == "No"
+           and bool(d.get("pain_medications"))
+           and "No pain medication" not in (d.get("pain_medications") or [])
+       )),
 
     _q("med_side_effects",
        "Are you experiencing any side effects from your medications?",
        opts=["Yes", "No"],
-       when=lambda d: d.get("taking_as_prescribed") == "Yes"),
+       when=lambda d: (
+           d.get("taking_as_prescribed") == "Yes"
+           and bool(d.get("pain_medications"))
+           and "No pain medication" not in (d.get("pain_medications") or [])
+       )),
 ]
 
 # ── NUTRITION & FLUIDS (Main 5, 6, 8, 25, 26, 27, 34) ─────────────
@@ -1959,30 +2413,54 @@ STEP_BY_ID = {
 }
 
 
-
 # ══════════════════════════════════════════════════════════════════
 # FLOW ENGINE
 # ══════════════════════════════════════════════════════════════════
 
-def get_next_step(topic_key: str, data: dict) -> Optional[dict]:
+def _step_is_relevant(topic_key: str, step: dict, data: dict, raw_answers: Optional[dict] = None) -> bool:
+    return True
+
+
+def get_next_step(topic_key: str, data: dict, raw_answers: Optional[dict] = None) -> Optional[dict]:
     """Return the first unanswered applicable step for this topic."""
     for step in FLOWS.get(topic_key, []):
         when = step.get("when")
         if when and not when(data):
+            continue
+        if not _step_is_relevant(topic_key, step, data, raw_answers):
             continue
         if step["id"] not in data:
             return step
     return None
 
 
-def topic_is_complete(topic_key: str, data: dict) -> bool:
-    return get_next_step(topic_key, data) is None
+def get_upcoming_steps(topic_key: str, data: dict, raw_answers: Optional[dict] = None, limit: int = 5) -> list[dict]:
+    upcoming = []
+    for step in FLOWS.get(topic_key, []):
+        when = step.get("when")
+        if when and not when(data):
+            continue
+        if not _step_is_relevant(topic_key, step, data, raw_answers):
+            continue
+        if step["id"] in data:
+            continue
+        upcoming.append(step)
+        if len(upcoming) >= limit:
+            break
+    return upcoming
 
 
-def get_topic_progress(topic_key: str, data: dict) -> tuple[int, int]:
+def topic_is_complete(topic_key: str, data: dict, raw_answers: Optional[dict] = None) -> bool:
+    return get_next_step(topic_key, data, raw_answers) is None
+
+
+def get_topic_progress(topic_key: str, data: dict, raw_answers: Optional[dict] = None) -> tuple[int, int]:
     """Returns (answered, applicable) counts."""
     flow = FLOWS.get(topic_key, [])
-    applicable = [s for s in flow if not s.get("when") or s["when"](data)]
+    applicable = [
+        s for s in flow
+        if (not s.get("when") or s["when"](data)) and _step_is_relevant(topic_key, s, data, raw_answers)
+    ]
     answered = [s for s in applicable if s["id"] in data]
     return len(answered), len(applicable)
 
@@ -2064,6 +2542,256 @@ def _call_openai(prompt: str, max_tokens: int = 120, temp: float = 0.4) -> str:
         return ""
 
 
+_QUESTION_RELATION_SYS = """
+You decide whether two patient-facing questions are asking essentially the same thing.
+
+Return ONLY valid JSON:
+{
+  "same_intent": true/false
+}
+
+Rules:
+- Treat paraphrases as the same intent.
+- If one question is only a softer or more natural wording of the other, mark true.
+- If one asks for a different detail, mark false.
+- Be especially sensitive to duplicate symptom questions in clinical chat.
+"""
+
+
+def run_question_relation_agent(question_a: str, question_b: str) -> dict:
+    default = {"same_intent": False}
+    if not openai_client:
+        return default
+    result = _call_agent(_QUESTION_RELATION_SYS, {
+        "question_a": question_a,
+        "question_b": question_b,
+    }, max_tokens=80)
+    return {**default, **result} if result else default
+
+
+_PAIN_LOCATION_FOCUS_SYS = """
+You classify whether a patient-described pain location should trigger the focused
+head-and-neck follow-up branch in a clinical chatbot.
+
+Return ONLY valid JSON:
+{
+  "head_neck_focused": true/false
+}
+
+Mark true only when the described location is specifically in or very near the
+ear, jaw, mouth, lips, gums, teeth, cheek, palate, tongue, or throat.
+Mark false for broad or nonspecific areas like head, face, neck, arm, back, chest,
+or anything outside that focused region.
+"""
+
+
+def run_pain_location_focus_agent(location_text: str) -> dict:
+    default = {"head_neck_focused": False}
+    if not openai_client or not str(location_text or "").strip():
+        return default
+    result = _call_agent(_PAIN_LOCATION_FOCUS_SYS, {
+        "location_text": location_text,
+    }, max_tokens=80)
+    return {**default, **result} if result else default
+
+
+_QUESTION_WRITER_SYS = """
+You rewrite the next patient-facing question for a clinical chatbot.
+
+You will receive:
+  - base_question_text
+  - question_type
+  - options
+  - recent_topic_history
+  - recent_question_texts
+  - last_visit_same_question_answer
+
+Rules:
+  - The form question is a question bank hint, not fixed wording.
+  - Write one natural nurse-like question that asks for the same clinical detail.
+  - Use topic history so the question feels like a direct continuation of the conversation.
+  - Avoid repeating a recent question from this topic.
+  - Do not rewrite a narrower follow-up detail question back into the broader parent question.
+  - If the patient already named a specific location, medication, symptom, or person, do not turn the next question back into a generic chooser they already answered.
+  - Mention last-visit history only when it genuinely helps orient the patient.
+  - Never prepend awkward phrases like "Last visit you reported yes."
+  - Do not imply symptoms the patient has not endorsed.
+  - Keep the question concise and conversational.
+
+Return ONLY valid JSON:
+{
+  "question_text": "..."
+}
+"""
+
+
+def run_question_writer_agent(
+    step: dict,
+    topic_history: list[dict[str, str]],
+    recent_questions: list[str],
+    last_visit_same_question_answer: Any = None,
+) -> dict:
+    default = {"question_text": step.get("text", "")}
+    if not openai_client:
+        return default
+
+    result = _call_agent(_QUESTION_WRITER_SYS, {
+        "base_question_text": step.get("text", ""),
+        "question_type": step.get("type", "options"),
+        "options": step.get("opts", []),
+        "recent_topic_history": topic_history,
+        "recent_question_texts": recent_questions,
+        "last_visit_same_question_answer": last_visit_same_question_answer,
+    }, max_tokens=140)
+    return {**default, **result} if result else default
+
+
+_CLARIFICATION_WRITER_SYS = """
+You write a short clarification question for a clinical chatbot when the patient's
+reply did not clearly answer the current question.
+
+You will receive:
+  - original_question
+  - question_type
+  - options
+  - patient_reply
+  - recent_topic_history
+
+Rules:
+  - Ask for the same missing information more clearly, not a different detail.
+  - Be warm and brief.
+  - If options exist, you may gently restate the kind of answer needed.
+  - Do not sound robotic or blame the patient.
+  - Do not repeat the original question verbatim.
+
+Return ONLY valid JSON:
+{
+  "clarification_question": "..."
+}
+"""
+
+
+def run_clarification_writer_agent(step: dict, patient_reply: str, topic_history: list[dict[str, str]]) -> dict:
+    default = {"clarification_question": "Could you tell me a little more about that?"}
+    if not openai_client:
+        return default
+    result = _call_agent(_CLARIFICATION_WRITER_SYS, {
+        "original_question": step.get("text", ""),
+        "question_type": step.get("type", "options"),
+        "options": step.get("opts", []),
+        "patient_reply": patient_reply,
+        "recent_topic_history": topic_history,
+    }, max_tokens=120)
+    return {**default, **result} if result else default
+
+
+_TOPIC_SUMMARY_SYS = """
+You write a one-sentence human summary of the patient's last check-in for a single topic.
+
+Rules:
+  - Write one natural sentence, not bullet points.
+  - Focus on the most clinically relevant details.
+  - Prefer plain language.
+  - If the data is sparse, write a modest summary instead of inventing detail.
+  - Do not mention internal field names.
+  - Keep it under 20 words.
+
+Return ONLY valid JSON:
+{
+  "summary": "..."
+}
+"""
+
+
+def run_topic_summary_agent(topic_label: str, topic_data: dict) -> dict:
+    default = {"summary": "Information was recorded for this topic."}
+    if not openai_client:
+        return default
+    result = _call_agent(_TOPIC_SUMMARY_SYS, {
+        "topic_label": topic_label,
+        "topic_data": topic_data,
+    }, max_tokens=100)
+    return {**default, **result} if result else default
+
+
+_REPORT_TOPIC_INSIGHT_SYS = """
+You compare one topic from a patient's current check-in against their last check-in.
+
+Return ONLY valid JSON:
+{
+  "status": "worsened|new_issue|improved|stable|unanswered",
+  "status_label": "...",
+  "last_summary": "..." or null,
+  "current_summary": "..." or null,
+  "detail_lines": ["...", "..."],
+  "attention_lines": ["...", "..."]
+}
+
+Rules:
+  - worsened: same issue but clearly more severe, broader, or more disruptive now
+  - new_issue: a clinically meaningful issue is present now but was absent or not reported last visit
+  - improved: clearly better now than last visit
+  - stable: same overall, unchanged, or no meaningful difference
+  - unanswered: current topic has essentially no usable answer
+  - Keep summaries patient/clinician-readable, plain language, and concise.
+  - detail_lines should be short factual lines that help a clinician compare last vs now.
+  - attention_lines should include only the most clinically relevant items.
+"""
+
+
+def run_report_topic_insight_agent(topic_label: str, last_topic_data: dict, current_topic_data: dict) -> dict:
+    default = {
+        "status": "unanswered" if not current_topic_data else "stable",
+        "status_label": "Not answered" if not current_topic_data else "Stable",
+        "last_summary": None,
+        "current_summary": None,
+        "detail_lines": [],
+        "attention_lines": [],
+    }
+    if not openai_client:
+        return default
+    result = _call_agent(_REPORT_TOPIC_INSIGHT_SYS, {
+        "topic_label": topic_label,
+        "last_topic_data": last_topic_data,
+        "current_topic_data": current_topic_data,
+    }, max_tokens=220)
+    return {**default, **result} if result else default
+
+
+_REPORT_OVERVIEW_SYS = """
+You write a short patient-summary banner for a clinical topic dashboard.
+
+Return ONLY valid JSON:
+{
+  "main_issue": "..." or null,
+  "new_issues": ["...", "..."],
+  "improvements": ["...", "..."],
+  "needs_attention": ["...", "..."]
+}
+
+Rules:
+  - Use the provided topic insight summaries.
+  - Keep each item short.
+  - Mention only the most meaningful changes.
+  - If a category has nothing meaningful, return an empty list or null.
+"""
+
+
+def run_report_overview_agent(topic_insights: list[dict]) -> dict:
+    default = {
+        "main_issue": None,
+        "new_issues": [],
+        "improvements": [],
+        "needs_attention": [],
+    }
+    if not openai_client:
+        return default
+    result = _call_agent(_REPORT_OVERVIEW_SYS, {
+        "topic_insights": topic_insights,
+    }, max_tokens=180)
+    return {**default, **result} if result else default
+
+
 # ══════════════════════════════════════════════════════════════════
 # AGENT 1 — ANSWER INTERPRETER
 # ══════════════════════════════════════════════════════════════════
@@ -2076,22 +2804,80 @@ Your ONLY job: classify a patient's free-text answer for the current question.
 
 MATCHING RULES:
 1. EXACT MATCH — case-insensitive, ignore minor punctuation → match_type "exact"
-2. IMPLICIT/SEMANTIC MATCH — use natural language understanding; do NOT use a rigid
-   synonym list. Ask: does the answer clearly and unambiguously imply one option?
+
+2. IMPLICIT/SEMANTIC MATCH — use natural language understanding to determine if the
+   answer clearly and unambiguously implies one specific option.
    Exception for severity questions: map numbers to ranges:
      0 → "0 — No pain/None", 1-3 → Mild, 4-6 → Moderate, 7-9 → Severe/High, 10 → Worst
-3. AMBIGUITY — two or more options equally plausible → match_type "no_match", list candidates
-4. NO MATCH — cannot map reliably → match_type "no_match"
-5. SPECIAL STATES:
+   - Treat natural conversational yes/no language as valid yes/no:
+     "yeah", "yep", "yup", "sure" → Yes
+     "nope", "nah", "not really" → No
+   - When a question asks for a body location, any real body part is a meaningful answer.
+     Do NOT reject "hand", "head", "jaw", "neck", "arm", etc. just because it is not
+     one of the named specific options.
+   - For location questions with a catch-all option such as "Somewhere else" or "Other",
+     any concrete anatomical location that is not one of the named specific options MUST
+     map to the catch-all option.
+   - This includes locations such as nose, face, cheek, scalp, lip, gums, ear, shoulder,
+     chest, back, stomach, leg, foot, or any other specific body area.
+
+3. CATCH-ALL OPTION RULE (CRITICAL) — if the options list contains a catch-all such
+   as "Somewhere else", "Other", "None of these", or "Something else", AND the
+   patient's answer does not match any specific option but IS a valid, meaningful
+   response to the question, you MUST map it to the catch-all option.
+   - match_type = "implicit", confidence = 0.85
+   - Examples for options ["Throat", "Tongue", "Somewhere else"]:
+       "headache" → "Somewhere else"   (it's a valid pain location, just not listed)
+       "my hand"  → "Somewhere else"
+       "jaw"      → "Somewhere else"
+       "shoulder" → "Somewhere else"
+       "ear"      → "Somewhere else"
+       "neck"     → "Somewhere else"
+       "nose"     → "Somewhere else"
+       "my face"  → "Somewhere else"
+   - Examples for options ["Gabapentin", "Oxycodone", "Other"]:
+       "Tylenol"  → "Other"
+       "ibuprofen"→ "Other"
+   NEVER return no_match when a catch-all option exists and the answer is a
+   recognisable, meaningful response to the question asked.
+
+4. TYPE MISMATCH DETECTION — if the question asks for one type of information but
+   the patient provides a different type, return match_type "no_match" even if a
+   catch-all option exists. Do NOT accept a wrong-type answer via catch-all.
+   Examples of type mismatches:
+     - Question asks WHERE the pain is (a location) but patient says "comes and goes",
+       "all the time", "only when I swallow", "sometimes" (these are timing/pattern, not location)
+     - Question asks HOW BAD the pain is (severity) but patient names a body part
+     - Question asks WHEN pain started but patient describes the type of pain
+   In these cases: match_type = "no_match", matched_option = null,
+   reasoning should explain the type mismatch so the chatbot can ask again clearly.
+
+5. AMBIGUITY — two or more SPECIFIC (non-catch-all) options equally plausible
+   → match_type "no_match", list candidates
+
+6. NO MATCH — answer is completely unrelated/nonsensical AND no catch-all exists
+   → match_type "no_match"
+
+6. SPECIAL STATES:
    a) DISTRESS FLAG: any expression of being unable to cope, hopelessness, suicidal
       ideation → distress_flag true
    b) URGENCY FLAG: sudden severe pain, breathing difficulty, "worst of my life",
       fever with chills, bleeding, or any red flag symptom → urgency_flag true
-   c) OFF-TOPIC: unrelated answer → match_type "off_topic"
+   c) OFF-TOPIC: answer is entirely unrelated to the question (e.g. patient asks
+      about appointment scheduling when asked about pain location) → match_type "off_topic"
    d) INVALID: empty or gibberish → match_type "invalid"
 
-CONFIDENCE: 1.0 exact, 0.7-0.95 strong implicit, <0.7 → no_match instead.
+CONFIDENCE: 1.0 exact, 0.85-0.95 strong implicit, 0.85 catch-all, <0.7 → no_match.
 matched_option MUST be copied VERBATIM from options list, or null.
+
+TOPIC-HISTORY RULES:
+  - You will receive recent conversation history for this topic only.
+  - Use it to resolve conversational replies like "yes", "no", "only soup", "my sister helps some",
+    or "every day almost" in context of the current question.
+  - Do not treat the patient's answer as unrelated just because it is brief; use the immediate topic history.
+  - Do not force a mapping if the answer is meaningful but clearly does not fit any option; prefer the catch-all option when available.
+  - If the patient already gave a concrete location, medication, food type, support source, or other real-world example,
+    preserve that meaning by mapping to the correct catch-all option instead of asking them to classify it themselves.
 
 Return ONLY valid JSON:
 {{
@@ -2106,7 +2892,7 @@ Return ONLY valid JSON:
 """
 
 
-def run_answer_interpreter(step: dict, patient_answer: str) -> dict:
+def run_answer_interpreter(step: dict, patient_answer: str, topic_history: Optional[list[dict[str, str]]] = None) -> dict:
     """
     Agent 1: Classify patient's free-text answer against predefined options.
     Returns interpreter output dict, or safe default on failure.
@@ -2123,6 +2909,7 @@ def run_answer_interpreter(step: dict, patient_answer: str) -> dict:
         "question_text": step.get("text", ""),
         "options": step.get("opts", []),
         "patient_answer": patient_answer,
+        "recent_topic_history": topic_history or [],
     }, max_tokens=200)
 
     if not result:
@@ -2160,6 +2947,19 @@ change_magnitude rules:
 clinical_note: One sentence, plain English. Include change magnitude and direction.
 If no prior data: "No prior data available for comparison."
 
+patient_facing_note:
+  - 1 short sentence in chatbot voice for the patient, or null if not useful
+  - Use only when the comparison adds value to the conversation
+  - Good uses: weight increased/decreased, pain improved/worsened, symptom better/same/worse
+  - Mention improvement when it is clinically encouraging, such as weight gain, lower symptom burden, or better function
+  - Mention worsening when it helps orient the patient and clinician to a meaningful change
+  - Do NOT use for trivial yes/no comparisons like "Last time you said yes"
+  - Keep it natural and supportive, not report-like
+  - Examples:
+    - "Your weight is up from last visit, which is encouraging."
+    - "It sounds like this has been a bit worse than last time."
+    - "This seems about the same as your last visit."
+
 Return ONLY valid JSON:
 {
   "has_prior_data": true/false,
@@ -2167,7 +2967,8 @@ Return ONLY valid JSON:
   "change_detected": true/false,
   "change_direction": "improved|worsened|neutral_change|no_change|new_data",
   "change_magnitude": "large|moderate|small|none",
-  "clinical_note": "..."
+  "clinical_note": "...",
+  "patient_facing_note": "..." or null
 }
 """
 
@@ -2180,7 +2981,8 @@ def run_prior_comparison(step: dict, current_answer: str, last_topic_data: dict)
     default = {
         "has_prior_data": False, "last_answer": None,
         "change_detected": False, "change_direction": "new_data",
-        "change_magnitude": "none", "clinical_note": "No prior data available."
+        "change_magnitude": "none", "clinical_note": "No prior data available.",
+        "patient_facing_note": None,
     }
     if not last_topic_data:
         return default
@@ -2215,21 +3017,35 @@ RED FLAGS TO DETECT:
 
 TIER DEFINITIONS:
   0 — NO URGENCY: Continue normally.
-  1 — WATCH: Notable signal. Log it, elevate in report, continue session.
+  1 — WATCH: Notable signal. Log for report, continue session normally.
   2 — URGENT: Care team must contact patient today. Continue session.
        Show one care team message to the patient.
   3 — EMERGENCY: Immediate threat. Terminate session. Patient to emergency services.
 
 SIGNAL RULES:
-  Medical signals → Tier 2 minimum:
-    M1: Severe uncontrolled pain (≥7/10) with nothing helping
-    M2: Sudden new severe pain in head/neck/throat
-    M3: Fever with chills in an HNC patient (immunocompromised)
-    M4: Complete inability to swallow ANY liquids
-    M5: Breathing difficulty at rest / wheezing
-    M6: Prescription medication suddenly stopped
-    M7: Reported falls
-    M8: Significant functional disruption (can't sleep, can't eat for days)
+
+  IMPORTANT CLINICAL CONTEXT FOR HNC PATIENTS:
+  Pain scores of 7-8/10 are clinically expected during active chemoradiation for head
+  and neck cancer — mucositis, dysphagia, and treatment toxicity routinely produce this
+  level. A high pain score ALONE does not warrant Tier 2 escalation in this population.
+  You MUST look for additional signals beyond the number itself.
+
+  Medical signals:
+    M1 — SEVERE UNCONTROLLED PAIN:
+      Tier 1 (WATCH): Pain 7-9/10 alone, without other signals.
+      Tier 2 (URGENT): Pain 7-9/10 AND at least one of:
+        - Patient states nothing helps OR medication is not working
+        - Patient cannot eat, sleep, or perform basic activities because of pain
+        - Pain is new or suddenly much worse than their baseline
+        - Fever/chills present alongside severe pain
+      Tier 2 (URGENT): Pain reported as 10/10 or "worst of my life" or "unbearable"
+    M2: Sudden new severe pain in head/neck — Tier 2
+    M3: Fever with chills in an HNC patient (immunocompromised) — Tier 2 always
+    M4: Complete inability to swallow ANY liquids — Tier 2
+    M5: Breathing difficulty at rest or wheezing — Tier 2
+    M6: Prescription medication suddenly stopped — Tier 2
+    M7: Reported falls — Tier 1
+    M8: Significant functional disruption (3+ nights no sleep, cannot eat for days) — Tier 2
   
   Psychological signals:
     P1: Explicit suicidal ideation or self-harm intent → TIER 3 ALWAYS
@@ -2238,6 +3054,15 @@ SIGNAL RULES:
     P4: Complete isolation ("no one to help me") with high pain → Tier 2
 
   Accumulation: 3+ Tier 1 signals in same session → escalate to Tier 2.
+
+IMPORTANT NON-ESCALATION GUARDRAILS:
+  - Do NOT escalate just because an answer is brief, partial, or missing one detail.
+  - Do NOT escalate just because the patient does not remember a dose, timing, or exact amount.
+  - Do NOT escalate just because a patient reports PRN or non-daily use without saying it is prescribed daily.
+  - Do NOT treat "every 2 days", "sometimes", or similar medication-use frequency by itself as urgent.
+  - Medication adherence becomes urgent only if the patient clearly reports they stopped an important prescribed medication,
+    cannot access it, or their symptoms are uncontrolled because they are missing it.
+  - If the patient gives usable but incomplete information, continue normally unless another red flag is clearly present.
 
 PATIENT MESSAGES (verbatim — do not modify):
   Tier 2: "Thank you for sharing this with us. We can see you're having a really
@@ -2427,6 +3252,29 @@ You evaluate patient answers from the physician's perspective. Your outputs:
   3. A compact clinical note (≤35 words, third person) for the doctor's report
 
 FOLLOW-UP RULES:
+  - The question list is a question bank, not a rigid script. Judge the current answer
+    like a clinician deciding whether anything important is still missing.
+  - A meaningful free-text answer in the patient's own words is clinically usable even if it does not match the option wording.
+  - If a free-text question contains yes/no wording and the patient gives a simple "yes" or "no", treat that as minimally usable data unless the question clearly asked for a descriptive detail like where, when, how often, or what kind.
+  - If the patient gave a broad but meaningful answer, break down what is missing conceptually; do NOT treat it as meaningless.
+  - If the patient gives a meaningful negative screen ("no", "not really", "I am okay", "fine") to a broad symptom or emotional check-in question, treat that as a usable answer rather than forcing an unnecessary impact follow-up.
+  - If the patient gives a negative screen to a broad opener, set screen_negative_signal=true when the next likely question would otherwise just ask about downstream impact of the same denied problem.
+  - If the patient clearly indicates they do not have a problem in that domain, prefer skipping nonessential downstream questions rather than completing the whole branch mechanically.
+  - Ask only questions that are still clinically necessary after the patient's actual answer.
+  - If the patient already explained the reason in their own words, do NOT recommend a generic "what is making this difficult" follow-up.
+  - If the patient supplies one detail and explicitly does not know another, accept the known detail and only ask for the missing one if it is truly necessary.
+  - If the missing detail is something the patient reasonably may not know right now, prefer no follow-up over repetitive questioning.
+  - Never imply the presence of a symptom the patient just denied.
+  - You will receive recent conversation history for this topic only. Use it to avoid repeated questions.
+  - Do NOT create a custom follow-up whose only purpose is to ask the same thing as the candidate next step in different words.
+  - If the next formal step already covers the natural next question, prefer no custom follow-up and let that next step be asked once.
+  - A patient should never have to answer a natural-language version of a question and then immediately answer the form version of the same question.
+  - This is especially important after structured option answers like Yes/No or category selections: if the next formal step can ask the next needed detail directly, prefer no custom bridge follow-up.
+  - If the current answer already addresses the candidate next step, set next_step_action to skip that step.
+  - If several upcoming questions become unnecessary for the same reason, include them in next_step_action.plan.
+  - If the patient's raw wording already fully answers the candidate next step, skip that step and carry the raw detail forward instead of asking it again.
+  - If the candidate next step, or any proposed follow-up, would substantially repeat a recent question already asked in this topic, suppress it.
+  - If a natural assistant acknowledgment has already effectively asked the next question, do not ask it again.
   - ONLY recommend follow-up if information_completeness is "partial" or "none"
     AND follow_up_count is 0 AND the missing info is clinically meaningful
   - NEVER recommend follow-up if follow_up_count ≥ 1 (absolute limit: 1 per question)
@@ -2437,6 +3285,23 @@ SPECIAL CLINICAL SIGNALS (set if present):
   medication_stop_signal: patient stopped taking prescription medication without explanation
   aggravating_medication_signal: patient reports their medication makes symptoms worse
   severity_underreporting: patient rates low severity but describes severe functional impact
+  screen_negative_signal: patient's answer functions as a meaningful negative screen for the symptom/concern being assessed
+
+next_step_action:
+  - Use this to suppress an immediate next question when it no longer makes clinical sense
+  - This is the main mechanism for skipping downstream impact/management/change questions generically across topics
+  - Only use it when the candidate next step would be unnecessary, redundant, or context-mismatched given the current answer and session answers
+  - Prefer suggested_answer to be an exact option from the candidate next step when obvious, often "No"
+  - plan is optional and may list additional upcoming steps that should also be auto-resolved to avoid unnecessary questioning
+  - carry_forward_answer is optional and should be used when the patient's current raw answer already provides the value for a downstream step, especially a free-text detail step that would otherwise repeat the same question
+  - Good examples:
+    - Patient denies emotional distress and next step asks whether anxiety is affecting sleep/eating → skip with suggested_answer "No"
+    - Patient denies depression or feeling down and the next questions only elaborate on mood burden or support needs → skip them unless there is another clear concern
+    - Patient answers a location chooser with a specific body part like "nose" and the next step asks which body part hurts → skip that next step and carry forward "nose"
+    - Patient says a sore is not painful and next step asks whether treatment for painful sores is helping → skip with suggested_answer "No"
+    - Patient says IV fluids are helping and gives no sign they want changes, and next step asks about adjusting frequency → skip with suggested_answer "No"
+    - Patient says medication is not causing drowsiness and next step asks whether drowsiness is affecting schedule → skip with suggested_answer "No"
+  - Do not use this to skip structurally essential questions like a severity rating or a new symptom location unless the current answer already fully covers them
 
 follow_up_goal: A statement of WHAT information is needed — NOT a question.
   Example: "Obtain a numeric pain severity score — patient described pain without rating it."
@@ -2465,11 +3330,26 @@ Return ONLY valid JSON:
   "change_significance": "critical|notable|stable|no_baseline",
   "clinical_priority": "high|medium|low",
   "doctor_note": "..." or null,
+  "next_step_action": {{
+    "skip_immediate_next_step": false,
+    "suggested_answer": "..." or null,
+    "reason": "..." or null,
+    "carry_forward_answer": "..." or null,
+    "plan": [
+      {{
+        "step_id": "...",
+        "suggested_answer": "..." or null,
+        "carry_forward_answer": "..." or null,
+        "reason": "..." or null
+      }}
+    ]
+  }},
   "special_signals": {{
     "trajectory_mismatch": false,
     "medication_stop_signal": false,
     "aggravating_medication_signal": false,
-    "severity_underreporting": false
+    "severity_underreporting": false,
+    "screen_negative_signal": false
   }}
 }}
 """
@@ -2482,6 +3362,11 @@ def run_doctor_relevance(
     prior_comparison: dict,
     session_answers: dict,
     followup_count: int,
+    topic_history: list[dict[str, str]],
+    recent_questions: list[str],
+    detail_coverage: dict,
+    candidate_next_step: Optional[dict] = None,
+    upcoming_steps: Optional[list[dict]] = None,
 ) -> dict:
     """
     Agent 5: Assess clinical sufficiency and decide if follow-up is warranted.
@@ -2491,9 +3376,17 @@ def run_doctor_relevance(
         "follow_up_recommended": False, "follow_up_goal": None,
         "follow_up_urgency": "none", "change_significance": "no_baseline",
         "clinical_priority": "medium", "doctor_note": None,
+        "next_step_action": {
+            "skip_immediate_next_step": False,
+            "suggested_answer": None,
+            "reason": None,
+            "carry_forward_answer": None,
+            "plan": [],
+        },
         "special_signals": {
             "trajectory_mismatch": False, "medication_stop_signal": False,
             "aggravating_medication_signal": False, "severity_underreporting": False,
+            "screen_negative_signal": False,
         },
     }
     result = _call_agent(_DOCTOR_RELEVANCE_SYS, {
@@ -2504,7 +3397,25 @@ def run_doctor_relevance(
         "current_answer_matched": current_answer_matched,
         "prior_comparison": prior_comparison,
         "session_answers_so_far": session_answers,
+        "recent_topic_history": topic_history,
+        "recent_question_texts": recent_questions,
+        "detail_coverage": detail_coverage,
         "follow_up_count_this_question": followup_count,
+        "candidate_next_step": {
+            "id": candidate_next_step.get("id"),
+            "text": candidate_next_step.get("text"),
+            "type": candidate_next_step.get("type"),
+            "options": candidate_next_step.get("opts", []),
+        } if candidate_next_step else None,
+        "upcoming_steps": [
+            {
+                "id": s.get("id"),
+                "text": s.get("text"),
+                "type": s.get("type"),
+                "options": s.get("opts", []),
+            }
+            for s in (upcoming_steps or [])
+        ],
     }, max_tokens=400)
 
     if not result:
@@ -2516,6 +3427,8 @@ def run_doctor_relevance(
         result["follow_up_goal"] = None
 
     merged = {**default, **result}
+    if "next_step_action" in result and isinstance(result["next_step_action"], dict):
+        merged["next_step_action"] = {**default["next_step_action"], **result["next_step_action"]}
     if "special_signals" in result and isinstance(result["special_signals"], dict):
         merged["special_signals"] = {**default["special_signals"], **result["special_signals"]}
 
@@ -2540,6 +3453,21 @@ TONE PROFILES:
   simplified — short sentences, very simple words, one idea only
 
 RULES:
+  - Treat the original form question as background only; you are not tied to its exact wording
+  - Ask the most clinically useful next single question, as a doctor or nurse naturally would
+  - Stay anchored to the patient's last answer; the follow-up should feel like a direct continuation of what they just said
+  - If the patient used plain-language wording, mirror that wording naturally instead of switching back to rigid form language
+  - Ask only for the single missing detail; never restate details the patient already provided
+  - If the patient said they do not know a detail, do not challenge that or sound repetitive
+  - Never contradict an explicit "no" or "yes" the patient just gave
+  - Never write a follow-up like "Besides anxiety..." or otherwise imply a symptom exists after the patient denied it
+  - You will receive recent topic history and recent question texts from this topic only
+  - Do not write a question that substantially repeats any recent question in that history
+  - If the candidate next step already asks the same thing, return null instead of paraphrasing it
+  - After a structured option answer, do not pre-ask the next formal step in different words just to sound conversational.
+  - Never ask the patient to translate their own concrete answer into the form's categories. For example, after a patient says "nose", do not ask "throat, tongue, or somewhere else?" because that classification should happen internally.
+  - If the patient's answer already gives a concrete real-world example, assume the system can preserve it and ask only the next clinically meaningful question.
+  - If prior-comparison context is clinically useful, you may briefly reflect it in a natural way, but only as conversational context, never as a rigid template
   - Write in second person, conversational language
   - Never use medical jargon without immediate plain explanation
   - NEVER ask a multi-part question
@@ -2550,7 +3478,7 @@ RULES:
 
 Return ONLY valid JSON:
 {{
-  "follow_up_question": "...",
+  "follow_up_question": "..." or null,
   "preamble": "..." or null
 }}
 preamble: ≤10 words transitional phrase if naturally needed, else null.
@@ -2563,6 +3491,9 @@ def run_next_move_agent(
     followup_goal: str,
     tone_profile: str,
     simplify: bool,
+    topic_history: list[dict[str, str]],
+    recent_questions: list[str],
+    candidate_next_step: Optional[dict],
 ) -> dict:
     """
     Agent 6: Author the follow-up question in natural language.
@@ -2573,9 +3504,17 @@ def run_next_move_agent(
         "follow_up_goal": followup_goal,
         "tone_profile": tone_profile,
         "simplify": simplify,
+        "recent_topic_history": topic_history,
+        "recent_question_texts": recent_questions,
+        "candidate_next_step": {
+            "id": candidate_next_step.get("id"),
+            "text": candidate_next_step.get("text"),
+            "type": candidate_next_step.get("type"),
+            "options": candidate_next_step.get("opts", []),
+        } if candidate_next_step else None,
     }, max_tokens=120)
 
-    if result and result.get("follow_up_question"):
+    if result and "follow_up_question" in result:
         return result
     # Fallback: derive a question from the goal
     return {
@@ -2592,7 +3531,23 @@ def _build_session_answers(topic_key: str) -> dict:
     """Build {question_id: raw_answer} from current session state for the topic."""
     state = st.session_state.topic_states.get(topic_key, {})
     data = state.get("data", {})
-    return {k: str(v) for k, v in data.items() if v is not None}
+    raw_answers = state.get("raw_answers", {})
+    payload = {}
+    for k, v in data.items():
+        if v is None:
+            continue
+        payload[k] = str(raw_answers.get(k, v))
+    return payload
+
+
+def _build_topic_history(topic_key: str) -> list[dict[str, str]]:
+    state = st.session_state.topic_states.get(topic_key, {})
+    return _recent_topic_history(state)
+
+
+def _build_recent_question_texts(topic_key: str) -> list[str]:
+    state = st.session_state.topic_states.get(topic_key, {})
+    return _recent_topic_questions(state)
 
 
 def _build_prior_baseline(topic_key: str) -> dict:
@@ -2605,10 +3560,23 @@ def _build_prior_baseline(topic_key: str) -> dict:
     return {k: str(last[k]) for k in keys}
 
 
+def _build_all_topic_data() -> dict:
+    payload = {}
+    for _, key in TOPICS:
+        topic_state = st.session_state.topic_states[key]
+        topic_data = dict(topic_state.get("data", {}))
+        raw_answers = topic_state.get("raw_answers", {})
+        if raw_answers:
+            topic_data["_verbatim_answers"] = dict(raw_answers)
+        payload[key] = topic_data
+    return payload
+
+
 def run_agent_pipeline(
     topic_key: str,
     step: dict,
     answer: str,
+    raw_answer: Optional[str],
     state: dict,
     last_topic_data: dict,
 ) -> dict:
@@ -2639,15 +3607,21 @@ def run_agent_pipeline(
         return _pipeline_default()
 
     question_count = len(state.get("data", {}))
+    current_raw_answer = str(raw_answer if raw_answer is not None else answer)
     session_answers = _build_session_answers(topic_key)
     prior_baseline  = _build_prior_baseline(topic_key)
     followup_count  = state.get("followup_counts", {}).get(step["id"], 0)
+    topic_history = _build_topic_history(topic_key)
+    recent_questions = _build_recent_question_texts(topic_key)
+    candidate_next_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
+    upcoming_steps = get_upcoming_steps(topic_key, state["data"], state.get("raw_answers"), limit=5)
 
     # ── STEP 1: Answer Interpreter (must run first) ────────────────
-    interp = run_answer_interpreter(step, answer)
+    interp = run_answer_interpreter(step, current_raw_answer, topic_history=topic_history)
     matched = interp.get("matched_option")
     distress = interp.get("distress_flag", False)
     urgency_flag = interp.get("urgency_flag", False)
+    detail_coverage = run_detail_coverage_agent(step, current_raw_answer, topic_history=topic_history, recent_questions=recent_questions)
 
     # ── STEP 2: Run three agents in parallel ───────────────────────
     # Prior Comparison, Urgency, and Sentiment can all run at once.
@@ -2659,17 +3633,17 @@ def run_agent_pipeline(
     active_sentiment_signals = st.session_state.get("sentiment_state", {}).get("all_signals", [])
 
     def _run_prior():
-        return run_prior_comparison(step, answer, last_topic_data)
+        return run_prior_comparison(step, current_raw_answer, last_topic_data)
 
     def _run_urgency():
         return run_urgency_agent(
-            step, answer, matched, session_answers, prior_baseline,
+            step, current_raw_answer, matched, session_answers, prior_baseline,
             active_urgency_signals, distress, urgency_flag
         )
 
     def _run_sentiment():
         return run_sentiment_agent(
-            step, answer, session_answers, active_sentiment_signals, question_count
+            step, current_raw_answer, session_answers, active_sentiment_signals, question_count
         )
 
     with _futures.ThreadPoolExecutor(max_workers=3) as pool:
@@ -2698,7 +3672,10 @@ def run_agent_pipeline(
 
     # ── STEP 4: Doctor-Relevance ───────────────────────────────────
     dr_out = run_doctor_relevance(
-        step, answer, matched, prior_comp, session_answers, followup_count
+        step, current_raw_answer, matched, prior_comp, session_answers, followup_count,
+        topic_history=topic_history, recent_questions=recent_questions,
+        detail_coverage=detail_coverage, candidate_next_step=candidate_next_step,
+        upcoming_steps=upcoming_steps,
     )
 
     # ── STEP 5: Apply follow-up decision logic ─────────────────────
@@ -2730,6 +3707,14 @@ def run_agent_pipeline(
         suppress = True
     if sigs.get("E3_resistance") and priority != "high":
         suppress = True
+    if (
+        step.get("type") == "options"
+        and candidate_next_step
+        and matched in (step.get("opts") or [])
+        and dr_out.get("information_completeness") == "complete"
+        and not force_followup
+    ):
+        suppress = True
 
     do_follow_up = (force_followup or dr_recommends) and not suppress
 
@@ -2738,21 +3723,33 @@ def run_agent_pipeline(
     if do_follow_up and followup_goal:
         tone = adapt.get("tone_profile", "standard")
         simplify = adapt.get("simplify_next_question", False)
-        nm_out = run_next_move_agent(step, answer, followup_goal, tone, simplify)
+        nm_out = run_next_move_agent(
+            step, current_raw_answer, followup_goal, tone, simplify,
+            topic_history=topic_history, recent_questions=recent_questions,
+            candidate_next_step=candidate_next_step,
+        )
         preamble = nm_out.get("preamble") or ""
         fq = nm_out.get("follow_up_question", "")
-        follow_up_question = f"{preamble} {fq}".strip() if preamble else fq
+        follow_up_question = f"{preamble} {fq}".strip() if preamble and fq else fq
+        if _question_already_asked(state, follow_up_question):
+            follow_up_question = ""
+            do_follow_up = False
 
     # ── STEP 7: Build assistant message for non-follow-up case ─────
     assistant_message = ""
     if not do_follow_up:
         comp_note    = prior_comp.get("clinical_note", "")
+        patient_change_note = (prior_comp.get("patient_facing_note") or "").strip()
         change_dir   = prior_comp.get("change_direction", "new_data")
         prev_answer  = prior_comp.get("last_answer", "")
         emotional    = sentiment_out.get("emotional_state", "neutral")
 
         # Build a brief contextual acknowledgment
-        if comp_note and change_dir in ("worsened", "improved") and prev_answer:
+        if detail_coverage.get("patient_acknowledgment") and detail_coverage.get("answered_with_uncertainty"):
+            assistant_message = detail_coverage["patient_acknowledgment"]
+        elif patient_change_note:
+            assistant_message = patient_change_note
+        elif comp_note and change_dir in ("worsened", "improved") and prev_answer:
             assistant_message = comp_note
         elif emotional == "distressed":
             assistant_message = "That sounds really difficult. I've made a note of this for your care team."
@@ -2795,6 +3792,7 @@ def run_agent_pipeline(
         "clinical_priority": priority,
         "change_significance": dr_out.get("change_significance", "no_baseline"),
         "change_clinical_note": prior_comp.get("clinical_note", ""),
+        "next_step_action": dr_out.get("next_step_action"),
         "special_signals": dr_out.get("special_signals", {}),
         "sentiment_note": sentiment_out.get("engagement_note_for_doctor"),
     }
@@ -2809,6 +3807,7 @@ def _pipeline_default() -> dict:
         "reduce_follow_up": False, "wants_to_stop": False,
         "doctor_note": None, "clinical_priority": "medium",
         "change_significance": "no_baseline", "change_clinical_note": "",
+        "next_step_action": None,
         "special_signals": {}, "sentiment_note": None,
     }
 
@@ -2841,19 +3840,38 @@ def _merge_sentiment_state(sentiment_out: dict):
 # LEGACY SUPPORT: keep interpret_user_input_with_options working
 # ══════════════════════════════════════════════════════════════════
 
-def interpret_user_input_with_options(step, user_input):
+def interpret_user_input_with_options(step, user_input, topic_history: Optional[list[dict[str, str]]] = None):
     """
-    Legacy wrapper: use the Answer Interpreter Agent to classify text.
+    Use the Answer Interpreter Agent to classify free-text against question options.
+    Falls back to the catch-all option (Somewhere else / Other) if the agent returns
+    no_match but a catch-all exists and the answer is a real, meaningful response.
     Returns matched option string if found, else original input.
     """
-    if not openai_client:
-        return user_input
     if not step.get("opts"):
         return user_input
-    result = run_answer_interpreter(step, user_input)
+
+    normalized = _norm_text(user_input)
+    for opt in step.get("opts", []):
+        if _norm_text(opt) == normalized:
+            return opt
+
+    opts = step.get("opts", [])
+    if (
+        "Somewhere else" in opts
+        and _looks_like_body_location_phrase(user_input)
+        and ("where" in _norm_text(step.get("text", "")) or "location" in _norm_text(step.get("text", "")))
+    ):
+        return "Somewhere else"
+
+    if not openai_client:
+        return user_input
+
+    result = run_answer_interpreter(step, user_input, topic_history=topic_history)
     matched = result.get("matched_option")
+
     if matched and matched in step.get("opts", []):
         return matched
+
     return user_input
 
 
@@ -3040,20 +4058,7 @@ def generate_report(name: str, all_data: dict) -> str:
         if note:
             sentiment_notes.append(note)
 
-    result = _call_agent(_REPORT_AGENT_SYS, {
-        "patient_name": name,
-        "report_date": today,
-        "symptom_data_by_topic": topic_summaries,
-        "freeform_notes": all_data.get("freeform_notes", []),
-        "urgency_tier": urg_tier,
-        "urgency_signals_active": urg_sigs,
-        "agent_doctor_notes": doctor_notes,
-        "patient_sentiment_notes": sentiment_notes,
-        "last_checkin_data": st.session_state.get("last_checkin", {}),
-    }, max_tokens=2500)
-
-    # _call_agent returns a dict — for the report we want plain text
-    # Fall back to _call_openai for the report since it's long prose
+    # Build prompt payload — note notes already collected above
     data_json = json.dumps({
         "patient_name": name,
         "report_date": today,
@@ -3091,14 +4096,7 @@ def _default_chatty_reply(
     last_topic_data: dict,
 ) -> str:
     """Fallback acknowledgment when agents are unavailable."""
-    prev_same = _short_prev_answer(last_topic_data.get(step["id"])) if last_topic_data else ""
-    if prev_same and prev_same.lower() != answer.strip().lower():
-        return "I've noted that — it sounds a bit different from last time, which is helpful for your team to know."
-    if topic_key == "mood":
-        return "That sounds like a lot to carry. I've made a note of it for your care team."
-    if topic_key == "pain":
-        return "I've noted those pain details so your team can see exactly how it's been feeling."
-    return "I've noted that detail for your care team."
+    return "I've noted that for your care team."
 
 
 
@@ -3117,6 +4115,10 @@ def _init_state():
                 "data": {},
                 "chat": [],
                 "followup_counts": {},
+                "raw_answers": {},
+                "last_prompted_step_id": None,
+                "last_prompted_text": "",
+                "generated_prompts": {},
             }
             for _, key in TOPICS
         },
@@ -3287,109 +4289,161 @@ def _checkin_summary_html(topic_key: str, data: dict) -> str:
 
 def _natural_summary(topic_key: str, data: dict) -> str:
     """Return a short natural-language sentence summarising a topic's previous answers."""
+    if not data:
+        return ""
+    topic_label = next((label for label, key in TOPICS if key == topic_key), topic_key.replace("_", " ").title())
+    result = run_topic_summary_agent(topic_label, data)
+    summary = str(result.get("summary") or "").strip()
+    if summary:
+        return summary
+    answered = len([k for k, v in data.items() if v not in (None, "", [], {}) and not str(k).endswith("_other_detail")])
+    return f"{answered} details were recorded last visit." if answered else ""
 
-    def v(field):
-        val = data.get(field)
-        if isinstance(val, list):
-            return val if val else None
-        return val if val is not None else None
 
-    def yn(field):
-        return v(field) == "Yes"
+def _report_topic_fallback(topic_key: str, topic_label: str, last_topic_data: dict, current_topic_data: dict) -> dict:
+    last_summary = _natural_summary(topic_key, last_topic_data) if last_topic_data else "No prior details recorded."
+    current_summary = _natural_summary(topic_key, current_topic_data) if current_topic_data else "Not answered this visit."
+    if not current_topic_data:
+        status = "unanswered"
+    elif not last_topic_data:
+        status = "new_issue"
+    else:
+        status = "stable"
+    status_label = {
+        "worsened": "Worsened",
+        "new_issue": "New issue",
+        "improved": "Improved",
+        "stable": "Stable",
+        "unanswered": "Not answered",
+    }.get(status, "Stable")
+    return {
+        "topic_key": topic_key,
+        "topic_label": topic_label,
+        "status": status,
+        "status_label": status_label,
+        "last_summary": last_summary,
+        "current_summary": current_summary,
+        "detail_lines": [],
+        "attention_lines": [],
+    }
 
-    if topic_key == "pain":
-        if v("has_pain") == "No":
-            return "No pain"
-        loc  = (v("pain_location") or "").lower()
-        sev  = v("throat_severity") or v("tongue_severity")
-        meds = v("pain_medications")
-        other_med = v("pain_medications_other_detail")
-        med_str = ""
-        if isinstance(meds, list) and "No pain medication" not in meds:
-            meds = [other_med if item == "Other" and other_med else item for item in meds]
-            med_str = f", on {meds[0]}" if len(meds) == 1 else f", on {meds[0]} + {len(meds)-1} more"
-        if loc and sev is not None:
-            return f"{loc.capitalize()} pain ({sev}/10){med_str}"
-        elif loc:
-            return f"{loc.capitalize()} pain{med_str}"
-        return f"Pain reported{med_str}"
 
-    elif topic_key == "nutrition":
-        eating = v("eating_ability") or ""
-        weight = v("weight")
-        w_str  = f", {weight} lbs" if weight else ""
-        if "normally" in eating:
-            return f"Eating normally{w_str}"
-        elif "less" in eating:
-            return f"Eating less than usual{w_str}"
-        elif "Struggling" in eating:
-            return f"Struggling, liquids only{w_str}"
-        elif "tube" in eating.lower():
-            return f"On feeding tube{w_str}"
-        return f"Nutrition assessed{w_str}"
+def _report_topic_insights(all_data: dict) -> list[dict]:
+    insights = []
+    last_ck = st.session_state.get("last_checkin", {})
+    for label, key in TOPICS:
+        current_topic_data = all_data.get(key, {}) or {}
+        last_topic_data = last_ck.get(key, {}) or {}
+        fallback = _report_topic_fallback(key, label, last_topic_data, current_topic_data)
+        result = run_report_topic_insight_agent(label, last_topic_data, current_topic_data)
+        merged = {**fallback, **result}
+        merged["topic_key"] = key
+        merged["topic_label"] = label
+        if not merged.get("last_summary"):
+            merged["last_summary"] = fallback["last_summary"]
+        if not merged.get("current_summary"):
+            merged["current_summary"] = fallback["current_summary"]
+        merged["detail_lines"] = merged.get("detail_lines") or []
+        merged["attention_lines"] = merged.get("attention_lines") or []
+        insights.append(merged)
+    return insights
 
-    elif topic_key == "oral":
-        syms = []
-        if yn("mouth_sores"):      syms.append("mouth sores or thrush")
-        if yn("dry_mouth"):        syms.append("dry mouth")
-        if yn("mucus_issues"):     syms.append("sticky mucus")
-        if yn("teeth_gum_issues"): syms.append("gum problems")
-        return ", ".join(syms).capitalize() if syms else "No oral symptoms"
 
-    elif topic_key == "gi":
-        syms = []
-        nv = v("nausea_vomiting") or []
-        if "Nausea" in nv:              syms.append("nausea")
-        if "Vomiting" in nv:            syms.append("vomiting")
-        if "Diarrhea" in nv:            syms.append("diarrhea")
-        if yn("constipation"):          syms.append("constipation")
-        return ", ".join(syms).capitalize() if syms else "No GI symptoms"
-
-    elif topic_key == "fatigue":
-        fatigue = v("fatigue")
-        sleep   = v("sleep_quality")
-        if fatigue == "No" and sleep == "Yes":
-            return "No fatigue, sleeping well"
-        elif fatigue == "Yes" and sleep == "No":
-            return "Fatigued, trouble sleeping"
-        elif fatigue == "Yes":
-            return "Feeling fatigued"
-        elif sleep == "No":
-            return "Trouble sleeping"
-        return "Fatigue assessed"
-
-    elif topic_key == "activity":
-        level = v("activity_level") or ""
-        if "normally" in level:
-            return "Fully active"
-        elif "less" in level:
-            cause = (v("activity_limiting_factor") or "").lower()
-            return f"Less active — {cause}" if cause else "Less active than usual"
-        elif "Struggling" in level:
-            return "Struggling with daily tasks"
-        return "Activity assessed"
-
-    elif topic_key == "mood":
-        parts = []
-        if v("feeling_down") == "Yes":       parts.append("feeling depressed")
-        if v("support_adequate") == "No":    parts.append("limited support")
-        elif v("support_adequate") == "Yes": parts.append("good support")
-        if v("anxiety_impact") == "Yes":     parts.append("anxiety affecting daily life")
-        return ", ".join(parts[:2]).capitalize() if parts else "Mood assessed"
-
-    elif topic_key == "other":
-        syms = []
-        if yn("breathing_issues"): syms.append("breathing difficulty")
-        if yn("hearing_changes"):  syms.append("hearing changes")
-        if yn("dizziness"):        syms.append("dizziness")
-        if yn("fever_chills"):     syms.append("fever/chills")
-        if yn("skin_issues"):      syms.append("skin issues")
-        if v("voice_hoarseness") == "Yes, problems with my voice":
-            syms.append("voice changes")
-        return ", ".join(syms[:3]).capitalize() if syms else "No other symptoms"
-
+def _report_status_class(status: str) -> str:
+    if status in {"worsened", "new_issue"}:
+        return "red"
+    if status == "improved":
+        return "green"
     return ""
 
+
+def _report_status_text(status: str) -> str:
+    mapping = {
+        "improved": "Improved",
+        "worsened": "Worsened",
+        "new_issue": "New issue",
+        "stable": "No meaningful change",
+        "unanswered": "No current information",
+    }
+    return mapping.get(status, "No meaningful change")
+
+
+def _render_report_summary_banner(topic_insights: list[dict]):
+    overview = run_report_overview_agent(topic_insights)
+    main_issue = overview.get("main_issue") or "Clinical check-in summary ready for review."
+    new_issues = overview.get("new_issues") or []
+    improvements = overview.get("improvements") or []
+    needs_attention = overview.get("needs_attention") or []
+
+    parts = [
+        '<div class="report-summary-banner">',
+        '<div class="report-summary-avatar">🧑</div>',
+        '<div class="report-summary-copy">',
+        '<div class="report-summary-title">Patient Summary</div>',
+        f'<div><strong>Main issue:</strong> {_html.escape(str(main_issue))}</div>',
+    ]
+    if new_issues:
+        parts.append(f'<div><strong>New issues:</strong> {_html.escape("; ".join(str(x) for x in new_issues[:3]))}</div>')
+    if improvements:
+        parts.append(f'<div><strong>Improvement:</strong> {_html.escape("; ".join(str(x) for x in improvements[:3]))}</div>')
+    if needs_attention:
+        parts.append(f'<div><strong>Needs attention:</strong> {_html.escape("; ".join(str(x) for x in needs_attention[:4]))}</div>')
+    parts.extend(['</div>', '</div>'])
+    st.markdown("".join(parts), unsafe_allow_html=True)
+
+
+def _render_report_topic_card(insight: dict):
+    status_class = _report_status_class(insight.get("status", "stable"))
+    status_label = _report_status_text(insight.get("status", "stable"))
+    topic_name = insight.get("topic_label", "").split(" ", 1)[1] if " " in insight.get("topic_label", "") else insight.get("topic_label", "")
+    st.markdown(
+        f'<div class="report-topic-card {status_class}">'
+        f'  <div class="report-topic-strip">{_html.escape(status_label)}</div>'
+        f'  <div class="report-topic-body">'
+        f'    <div class="report-topic-name">{_html.escape(topic_name)}</div>'
+        f'    <div class="report-topic-compare">'
+        f'      <div class="report-topic-compare-row"><div class="report-topic-compare-label">Last</div><div class="report-topic-compare-value">{_html.escape(str(insight.get("last_summary") or "No prior details recorded."))}</div></div>'
+        f'      <div class="report-topic-compare-row"><div class="report-topic-compare-label">Now</div><div class="report-topic-compare-value">{_html.escape(str(insight.get("current_summary") or "Not answered this visit."))}</div></div>'
+        f'    </div>'
+        f'  </div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def _render_report_topic_detail(insight: dict, all_data: dict):
+    topic_key = insight["topic_key"]
+    last_topic_data = st.session_state.get("last_checkin", {}).get(topic_key, {}) or {}
+    current_topic_data = all_data.get(topic_key, {}) or {}
+
+    with st.expander("More details", expanded=False):
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("**Last check-in**")
+            st.markdown(str(insight.get("last_summary") or "No prior details recorded."))
+        with col2:
+            st.markdown("**Current check-in**")
+            st.markdown(str(insight.get("current_summary") or "Not answered this visit."))
+
+        if insight.get("attention_lines"):
+            st.markdown("**Key points**")
+            for line in insight["attention_lines"]:
+                st.markdown(f"- {line}")
+        if insight.get("detail_lines"):
+            st.markdown("**Comparison details**")
+            for line in insight["detail_lines"]:
+                st.markdown(f"- {line}")
+
+        last_html = _checkin_summary_html(topic_key, last_topic_data)
+        now_html = _checkin_summary_html(topic_key, current_topic_data)
+        if last_html or now_html:
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown("**Last visit details**")
+                st.markdown(last_html or '<div style="color:#7a8ea4;">No prior details recorded.</div>', unsafe_allow_html=True)
+            with col2:
+                st.markdown("**Current visit details**")
+                st.markdown(now_html or '<div style="color:#7a8ea4;">No current details recorded.</div>', unsafe_allow_html=True)
 
 # ══════════════════════════════════════════════════════════════════
 # FREE-FORM CHAT LLM
@@ -3461,18 +4515,174 @@ def _freeform_llm_response(messages: list) -> str:
 # ══════════════════════════════════════════════════════════════════
 
 def _append_next_question(
+    topic_key: str,
     state: dict,
     next_step: Optional[dict],
     assistant_message: str = "",
 ):
     message = assistant_message.strip()
-    next_text = _step_prompt_text(next_step) if next_step else ""
+    next_text = _step_prompt_text(next_step, topic_key=topic_key, state=state) if next_step else ""
+    prompt_consumed = False
     if message and next_text and _is_semantically_redundant_question(message, next_text):
-        message = ""
+        prompt_consumed = True
     if message:
         _append_assistant_message(state, message)
     if next_text:
-        _append_assistant_message(state, next_text)
+        if not prompt_consumed:
+            _append_assistant_message(state, next_text)
+        _remember_prompted_step(state, next_step, next_text)
+    elif not next_step:
+        _remember_prompted_step(state, None, "")
+
+
+def _maybe_skip_next_impact_question(topic_key: str, state: dict):
+    return
+
+
+def _apply_agent_next_step_action(topic_key: str, state: dict, action: Optional[dict]):
+    if not action:
+        return
+
+    plan = []
+    if action.get("skip_immediate_next_step"):
+        next_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
+        if next_step:
+            plan.append({
+                "step_id": next_step.get("id"),
+                "suggested_answer": action.get("suggested_answer"),
+                "carry_forward_answer": action.get("carry_forward_answer"),
+                "reason": action.get("reason"),
+            })
+    for item in action.get("plan", []) or []:
+        if isinstance(item, dict) and item.get("step_id"):
+            plan.append(item)
+
+    for item in plan:
+        step_id = item.get("step_id")
+        step = STEP_BY_ID.get(step_id)
+        if not step or step_id in state["data"]:
+            continue
+        if step.get("type") == "free_text":
+            carry = item.get("carry_forward_answer")
+            if isinstance(carry, str) and carry.strip():
+                value = carry.strip()
+                state["data"][step_id] = value
+                state["raw_answers"][step_id] = value
+            continue
+        if step.get("type") == "options":
+            opts = step.get("opts", [])
+            suggested = item.get("suggested_answer")
+            chosen = None
+            if suggested in opts:
+                chosen = suggested
+            else:
+                normalized_opts = {_norm_text(opt): opt for opt in opts}
+                if "no" in normalized_opts:
+                    chosen = normalized_opts["no"]
+                else:
+                    for opt in opts:
+                        if _norm_text(opt).startswith("no"):
+                            chosen = opt
+                            break
+            if chosen:
+                state["data"][step_id] = chosen
+                state["raw_answers"][step_id] = chosen
+
+
+def _apply_generic_fallback_next_step_action(topic_key: str, state: dict):
+    return
+
+
+def _maybe_apply_prompt_driven_skip(topic_key: str, state: dict, pipeline: dict):
+    return
+
+
+def _capture_rich_answer_into_next_step(
+    topic_key: str,
+    state: dict,
+    current_step: dict,
+    resolved_answer: Any,
+    raw_answer: Any,
+):
+    """
+    If a patient answers an option question with richer free text that already
+    answers the immediate next step, capture that detail now so the app does not
+    ask for it again in a different form.
+    """
+    if current_step.get("type") != "options":
+        return
+
+    raw_text = str(raw_answer or "").strip()
+    if not raw_text:
+        return
+    if isinstance(resolved_answer, str) and _norm_text(raw_text) == _norm_text(resolved_answer):
+        return
+
+    next_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
+    if not next_step or next_step.get("id") in state["data"]:
+        return
+    if next_step.get("type") != "options":
+        return
+
+    interpreted = interpret_user_input_with_options(
+        next_step,
+        raw_text,
+        topic_history=_recent_topic_history(state),
+    )
+    if interpreted not in next_step.get("opts", []):
+        return
+
+    coerced = _coerce_structured_answer(
+        topic_key,
+        next_step,
+        interpreted,
+        state["data"],
+        raw_answer=raw_text,
+    )
+    state["data"][next_step["id"]] = coerced
+    state["raw_answers"][next_step["id"]] = raw_text
+
+
+def _backfill_next_step_from_topic_history(topic_key: str, state: dict, next_step: Optional[dict]):
+    """
+    Safety net: if the next unresolved step is a location chooser with a catch-all
+    and the patient already named a concrete body part earlier in this topic,
+    resolve it internally instead of surfacing the chooser again.
+    """
+    if not next_step or next_step.get("id") in state["data"]:
+        return
+    if next_step.get("type") != "options":
+        return
+    if "Somewhere else" not in (next_step.get("opts") or []):
+        return
+    step_text = _norm_text(next_step.get("text", ""))
+    if "where" not in step_text and "location" not in step_text:
+        return
+
+    raw_answers = state.get("raw_answers", {})
+    for step_id, raw_text in reversed(list(raw_answers.items())):
+        if step_id == next_step.get("id"):
+            continue
+        text = str(raw_text or "").strip()
+        if not _looks_like_body_location_phrase(text):
+            continue
+        interpreted = interpret_user_input_with_options(
+            next_step,
+            text,
+            topic_history=_recent_topic_history(state),
+        )
+        if interpreted not in next_step.get("opts", []):
+            continue
+        coerced = _coerce_structured_answer(
+            topic_key,
+            next_step,
+            interpreted,
+            state["data"],
+            raw_answer=text,
+        )
+        state["data"][next_step["id"]] = coerced
+        state["raw_answers"][next_step["id"]] = text
+        break
 
 
 def _store_followup_prompt(
@@ -3483,9 +4693,8 @@ def _store_followup_prompt(
     assistant_message: str = "",
     retry_current_step: bool = False,
     allow_other_detail: bool = False,
+    target_step: Optional[dict] = None,
 ):
-    if _looks_vague_answer(state["data"].get(step["id"], "")):
-        assistant_message = ""
     state["waiting_for_followup"] = True
     state["pending_followup"] = {
         "source_step_id": step["id"],
@@ -3494,6 +4703,7 @@ def _store_followup_prompt(
         "assistant_message": assistant_message.strip(),
         "retry_current_step": retry_current_step,
         "allow_other_detail": allow_other_detail,
+        "target_step_id": target_step.get("id") if target_step else None,
     }
     combined_prompt = "\n\n".join([part for part in [assistant_message.strip(), question.strip()] if part])
     _append_assistant_message(state, combined_prompt)
@@ -3504,15 +4714,61 @@ def _request_retry_for_step(topic_key: str, step: dict, raw_input: str, source: 
     text = (raw_input or "").strip()
     if text:
         state["chat"].append({"role": "user", "content": text})
+    retry_question = _build_retry_prompt(step, text, topic_history=_recent_topic_history(state))
     _store_followup_prompt(
         topic_key,
         state,
         step,
-        _build_retry_prompt(step, text),
+        retry_question,
         retry_current_step=True,
         allow_other_detail=("Other" in step.get("opts", [])),
     )
     st.rerun()
+
+
+def _clear_step_inputs(topic_key: str, step: dict):
+    sid = step["id"]
+    stype = step["type"]
+
+    keys_to_clear = []
+    if stype == "options":
+        keys_to_clear.extend([
+            f"text_{topic_key}_{sid}",
+            f"text_{topic_key}_{sid}_submitted",
+            f"dropdown_{topic_key}_{sid}",
+            f"dropdown_{topic_key}_{sid}_submitted",
+            f"voice_{topic_key}_{sid}_submitted",
+            f"_vt_{topic_key}_{sid}_opt",
+            f"_vh_{topic_key}_{sid}_opt",
+        ])
+    elif stype == "multi_select":
+        keys_to_clear.extend([
+            f"text_{topic_key}_{sid}",
+            f"text_{topic_key}_{sid}_submitted",
+            f"dropdown_{topic_key}_{sid}",
+            f"dropdown_{topic_key}_{sid}_submitted",
+            f"voice_{topic_key}_{sid}_submitted",
+            f"_vt_{topic_key}_{sid}_multi",
+            f"_vh_{topic_key}_{sid}_multi",
+        ])
+    elif stype == "number":
+        keys_to_clear.extend([
+            f"text_{topic_key}_{sid}",
+            f"text_{topic_key}_{sid}_submitted",
+            f"_vt_{topic_key}_{sid}_num",
+            f"_vh_{topic_key}_{sid}_num",
+        ])
+    elif stype == "free_text":
+        keys_to_clear.extend([
+            f"ft_{topic_key}_{sid}",
+            f"ft_{topic_key}_{sid}_submitted",
+            f"ft_{topic_key}_{sid}_voice_sync",
+            f"_vt_{topic_key}_{sid}",
+            f"_vh_{topic_key}_{sid}",
+        ])
+
+    for key in keys_to_clear:
+        st.session_state.pop(key, None)
 
 
 def handle_pending_followup(topic_key: str, answer: str, source: str = "typed"):
@@ -3536,9 +4792,16 @@ def handle_pending_followup(topic_key: str, answer: str, source: str = "typed"):
 
         retry_text = (answer or "").strip()
         if source_step["type"] == "options":
-            interpreted = interpret_user_input_with_options(source_step, retry_text)
+            interpreted = interpret_user_input_with_options(source_step, retry_text, topic_history=_recent_topic_history(state))
             if interpreted in source_step.get("opts", []):
-                handle_answer(topic_key, source_step, interpreted, source=source)
+                handle_answer(
+                    topic_key,
+                    source_step,
+                    interpreted,
+                    source="structured",
+                    raw_answer=retry_text,
+                    display_override=retry_text,
+                )
                 return
             _request_retry_for_step(topic_key, source_step, retry_text, source=source)
             return
@@ -3546,23 +4809,114 @@ def handle_pending_followup(topic_key: str, answer: str, source: str = "typed"):
         if source_step["type"] == "multi_select":
             parsed = parse_multi_select_typed_input(source_step, retry_text)
             if parsed:
-                handle_answer(topic_key, source_step, parsed, source=source)
+                handle_answer(
+                    topic_key,
+                    source_step,
+                    parsed,
+                    source="structured",
+                    raw_answer=retry_text,
+                    display_override=retry_text,
+                )
                 return
-            if pending.get("allow_other_detail") and retry_text and not _looks_vague_answer(retry_text):
+            if pending.get("allow_other_detail") and retry_text:
                 state["data"][f"{source_step['id']}_other_detail"] = retry_text
                 handle_answer(
                     topic_key,
                     source_step,
                     ["Other"],
-                    source=source,
+                    source="structured",
                     display_override=retry_text,
+                    raw_answer=retry_text,
                 )
                 return
             _request_retry_for_step(topic_key, source_step, retry_text, source=source)
             return
 
+    target_step_id = pending.get("target_step_id")
+    target_step = STEP_BY_ID.get(target_step_id) if target_step_id else None
+    if target_step:
+        state["waiting_for_followup"] = False
+        state.pop("pending_followup", None)
+
+        followup_text = (answer or "").strip()
+        if target_step["type"] == "options":
+            interpreted = interpret_user_input_with_options(
+                target_step,
+                followup_text,
+                topic_history=_recent_topic_history(state),
+            )
+            if interpreted in target_step.get("opts", []):
+                handle_answer(
+                    topic_key,
+                    target_step,
+                    interpreted,
+                    source="structured",
+                    raw_answer=followup_text,
+                    display_override=followup_text,
+                )
+                return
+            _request_retry_for_step(topic_key, target_step, followup_text, source=source)
+            return
+
+        if target_step["type"] == "multi_select":
+            parsed = parse_multi_select_typed_input(target_step, followup_text)
+            if parsed:
+                handle_answer(
+                    topic_key,
+                    target_step,
+                    parsed,
+                    source="structured",
+                    raw_answer=followup_text,
+                    display_override=followup_text,
+                )
+                return
+            if "Other" in target_step.get("opts", []) and followup_text:
+                state["data"][f"{target_step['id']}_other_detail"] = followup_text
+                handle_answer(
+                    topic_key,
+                    target_step,
+                    ["Other"],
+                    source="structured",
+                    display_override=followup_text,
+                    raw_answer=followup_text,
+                )
+                return
+            _request_retry_for_step(topic_key, target_step, followup_text, source=source)
+            return
+
+        if target_step["type"] == "number":
+            try:
+                numeric_value = int(float(followup_text))
+            except (TypeError, ValueError):
+                _request_retry_for_step(topic_key, target_step, followup_text, source=source)
+                return
+            handle_answer(
+                topic_key,
+                target_step,
+                numeric_value,
+                source="structured",
+                display_override=followup_text,
+                raw_answer=followup_text,
+            )
+            return
+
+        handle_answer(
+            topic_key,
+            target_step,
+            followup_text,
+            source="free_text",
+            raw_answer=followup_text,
+            display_override=followup_text,
+        )
+        return
+
     state["chat"].append({"role": "user", "content": answer})
     state["data"][answer_key] = answer
+    pending_key = f"pending_followup_{topic_key}_{pending.get('answer_key', 'pending')}"
+    st.session_state.pop(pending_key, None)
+    submitted_pending_key = f"{pending_key}_submitted"
+    st.session_state.pop(submitted_pending_key, None)
+    st.session_state.pop(f"{pending_key}_voice_sync", None)
     state["waiting_for_followup"] = False
     state.pop("pending_followup", None)
 
@@ -3574,17 +4928,17 @@ def handle_pending_followup(topic_key: str, answer: str, source: str = "typed"):
         last_topic_data,
     )
 
-    next_step = get_next_step(topic_key, state["data"])
+    next_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
     state["status"] = "in_progress"
 
-    if topic_is_complete(topic_key, state["data"]):
+    if topic_is_complete(topic_key, state["data"], state.get("raw_answers")):
         state["status"] = "completed"
         state["chat"].append({
             "role": "assistant",
             "content": f"{closing}\n\n✅ Thank you — I have everything I need for this topic."
         })
     else:
-        _append_next_question(state, next_step, closing)
+        _append_next_question(topic_key, state, next_step, closing)
 
     st.rerun()
     return
@@ -3596,6 +4950,7 @@ def handle_answer(
     answer,
     source: str = "structured",
     display_override: Optional[str] = None,
+    raw_answer: Any = None,
 ):
     """
     Core answer handler — orchestrates all agents and determines next action.
@@ -3608,23 +4963,62 @@ def handle_answer(
     # ── Ensure followup_counts dict exists (backward compat) ──────
     if "followup_counts" not in state:
         state["followup_counts"] = {}
+    if "raw_answers" not in state:
+        state["raw_answers"] = {}
+    if "last_prompted_step_id" not in state:
+        state["last_prompted_step_id"] = None
+    if "last_prompted_text" not in state:
+        state["last_prompted_text"] = ""
+    if "generated_prompts" not in state:
+        state["generated_prompts"] = {}
+    if state.get("last_prompted_step_id") == step.get("id"):
+        _remember_prompted_step(state, None, "")
+    _clear_step_inputs(topic_key, step)
 
     display = display_override if display_override is not None else (
         ", ".join(answer) if isinstance(answer, list) else str(answer)
     )
     state["chat"].append({"role": "user", "content": display})
-    answer = _coerce_structured_answer(topic_key, step, answer, state["data"])
+    verbatim = raw_answer if raw_answer is not None else display
+    if isinstance(verbatim, str) and verbatim.strip():
+        state["raw_answers"][step["id"]] = verbatim.strip()
+    if (
+        step.get("type") == "multi_select"
+        and isinstance(answer, list)
+        and "Other" in answer
+        and isinstance(verbatim, str)
+        and verbatim.strip()
+    ):
+        state["data"][f"{step['id']}_other_detail"] = verbatim.strip()
+    answer = _coerce_structured_answer(topic_key, step, answer, state["data"], raw_answer=raw_answer)
     state["data"][step["id"]] = answer
-    next_step = get_next_step(topic_key, state["data"])
+    _capture_rich_answer_into_next_step(topic_key, state, step, answer, verbatim)
+    if topic_key == "pain" and step.get("id") == "pain_medications":
+        meds = answer if isinstance(answer, list) else [answer]
+        if "No pain medication" in meds:
+            for stale_id in ("med_dose_freq", "taking_as_prescribed", "med_adherence_issue", "med_side_effects"):
+                state["data"].pop(stale_id, None)
+                state["raw_answers"].pop(stale_id, None)
+    if step.get("id") == "other_pain_desc":
+        focus = run_pain_location_focus_agent(verbatim if isinstance(verbatim, str) else str(answer))
+        state["data"]["other_pain_head_neck_focused"] = bool(focus.get("head_neck_focused"))
+    if isinstance(verbatim, str) and not openai_client:
+        _auto_capture_following_answers(topic_key, state, verbatim)
+    next_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
+    _backfill_next_step_from_topic_history(topic_key, state, next_step)
+    next_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
     state["status"] = "in_progress"
 
     last_topic_data = st.session_state.last_checkin.get(topic_key, {})
 
     # ══════════════════════════════════════════════════════════════
-    # BRANCH A — Structured button click (fast path, no agents)
+    # BRANCH A — Structured non-string answers (fast path)
+    # Lists/numbers do not benefit much from the language pipeline.
+    # String answers, including button/option replies like "Yes" or "No",
+    # still go through the agents so the app can skip irrelevant follow-ups.
     # ══════════════════════════════════════════════════════════════
-    if source == "structured" and isinstance(answer, (list, int)):
-        if topic_is_complete(topic_key, state["data"]):
+    if source == "structured" and not isinstance(answer, str):
+        if topic_is_complete(topic_key, state["data"], state.get("raw_answers")):
             state["status"] = "completed"
             state["chat"].append({
                 "role": "assistant",
@@ -3632,18 +5026,15 @@ def handle_answer(
             })
             st.rerun()
             return
-        _append_next_question(state, next_step)
+        _append_next_question(topic_key, state, next_step)
         st.rerun()
         return
 
     # ══════════════════════════════════════════════════════════════
-    # BRANCH B — Free text / voice / typed — run full agent pipeline
+    # BRANCH B — String answers — run full agent pipeline
     # ══════════════════════════════════════════════════════════════
     if isinstance(answer, str):
-        is_vague = _looks_vague_answer(answer)
-
-        # Vague answer with no options to try → ask clarification (no LLM needed)
-        if is_vague and source in {"typed", "voice", "free_text"}:
+        if source in {"typed", "voice", "free_text"} and not openai_client and not answer.strip():
             _store_followup_prompt(
                 topic_key, state, step, _fallback_clarifying_question(step),
             )
@@ -3656,6 +5047,7 @@ def handle_answer(
                     topic_key=topic_key,
                     step=step,
                     answer=answer,
+                    raw_answer=verbatim if isinstance(verbatim, str) else str(verbatim),
                     state=state,
                     last_topic_data=last_topic_data,
                 )
@@ -3694,6 +5086,16 @@ def handle_answer(
                 st.rerun()
                 return
 
+            # ── Tier 2: avoid detached follow-ups in the same turn ─
+            if tier2_msg:
+                state["chat"].append({
+                    "role": "assistant",
+                    "content": "We'll pause this topic here for now so your care team can follow up directly.",
+                })
+                state["status"] = "completed"
+                st.rerun()
+                return
+
             # ── Follow-up question ────────────────────────────────
             if pipeline.get("follow_up") and pipeline.get("follow_up_question"):
                 fq = pipeline["follow_up_question"]
@@ -3701,11 +5103,16 @@ def handle_answer(
                 if _is_redundant_followup(step["text"], answer, fq):
                     pass   # Fall through to assistant_message + next question
                 else:
+                    next_step_action = pipeline.get("next_step_action")
+                    if next_step_action:
+                        _apply_agent_next_step_action(topic_key, state, next_step_action)
+                        next_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
                     # Increment follow-up counter
                     fc = state["followup_counts"]
                     fc[step["id"]] = fc.get(step["id"], 0) + 1
                     _store_followup_prompt(
                         topic_key, state, step, fq, ack,
+                        target_step=next_step,
                     )
                     st.rerun()
                     return
@@ -3722,18 +5129,23 @@ def handle_answer(
             elif ack:
                 assistant_message = ack
 
+            _apply_agent_next_step_action(topic_key, state, pipeline.get("next_step_action"))
+            next_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
+
         else:
             # No OpenAI — use fallback reply
             assistant_message = _default_chatty_reply(
                 topic_key, answer, step, last_topic_data
             )
+            _apply_generic_fallback_next_step_action(topic_key, state)
+            next_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
 
     else:
         # Non-string answer (numeric, list from multi_select on structured path)
         assistant_message = ""
 
     # ── Topic complete check ──────────────────────────────────────
-    if topic_is_complete(topic_key, state["data"]):
+    if topic_is_complete(topic_key, state["data"], state.get("raw_answers")):
         state["status"] = "completed"
         final_message = "✅ Thank you — I have everything I need for this topic."
         if assistant_message:
@@ -3742,7 +5154,7 @@ def handle_answer(
         st.rerun()
         return
 
-    _append_next_question(state, next_step, assistant_message)
+    _append_next_question(topic_key, state, next_step, assistant_message)
     st.rerun()
     return
 
@@ -3760,146 +5172,125 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
 
     state = st.session_state.topic_states[topic_key]
     prev = state["data"].get(step["id"])
-    _, composer_col = st.columns([1.05, 0.95])
+
+    def render_option_buttons(button_topic_key: str, button_step: dict, multi: bool = False):
+        opts = button_step.get("opts", [])
+        if not opts:
+            return
+        cols_per_row = 2 if len(opts) > 1 else 1
+        for idx in range(0, len(opts), cols_per_row):
+            row = st.columns(cols_per_row)
+            for offset, opt in enumerate(opts[idx:idx + cols_per_row]):
+                with row[offset]:
+                    if st.button(opt, key=f"btn_{button_topic_key}_{button_step['id']}_{idx + offset}", use_container_width=True):
+                        payload = [opt] if multi else opt
+                        handle_answer(button_topic_key, button_step, payload, source="structured")
+                        return
+
     # ── Options ─────────────────────────────────────────────────
     if stype == "options":
-        with composer_col:
-            st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
-            dropdown_key = f"dropdown_{topic_key}_{sid}"
-            dropdown_options = ["Select an option..."] + step["opts"]
-            if dropdown_key not in st.session_state:
-                st.session_state[dropdown_key] = "Select an option..."
-            col_text, col_dropdown = st.columns([4.6, 1.7])
+        st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
+        user_text = st.text_input(
+            "Message",
+            key=f"text_{topic_key}_{sid}",
+            label_visibility="collapsed",
+            placeholder="Type a reply..."
+        )
+        render_option_buttons(topic_key, step, multi=False)
 
-            with col_text:
-                user_text = st.text_input(
-                    "Message",
-                    key=f"text_{topic_key}_{sid}",
-                    label_visibility="collapsed",
-                    placeholder="Type a reply..."
-                )
+        with st.container():
+            voice_text = voice_widget(f"{topic_key}_{sid}_opt", label="Mic")
 
-            with col_dropdown:
-                selected_option = st.selectbox(
-                    "Quick option",
-                    dropdown_options,
-                    key=dropdown_key,
-                    label_visibility="collapsed",
-                )
+        submitted_key = f"text_{topic_key}_{sid}_submitted"
 
-            with st.container():
-                voice_text = voice_widget(f"{topic_key}_{sid}_opt", label="Mic")
+        if user_text and st.session_state.get(submitted_key) != user_text:
+            st.session_state[submitted_key] = user_text
+            interpreted = interpret_user_input_with_options(step, user_text, topic_history=_recent_topic_history(state))
+            if interpreted in step.get("opts", []):
+                handle_answer(topic_key, step, interpreted, source="structured",
+                              display_override=user_text, raw_answer=user_text)
+            else:
+                _request_retry_for_step(topic_key, step, user_text, source="typed")
+                return
 
-            if selected_option != "Select an option..." and st.session_state.get(f"{dropdown_key}_submitted") != selected_option:
-                st.session_state[f"{dropdown_key}_submitted"] = selected_option
-                handle_answer(topic_key, step, selected_option, source="structured")
-
-            submitted_key = f"text_{topic_key}_{sid}_submitted"
-
-            if user_text and st.session_state.get(submitted_key) != user_text:
-                st.session_state[submitted_key] = user_text
-                interpreted = interpret_user_input_with_options(step, user_text)
-                if interpreted in step.get("opts", []):
-                    handle_answer(topic_key, step, interpreted, source="typed")
-                else:
-                    _request_retry_for_step(topic_key, step, user_text, source="typed")
-                    return
-
-            voice_submitted_key = f"voice_{topic_key}_{sid}_submitted"
-            if voice_text and st.session_state.get(voice_submitted_key) != voice_text:
-                st.session_state[voice_submitted_key] = voice_text
-                interpreted = interpret_user_input_with_options(step, voice_text)
-                if interpreted in step.get("opts", []):
-                    handle_answer(topic_key, step, interpreted, source="voice")
-                else:
-                    _request_retry_for_step(topic_key, step, voice_text, source="voice")
-                    return
-            st.markdown('</div>', unsafe_allow_html=True)
+        voice_submitted_key = f"voice_{topic_key}_{sid}_submitted"
+        if voice_text and st.session_state.get(voice_submitted_key) != voice_text:
+            st.session_state[voice_submitted_key] = voice_text
+            interpreted = interpret_user_input_with_options(step, voice_text, topic_history=_recent_topic_history(state))
+            if interpreted in step.get("opts", []):
+                handle_answer(topic_key, step, interpreted, source="structured",
+                              display_override=voice_text, raw_answer=voice_text)
+            else:
+                _request_retry_for_step(topic_key, step, voice_text, source="voice")
+                return
+        st.markdown('</div>', unsafe_allow_html=True)
                 
 
     # ── Multi-select ─────────────────────────────────────────────
     elif stype == "multi_select":
-        with composer_col:
-            st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
-            dropdown_key = f"dropdown_{topic_key}_{sid}"
-            dropdown_options = ["Select an option..."] + step["opts"]
-            if dropdown_key not in st.session_state:
-                st.session_state[dropdown_key] = "Select an option..."
-            col_text, col_dropdown = st.columns([4.6, 1.7])
-            text_key = f"text_{topic_key}_{sid}"
-            submit_key = f"{text_key}_submitted"
-            with col_text:
-                user_text = st.text_input(
-                    "Reply",
-                    key=text_key,
-                    label_visibility="collapsed",
-                    placeholder="Type one or more answers, separated by commas..."
-                )
-            with col_dropdown:
-                selected_option = st.selectbox(
-                    "Quick option",
-                    dropdown_options,
-                    key=dropdown_key,
-                    label_visibility="collapsed",
-                )
-            with st.container():
-                voice_text = voice_widget(f"{topic_key}_{sid}_multi", label="Mic")
+        st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
+        text_key = f"text_{topic_key}_{sid}"
+        submit_key = f"{text_key}_submitted"
+        user_text = st.text_input(
+            "Reply",
+            key=text_key,
+            label_visibility="collapsed",
+            placeholder="Type one or more answers, separated by commas..."
+        )
+        render_option_buttons(topic_key, step, multi=True)
+        with st.container():
+            voice_text = voice_widget(f"{topic_key}_{sid}_multi", label="Mic")
 
-            if selected_option != "Select an option..." and st.session_state.get(f"{dropdown_key}_submitted") != selected_option:
-                st.session_state[f"{dropdown_key}_submitted"] = selected_option
-                handle_answer(topic_key, step, [selected_option], source="structured")
+        if user_text and st.session_state.get(submit_key) != user_text:
+            st.session_state[submit_key] = user_text
+            parsed = parse_multi_select_typed_input(step, user_text)
+            if parsed:
+                handle_answer(topic_key, step, parsed, source="structured",
+                              display_override=user_text, raw_answer=user_text)
+            else:
+                _request_retry_for_step(topic_key, step, user_text, source="typed")
+                return
 
-            if user_text and st.session_state.get(submit_key) != user_text:
-                st.session_state[submit_key] = user_text
-                parsed = parse_multi_select_typed_input(step, user_text)
-                if parsed:
-                    handle_answer(topic_key, step, parsed, source="typed")
-                else:
-                    _request_retry_for_step(topic_key, step, user_text, source="typed")
-                    return
-
-            voice_submit_key = f"voice_{topic_key}_{sid}_submitted"
-            if voice_text and st.session_state.get(voice_submit_key) != voice_text:
-                st.session_state[voice_submit_key] = voice_text
-                parsed = parse_multi_select_typed_input(step, voice_text)
-                if parsed:
-                    handle_answer(topic_key, step, parsed, source="voice")
-                else:
-                    _request_retry_for_step(topic_key, step, voice_text, source="voice")
-                    return
-            st.markdown('</div>', unsafe_allow_html=True)
+        voice_submit_key = f"voice_{topic_key}_{sid}_submitted"
+        if voice_text and st.session_state.get(voice_submit_key) != voice_text:
+            st.session_state[voice_submit_key] = voice_text
+            parsed = parse_multi_select_typed_input(step, voice_text)
+            if parsed:
+                handle_answer(topic_key, step, parsed, source="structured",
+                              display_override=voice_text, raw_answer=voice_text)
+            else:
+                _request_retry_for_step(topic_key, step, voice_text, source="voice")
+                return
+        st.markdown('</div>', unsafe_allow_html=True)
 
     # ── Number ───────────────────────────────────────────────────
     elif stype == "number":
-        with composer_col:
-            st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
-            text_key = f"text_{topic_key}_{sid}"
-            submit_key = f"{text_key}_submitted"
-            if text_key not in st.session_state:
-                st.session_state[text_key] = ""
-            col_text = st.columns([1])[0]
-            with col_text:
-                user_text = st.text_input(
-                    "Reply",
-                    key=text_key,
-                    label_visibility="collapsed",
-                    placeholder=f"Enter a number ({int(step['min_v'])}-{int(step['max_v'])})"
-                )
-            with st.container():
-                voice_text = voice_widget(f"{topic_key}_{sid}_num", label="Mic")
+        st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
+        text_key = f"text_{topic_key}_{sid}"
+        submit_key = f"{text_key}_submitted"
+        if text_key not in st.session_state:
+            st.session_state[text_key] = ""
+        user_text = st.text_input(
+            "Reply",
+            key=text_key,
+            label_visibility="collapsed",
+            placeholder=f"Enter a number ({int(step['min_v'])}-{int(step['max_v'])})"
+        )
+        with st.container():
+            voice_text = voice_widget(f"{topic_key}_{sid}_num", label="Mic")
 
-            candidate = user_text or voice_text or ""
-            if candidate and st.session_state.get(submit_key) != candidate:
-                st.session_state[submit_key] = candidate
-                try:
-                    val = int(float(candidate))
-                    if val < step["min_v"] or val > step["max_v"]:
-                        st.warning(f"Please enter a value between {int(step['min_v'])} and {int(step['max_v'])}.")
-                    else:
-                        handle_answer(topic_key, step, val, source="typed")
-                except ValueError:
-                    st.warning("Please enter a number.")
-            st.markdown('</div>', unsafe_allow_html=True)
+        candidate = user_text or voice_text or ""
+        if candidate and st.session_state.get(submit_key) != candidate:
+            st.session_state[submit_key] = candidate
+            try:
+                val = int(float(candidate))
+                if val < step["min_v"] or val > step["max_v"]:
+                    st.warning(f"Please enter a value between {int(step['min_v'])} and {int(step['max_v'])}.")
+                else:
+                    handle_answer(topic_key, step, val, source="typed")
+            except ValueError:
+                st.warning("Please enter a number.")
+        st.markdown('</div>', unsafe_allow_html=True)
 
     # ── Free text ────────────────────────────────────────────────
     elif stype == "free_text":
@@ -3915,26 +5306,27 @@ def render_input(topic_key: str, step: dict, prev_answer=None):
             st.session_state[widget_key] = transcript
             st.session_state[f"{widget_key}_voice_sync"] = transcript
 
-        with composer_col:
-            st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
-            with st.container():
-                free_text = st.text_input(
-                    "Reply",
-                    placeholder=step.get("placeholder", "Please describe…"),
-                    key=widget_key,
-                    label_visibility="collapsed",
-                )
-            with st.container():
-                voice_text = voice_widget(f"{topic_key}_{sid}", label="Mic")
-            if voice_text and voice_text != st.session_state.get(f"{widget_key}_voice_sync"):
-                st.session_state[widget_key] = voice_text
-                st.session_state[f"{widget_key}_voice_sync"] = voice_text
+        st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
+        with st.container():
+            free_text = st.text_input(
+                "Reply",
+                placeholder=step.get("placeholder", "Please describe…"),
+                key=widget_key,
+                label_visibility="collapsed",
+            )
+        with st.container():
+            voice_text = voice_widget(f"{topic_key}_{sid}", label="Mic")
+        if voice_text and voice_text != st.session_state.get(f"{widget_key}_voice_sync"):
+            st.session_state[f"{widget_key}_voice_sync"] = voice_text
+            st.session_state[submit_key] = voice_text
+            handle_answer(topic_key, step, voice_text, source="voice")
+            return
 
-            if free_text and st.session_state.get(submit_key) != free_text:
-                st.session_state[submit_key] = free_text
-                handle_answer(topic_key, step, free_text, source="free_text")
+        if free_text and st.session_state.get(submit_key) != free_text:
+            st.session_state[submit_key] = free_text
+            handle_answer(topic_key, step, free_text, source="free_text")
 
-            st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -3953,10 +5345,15 @@ def render_freeform_chat():
         }
     })();
     </script>""", height=0)
-    st.subheader("Anything else you’d like to share?")
-    st.caption(
-        "Mention any other symptoms, questions, or concerns you’d like your care team "
-        "to know about before your visit."
+    st.markdown(
+        '<div class="chat-shell">'
+        '  <div class="chat-shell-header">'
+        '    <div class="chat-shell-title">'
+        '      <div class="chat-shell-name">Anything else you’d like to share?</div>'
+        '    </div>'
+        '  </div>'
+        '  <div class="chat-history">',
+        unsafe_allow_html=True,
     )
 
     # ── Initialise conversation ──────────────────────────────────
@@ -3972,6 +5369,8 @@ def render_freeform_chat():
     with chat_container:
         for msg in st.session_state.freeform_chat:
             render_chat_bubble(msg["role"], msg["content"])
+
+    st.markdown('</div><div class="composer-wrap">', unsafe_allow_html=True)
 
     # ── Input ────────────────────────────────────────────────────
     user_input = st.chat_input("Type here, or use the voice button below…",
@@ -4006,6 +5405,7 @@ def render_freeform_chat():
                 {"role": "assistant", "content": reply}
             )
             st.rerun()
+    st.markdown('</div></div>', unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -4031,38 +5431,59 @@ def render_topic_detail(topic_label: str, topic_key: str):
     # ── Ensure followup_counts exists (backward compat) ────────────
     if "followup_counts" not in state:
         state["followup_counts"] = {}
+    if "last_prompted_step_id" not in state:
+        state["last_prompted_step_id"] = None
+    if "last_prompted_text" not in state:
+        state["last_prompted_text"] = ""
 
     # ── Urgency banner (Tier 1–3 from multi-agent system) ───────────
     render_urgency_banner()
 
-    # ── Previous check-in summary card ────────────────────────────
+    # ── Previous check-in summary content ────────────────────────
+    chips_html = _checkin_summary_html(topic_key, last_data) if (has_prev and last_data) else ""
+    inline_summary_html = ""
     if has_prev:
-        if last_data:
-            chips_html = _checkin_summary_html(topic_key, last_data)
-            if chips_html:
-                with st.expander("Last visit summary", expanded=False):
-                    st.caption("These answers are from your last visit. You can change any of them for this visit.")
-                    st.markdown(chips_html, unsafe_allow_html=True)
-        else:
-            st.caption("No information from your last visit was recorded for this section.")
+        summary_inner = (
+            '<div class="chat-shell-inline-summary-body">'
+            '<div style="font-size:12px;color:#5f7386;line-height:1.5;margin-bottom:6px;">'
+            'These answers are from your last visit. You can change any of them for this visit.'
+            '</div>'
+            + (chips_html if chips_html else '<div style="font-size:12px;color:#6d7f90;">No prior summary recorded for this topic.</div>')
+            + '</div>'
+        )
+        inline_summary_html = (
+            '<div class="chat-shell-inline-summary">'
+            '<details>'
+            '<summary>Last visit summary</summary>'
+            f'{summary_inner}'
+            '</details>'
+            '</div>'
+        )
 
     # ── Initialize topic on first visit ─────────────────────────
     if state["status"] == "not_started":
         state["status"] = "in_progress"
         intro = TOPIC_INTROS.get(topic_key, "Let's go through this section together.")
         state["chat"] = [{"role": "assistant", "content": intro}]
-        first_step = get_next_step(topic_key, state["data"])
+        first_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
         if first_step:
-            _append_assistant_message(state, _step_prompt_text(first_step))
+            _ensure_step_prompted(topic_key, state, first_step)
 
     # ── Header with progress bar ─────────────────────────────────
-    answered, applicable = get_topic_progress(topic_key, state["data"])
-    col_title, col_prog = st.columns([3, 1])
-    with col_title:
-        st.subheader(topic_label)
-    with col_prog:
-        if applicable > 0:
-            st.caption(f"{answered}/{applicable} answered")
+    header_html = (
+        '<div class="chat-shell">'
+        '  <div class="chat-shell-header">'
+        '    <div class="chat-shell-title">'
+        f'      <div class="chat-shell-name">{_html.escape(topic_label)}</div>'
+        '    </div>'
+        f'    {inline_summary_html}'
+        '  </div>'
+        '  <div class="chat-history">'
+    )
+    st.markdown(
+        header_html,
+        unsafe_allow_html=True,
+    )
 
     # ── Chat history ─────────────────────────────────────────────
     if state["chat"]:
@@ -4084,6 +5505,7 @@ def render_topic_detail(topic_label: str, topic_key: str):
             })
             state["data"].pop("_correction_note", None)
             st.rerun()
+        st.markdown('</div><div class="composer-wrap"></div></div>', unsafe_allow_html=True)
         return
 
     # ── Current question ─────────────────────────────────────────
@@ -4094,35 +5516,39 @@ def render_topic_detail(topic_label: str, topic_key: str):
         pending_submit_key = f"{pending_key}_submitted"
         if pending_key not in st.session_state:
             st.session_state[pending_key] = ""
-        _, composer_col = st.columns([1.05, 0.95])
+        st.markdown('</div><div class="composer-wrap">', unsafe_allow_html=True)
 
-        with composer_col:
-            st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
-            with st.container():
-                pending_text = st.text_input(
-                    "Reply",
-                    key=pending_key,
-                    placeholder="Type or speak your answer here...",
-                    label_visibility="collapsed",
-                )
-            with st.container():
-                pending_voice = voice_widget(f"pending_{topic_key}_{pending_suffix}", label="Mic")
-            if pending_voice and pending_voice != st.session_state.get(f"{pending_key}_voice_sync"):
-                st.session_state[pending_key] = pending_voice
-                st.session_state[f"{pending_key}_voice_sync"] = pending_voice
+        st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
+        with st.container():
+            pending_text = st.text_input(
+                "Reply",
+                key=pending_key,
+                placeholder="Type or speak your answer here...",
+                label_visibility="collapsed",
+            )
+        with st.container():
+            pending_voice = voice_widget(f"pending_{topic_key}_{pending_suffix}", label="Mic")
+        if pending_voice and pending_voice != st.session_state.get(f"{pending_key}_voice_sync"):
+            st.session_state[f"{pending_key}_voice_sync"] = pending_voice
+            st.session_state[pending_submit_key] = pending_voice
+            handle_pending_followup(topic_key, pending_voice, source="voice")
+            return
 
-            if pending_text and st.session_state.get(pending_submit_key) != pending_text:
-                st.session_state[pending_submit_key] = pending_text
-                handle_pending_followup(topic_key, pending_text, source="followup")
+        if pending_text and st.session_state.get(pending_submit_key) != pending_text:
+            st.session_state[pending_submit_key] = pending_text
+            handle_pending_followup(topic_key, pending_text, source="followup")
 
-            st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown('</div></div>', unsafe_allow_html=True)
         return
-    next_step = get_next_step(topic_key, state["data"])
+    next_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
     if next_step:
         # Look up previous answer for this specific question
         prev_answer = last_data.get(next_step["id"]) if last_data else None
-        _append_assistant_message(state, _step_prompt_text(next_step))
+        _ensure_step_prompted(topic_key, state, next_step)
+        st.markdown('</div><div class="composer-wrap">', unsafe_allow_html=True)
         render_input(topic_key, next_step, prev_answer=prev_answer)
+        st.markdown('</div></div>', unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -4214,8 +5640,7 @@ def render_sidebar():
         if any_started:
             if st.button("📤 Submit Check-In", use_container_width=True,
                          type="primary", key="sidebar_submit"):
-                all_data = {k: st.session_state.topic_states[k]["data"]
-                            for _, k in TOPICS}
+                all_data = _build_all_topic_data()
                 if ff_msgs:
                     all_data["freeform_notes"] = [
                         m["content"] for m in st.session_state.freeform_chat
@@ -4381,21 +5806,7 @@ def screen_main():
 def screen_report():
     render_sidebar()
 
-    st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.markdown("### 📄 Clinical Check-In Report")
-    st.markdown(
-        f"**Patient:** {st.session_state.patient_name} &nbsp;|&nbsp; "
-        f"**Date:** {datetime.now().strftime('%B %d, %Y')}"
-    )
-    st.markdown(
-        '<div style="font-size:13px;color:#627287;line-height:1.7;">'
-        'This report is formatted for quick clinical review before the appointment.'
-        '</div>',
-        unsafe_allow_html=True,
-    )
-    st.markdown('</div>', unsafe_allow_html=True)
-
-    all_data = {key: st.session_state.topic_states[key]["data"] for _, key in TOPICS}
+    all_data = _build_all_topic_data()
     ff_msgs  = [m for m in st.session_state.freeform_chat if m["role"] == "user"]
     if ff_msgs:
         all_data["freeform_notes"] = [m["content"] for m in ff_msgs]
@@ -4405,9 +5816,28 @@ def screen_report():
             st.session_state.report = generate_report(
                 st.session_state.patient_name, all_data
             )
+    topic_insights = _report_topic_insights(all_data)
 
-    st.markdown('<div class="report-box">', unsafe_allow_html=True)
-    st.markdown(st.session_state.report)
+    st.markdown('<div class="report-dashboard">', unsafe_allow_html=True)
+    st.markdown(
+        f'<div style="font-size:28px;font-weight:800;letter-spacing:-0.04em;color:#10233d;">📄 Clinical Check-In Report</div>'
+        f'<div style="font-size:13px;color:#627287;line-height:1.7;margin-top:6px;"><strong>Patient:</strong> {_html.escape(st.session_state.patient_name)} &nbsp;|&nbsp; <strong>Date:</strong> {datetime.now().strftime("%B %d, %Y")}</div>',
+        unsafe_allow_html=True,
+    )
+    _render_report_summary_banner(topic_insights)
+
+    for row_start in range(0, len(topic_insights), 4):
+        row_items = topic_insights[row_start:row_start + 4]
+        cols = st.columns(len(row_items))
+        for col, insight in zip(cols, row_items):
+            with col:
+                _render_report_topic_card(insight)
+                _render_report_topic_detail(insight, all_data)
+
+    with st.expander("Full clinical narrative report", expanded=False):
+        st.markdown('<div class="report-box">', unsafe_allow_html=True)
+        st.markdown(st.session_state.report)
+        st.markdown('</div>', unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
     st.markdown("---")
