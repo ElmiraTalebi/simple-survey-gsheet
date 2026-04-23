@@ -4289,6 +4289,54 @@ def _init_state():
             st.session_state[k] = v
 
 
+def _fresh_topic_states() -> dict:
+    return {
+        key: {
+            "status": "not_started",
+            "data": {},
+            "chat": [],
+            "followup_counts": {},
+            "raw_answers": {},
+            "last_prompted_step_id": None,
+            "last_prompted_text": "",
+            "generated_prompts": {},
+        }
+        for _, key in TOPICS
+    }
+
+
+def _reset_checkin_session_state(preserve_demo_mode: bool = True):
+    demo_mode = bool(st.session_state.get("demo_mode", False)) if preserve_demo_mode else False
+    st.session_state.topic_states = _fresh_topic_states()
+    st.session_state.selected_topic = TOPIC_KEYS[0] if TOPIC_KEYS else None
+    st.session_state.report = ""
+    st.session_state.report_saved = False
+    st.session_state.freeform_chat = []
+    st.session_state.structured_responses = []
+    st.session_state.agent_traces = []
+    st.session_state.last_agent_trace = None
+    st.session_state.patient_fatigue = False
+    st.session_state.fatigue_requested_at = None
+    st.session_state.urgency_state = {
+        "current_tier": 0,
+        "all_signals": [],
+        "escalation_shown": False,
+        "emergency_shown": False,
+        "patient_message": None,
+    }
+    st.session_state.sentiment_state = {
+        "all_signals": [],
+        "engagement_trajectory": "insufficient_data",
+        "emotional_state": "neutral",
+    }
+    st.session_state.demo_mode = demo_mode
+
+
+def _invalidate_report_cache():
+    st.session_state.report = ""
+    st.session_state.report_saved = False
+
+
 _init_state()
 
 
@@ -5208,6 +5256,7 @@ def _clear_step_inputs(topic_key: str, step: dict):
 
 def handle_pending_followup(topic_key: str, answer: str, source: str = "typed"):
     state = st.session_state.topic_states[topic_key]
+    _invalidate_report_cache()
     pending = state.get("pending_followup") or {}
     answer_key = pending.get("answer_key")
     if not answer_key:
@@ -5426,6 +5475,7 @@ def handle_answer(
     For free-text, voice, and typed answers we run the full multi-agent pipeline.
     """
     state = st.session_state.topic_states[topic_key]
+    _invalidate_report_cache()
 
     # ── Ensure followup_counts dict exists (backward compat) ──────
     if "followup_counts" not in state:
@@ -5979,6 +6029,7 @@ def render_freeform_chat():
              if m["role"] == "user"), None
         )
         if user_input.strip() != last_user:
+            _invalidate_report_cache()
             st.session_state.freeform_chat.append(
                 {"role": "user", "content": user_input.strip()}
             )
@@ -6332,6 +6383,7 @@ def screen_login():
         name = st.text_input("Please enter your name:", placeholder="First and last name…")
         if st.button("Begin Check-In →", type="primary", use_container_width=True):
             if name.strip():
+                _reset_checkin_session_state()
                 st.session_state.patient_name = name.strip()
 
                 # ── Load previous check-in from Sheets ──────────
@@ -6345,7 +6397,6 @@ def screen_login():
                     st.session_state.last_checkin     = {}
                     st.session_state.has_prev_checkin = False
 
-                st.session_state.selected_topic = TOPIC_KEYS[0] if TOPIC_KEYS else None
                 st.session_state.app_stage      = "overview"
                 st.rerun()
             else:
