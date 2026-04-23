@@ -1713,6 +1713,43 @@ div[data-baseweb="select"] > div {
 }
 
 .inline-voice-row [data-testid="stAudioInput"] audio,
+.demo-reasoning-card {
+    background: rgba(255,255,255,0.92);
+    border: 1px solid #d9e4ed;
+    border-radius: 22px;
+    padding: 14px 14px 10px 14px;
+    box-shadow: 0 18px 36px rgba(23, 50, 74, 0.08);
+    backdrop-filter: blur(10px);
+    position: sticky;
+    top: 72px;
+}
+
+.demo-reasoning-card .demo-title {
+    font-size: 12px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #6b7d92;
+    margin-bottom: 6px;
+}
+
+.demo-reasoning-card .demo-subtitle {
+    font-family: 'Manrope', sans-serif;
+    font-size: 18px;
+    line-height: 1.25;
+    font-weight: 800;
+    color: #153652;
+    letter-spacing: -0.03em;
+    margin-bottom: 10px;
+}
+
+@media (max-width: 1100px) {
+    .demo-reasoning-card {
+        position: static;
+        top: auto;
+        margin-top: 10px;
+    }
+}
 .inline-voice-row [data-testid="stAudioInput"] small,
 .inline-voice-row [data-testid="stAudioInput"] span,
 .inline-voice-row [data-testid="stAudioInput"] p {
@@ -2292,10 +2329,18 @@ def _render_demo_agent_panel():
     if not st.session_state.get("demo_mode"):
         return
     trace = st.session_state.get("last_agent_trace")
-    st.markdown("**Demo Mode: Live Reasoning**")
+    st.markdown(
+        '<div class="demo-reasoning-card">'
+        '<div class="demo-title">Demo Mode</div>'
+        '<div class="demo-subtitle">How the system made this decision</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
     if not trace:
-        st.info("No agent decisions recorded yet for this topic step.")
+        st.caption("The system evaluates each answer across multiple clinical dimensions before deciding the next step.")
+        st.info("No reasoning has been recorded yet for this step.")
         return
+
     interp = trace.get("agent_1_answer_interpreter") or {}
     urgency = trace.get("agent_2_urgency") or {}
     engagement = trace.get("agent_3_engagement") or {}
@@ -2332,8 +2377,8 @@ def _render_demo_agent_panel():
     elif next_question:
         decision = f"Move to next question: {next_question}"
 
-    with st.expander("🔍 How the system made this decision", expanded=False):
-        st.caption("The system evaluates each answer across multiple clinical dimensions before deciding the next step.")
+    st.caption("The system evaluates each answer across multiple clinical dimensions before deciding the next step.")
+    with st.expander("View reasoning", expanded=True):
         st.markdown(f"**Patient said:** `{trace.get('patient_answer')}`")
         st.markdown(f"**Understanding:** System identified this as `{interpreted_as}`.")
         st.markdown(f"**Urgency check:** {urgency_text}")
@@ -5832,69 +5877,73 @@ def render_topic_detail(topic_label: str, topic_key: str):
         with st.container(border=False):
             for msg in state["chat"]:
                 render_chat_bubble(msg["role"], msg["content"])
+    st.markdown('</div></div>', unsafe_allow_html=True)
 
-    _render_demo_agent_panel()
+    main_col, demo_col = st.columns([3.3, 1.15], gap="large")
+    if st.session_state.get("demo_mode"):
+        with demo_col:
+            _render_demo_agent_panel()
 
     # ── Completed ────────────────────────────────────────────────
-    if state["status"] == "completed":
-        st.markdown(
-            '<div class="completion-badge">✅ This topic is complete</div>',
-            unsafe_allow_html=True,
-        )
-        if st.button("✏️ Add a note or correction", key=f"reopen_{topic_key}"):
-            state["status"] = "in_progress"
-            state["chat"].append({
-                "role": "assistant",
-                "content": "Of course — please share any correction or additional detail.",
-            })
-            state["data"].pop("_correction_note", None)
-            st.rerun()
-        st.markdown('</div><div class="composer-wrap"></div></div>', unsafe_allow_html=True)
-        return
-
-    # ── Current question ─────────────────────────────────────────
-    if state.get("waiting_for_followup"):
-        pending = state.get("pending_followup") or {}
-        pending_suffix = pending.get("answer_key", "pending")
-        pending_key = f"pending_followup_{topic_key}_{pending_suffix}"
-        pending_submit_key = f"{pending_key}_submitted"
-        if pending_key not in st.session_state:
-            st.session_state[pending_key] = ""
-        st.markdown('</div><div class="composer-wrap">', unsafe_allow_html=True)
-
-        st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
-        with st.form(f"form_pending_{topic_key}_{pending_suffix}", clear_on_submit=False):
-            text_col, mic_col = st.columns([20, 1], vertical_alignment="bottom")
-            with text_col:
-                pending_text = st.text_input(
-                    "Reply",
-                    key=pending_key,
-                    placeholder="Type or speak your answer here...",
-                )
-            with mic_col:
-                st.markdown('<div class="inline-voice-row">', unsafe_allow_html=True)
-                pending_voice = voice_widget(f"pending_{topic_key}_{pending_suffix}", label="🎙️")
-                st.markdown('</div>', unsafe_allow_html=True)
-            pending_submitted = st.form_submit_button("Continue", type="primary", use_container_width=True)
-        if pending_voice and pending_voice != st.session_state.get(f"{pending_key}_voice_sync"):
-            st.session_state[f"{pending_key}_voice_sync"] = pending_voice
-            st.session_state[pending_submit_key] = pending_voice
-            handle_pending_followup(topic_key, pending_voice, source="voice")
+    with main_col:
+        if state["status"] == "completed":
+            st.markdown(
+                '<div class="completion-badge">✅ This topic is complete</div>',
+                unsafe_allow_html=True,
+            )
+            if st.button("✏️ Add a note or correction", key=f"reopen_{topic_key}"):
+                state["status"] = "in_progress"
+                state["chat"].append({
+                    "role": "assistant",
+                    "content": "Of course — please share any correction or additional detail.",
+                })
+                state["data"].pop("_correction_note", None)
+                st.rerun()
             return
 
-        if pending_submitted and pending_text and st.session_state.get(pending_submit_key) != pending_text:
-            st.session_state[pending_submit_key] = pending_text
-            handle_pending_followup(topic_key, pending_text, source="followup")
+        # ── Current question ─────────────────────────────────────────
+        if state.get("waiting_for_followup"):
+            pending = state.get("pending_followup") or {}
+            pending_suffix = pending.get("answer_key", "pending")
+            pending_key = f"pending_followup_{topic_key}_{pending_suffix}"
+            pending_submit_key = f"{pending_key}_submitted"
+            if pending_key not in st.session_state:
+                st.session_state[pending_key] = ""
+            st.markdown('<div class="composer-wrap">', unsafe_allow_html=True)
 
-        st.markdown('</div>', unsafe_allow_html=True)
-        st.markdown('</div></div>', unsafe_allow_html=True)
-        return
-    next_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
-    if next_step:
-        _ensure_step_prompted(topic_key, state, next_step)
-        st.markdown('</div><div class="composer-wrap">', unsafe_allow_html=True)
-        render_input(topic_key, next_step)
-        st.markdown('</div></div>', unsafe_allow_html=True)
+            st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
+            with st.form(f"form_pending_{topic_key}_{pending_suffix}", clear_on_submit=False):
+                text_col, mic_col = st.columns([20, 1], vertical_alignment="bottom")
+                with text_col:
+                    pending_text = st.text_input(
+                        "Reply",
+                        key=pending_key,
+                        placeholder="Type or speak your answer here...",
+                    )
+                with mic_col:
+                    st.markdown('<div class="inline-voice-row">', unsafe_allow_html=True)
+                    pending_voice = voice_widget(f"pending_{topic_key}_{pending_suffix}", label="🎙️")
+                    st.markdown('</div>', unsafe_allow_html=True)
+                pending_submitted = st.form_submit_button("Continue", type="primary", use_container_width=True)
+            if pending_voice and pending_voice != st.session_state.get(f"{pending_key}_voice_sync"):
+                st.session_state[f"{pending_key}_voice_sync"] = pending_voice
+                st.session_state[pending_submit_key] = pending_voice
+                handle_pending_followup(topic_key, pending_voice, source="voice")
+                return
+
+            if pending_submitted and pending_text and st.session_state.get(pending_submit_key) != pending_text:
+                st.session_state[pending_submit_key] = pending_text
+                handle_pending_followup(topic_key, pending_text, source="followup")
+
+            st.markdown('</div>', unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
+            return
+        next_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
+        if next_step:
+            _ensure_step_prompted(topic_key, state, next_step)
+            st.markdown('<div class="composer-wrap">', unsafe_allow_html=True)
+            render_input(topic_key, next_step)
+            st.markdown('</div>', unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════════════════════════════
