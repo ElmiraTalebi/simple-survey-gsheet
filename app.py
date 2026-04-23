@@ -43,8 +43,8 @@ def _load_topic_flows():
 from typing import Optional
 
 TOPICS = [
-    ("🍽️  Nutrition & Fluids", "nutrition"),
     ("🩹 Pain & Medications", "pain"),
+    ("🍽️  Nutrition & Fluids", "nutrition"),
     ("👄 Oral Symptoms", "oral"),
     ("🤢 GI Symptoms", "gi"),
     ("😴 Fatigue & Sleep", "fatigue"),
@@ -121,7 +121,7 @@ FLOW_NUTRITION = [
     _q("pain_med_timing", "Are you timing your pain medication before meals to make eating easier?", opts=["Yes, it helps", "I try, but it's not enough", "No, I didn't know to do this", "No, I don't take pain medication"], when=lambda d: d.get("eating_ability") == "Struggling — only liquids or very little"),
     _q("tube_issues", "Is the tube feeding going well — no blockages, leaks, or discomfort around the site?", opts=["Working fine", "Some issues — leaking or blockage", "Discomfort/soreness around the tube"], when=lambda d: d.get("eating_ability") == "Not eating — using a feeding tube only"),
     _q("tube_oral_sips", "Are you still able to take any sips of water or liquids by mouth at all?", opts=["Yes, small amounts", "Very occasionally for comfort", "No, nothing by mouth"], when=lambda d: d.get("eating_ability") == "Not eating — using a feeding tube only"),
-    _q("weight", "What has your weight been recently?", type="number", min_v=50, max_v=500, default_v=150),
+    _q("weight", "What has your weight been recently? (Enter in pounds)", type="number", min_v=50, max_v=500, default_v=150),
     _q("weight_impact", "Your weight is lower than last time. Has that been affecting how you feel or your energy?", opts=["Yes, I've noticed a difference", "Not really"]),
     _q("swallowing_difficulty", "Are you having any difficulty swallowing — liquids, food, or pills?", opts=["Yes", "No"]),
     _q("swallowing_type", "Is it painful to swallow, or just mechanically difficult?", opts=["Painful to swallow", "Mechanically difficult"], when=lambda d: d.get("swallowing_difficulty") == "Yes"),
@@ -325,98 +325,6 @@ def _looks_like_body_location_phrase(text: str) -> bool:
     return bool(_BODY_LOCATION_PATTERN.search(normalized))
 
 
-def _extract_numeric_value(text: str) -> Optional[int]:
-    match = re.search(r"-?\d+(?:\.\d+)?", str(text or ""))
-    if not match:
-        return None
-    try:
-        return int(float(match.group(0)))
-    except ValueError:
-        return None
-
-
-def _local_option_match(step: dict, user_input: str) -> Optional[str]:
-    """Deterministic fallback for common patient wording when no LLM is available."""
-    opts = step.get("opts", [])
-    normalized = _norm_text(user_input)
-    if not normalized:
-        return None
-
-    if "pain" in normalized and "fatigue" in normalized and "Both" in opts:
-        return "Both"
-    if "ringing" in normalized and "hearing loss" in normalized and "Both" in opts:
-        return "Both"
-    if "liquid" in normalized and "solid" in normalized and "Both" in opts:
-        return "Both"
-
-    for opt in opts:
-        opt_norm = _norm_text(opt)
-        if opt_norm == normalized:
-            return opt
-        if opt_norm and (opt_norm in normalized or normalized in opt_norm):
-            return opt
-
-    yes_words = {"yes", "yeah", "yep", "yup", "sure", "correct", "right"}
-    no_words = {"no", "nope", "nah", "none", "not really", "no issues", "fine", "doing okay"}
-    if any(word in normalized.split() for word in yes_words) or normalized.startswith("yes "):
-        for opt in opts:
-            if _norm_text(opt).startswith("yes"):
-                return opt
-    if normalized in no_words or normalized.startswith("no ") or " no " in f" {normalized} ":
-        for opt in opts:
-            if _norm_text(opt).startswith("no") or _norm_text(opt) == "none of these":
-                return opt
-
-    synonym_groups = [
-        (("throat", "swallow"), ("Throat", "Painful to swallow", "Only when swallowing")),
-        (("tongue",), ("Tongue", "On the tongue")),
-        (("cheek", "inside mouth", "inside my mouth"), ("Inside the mouth/cheek",)),
-        (("gum", "gums", "lip", "lips"), ("Gums/lips",)),
-        (("multiple", "both"), ("Both", "Multiple spots", "Multiple issues")),
-        (("nauseous", "nausea", "sick to my stomach"), ("Nausea",)),
-        (("throwing up", "vomit", "vomiting"), ("Vomiting",)),
-        (("loose stool", "diarrhea"), ("Diarrhea",)),
-        (("soft", "yogurt", "soup", "pudding"), ("Soft foods only (yogurt, soup, pudding)",)),
-        (("liquid", "shake", "ensure", "boost"), ("Mainly liquids", "Mix of soft and liquid")),
-        (("less than usual", "less than normal"), ("Eating less than usual, but managing", "Doing less than usual")),
-        (("struggling", "very little"), ("Struggling — only liquids or very little", "Struggling with daily tasks")),
-        (("pain and fatigue", "fatigue and pain"), ("Both",)),
-        (("general tired", "general tiredness"), ("General tiredness",)),
-        (("specific", "legs", "arms"), ("Weakness in specific parts",)),
-        (("comes and goes", "come and go"), ("Comes and goes",)),
-        (("ringing", "hearing loss"), ("Both", "Ringing in ears", "Hearing loss")),
-        (("voice is fine", "voice fine"), ("No, voice is fine",)),
-        (("prefer not", "private"), ("Prefer not to say",)),
-        (("bland",), ("Bland",)),
-        (("different",), ("Different",)),
-        (("unpleasant", "bad taste"), ("Unpleasant",)),
-        (("as prescribed",), ("Yes", "Yes, it helps")),
-        (("not enough",), ("Yes, but it's not enough", "I try, but it's not enough")),
-        (("working well", "working fine"), ("Working well", "Working fine")),
-    ]
-    for triggers, candidates in synonym_groups:
-        if not any(trigger in normalized for trigger in triggers):
-            continue
-        for candidate in candidates:
-            if candidate in opts:
-                return candidate
-
-    best_opt = None
-    best_score = 0
-    input_words = set(normalized.split())
-    for opt in opts:
-        opt_words = set(_norm_text(opt).split())
-        if not opt_words:
-            continue
-        score = len(input_words & opt_words)
-        if score > best_score:
-            best_score = score
-            best_opt = opt
-    if best_opt and best_score >= 2:
-        return best_opt
-    return None
-
-
 def _is_redundant_followup(original_question: str, answer: str, followup_question: str) -> bool:
     oq = _norm_text(original_question)
     fq = _norm_text(followup_question)
@@ -503,23 +411,10 @@ def parse_multi_select_typed_input(step: dict, user_input: str):
     if not user_input.strip():
         return []
 
-    normalized_full = _norm_text(user_input)
     lowered_map = {opt.lower(): opt for opt in step.get("opts", [])}
-    parts = [p.strip() for p in re.split(r",|/|;|\n|\band\b", user_input, flags=re.IGNORECASE) if p.strip()]
+    parts = [p.strip() for p in re.split(r",|/|;|\n", user_input) if p.strip()]
     resolved = []
     has_other = "Other" in step.get("opts", [])
-    has_none = "None of these" in step.get("opts", [])
-
-    for opt in step.get("opts", []):
-        if opt in {"Other", "None of these"}:
-            continue
-        opt_norm = _norm_text(opt)
-        if opt_norm and opt_norm in normalized_full:
-            resolved.append(opt)
-
-    if has_none and any(phrase in normalized_full for phrase in ("none", "no nausea", "no vomiting", "no diarrhea", "no issues")):
-        resolved.append("None of these")
-
     for part in parts:
         match = lowered_map.get(part.lower())
         if match:
@@ -530,12 +425,6 @@ def parse_multi_select_typed_input(step: dict, user_input: str):
                 resolved.append(interpreted)
             elif has_other and part.strip():
                 resolved.append("Other")
-
-    if has_other and resolved and any(
-        other_word in normalized_full
-        for other_word in ("tylenol", "advil", "ibuprofen", "aleve", "morphine", "hydromorphone")
-    ):
-        resolved.append("Other")
 
     deduped = []
     for item in resolved:
@@ -824,39 +713,15 @@ div[data-baseweb="select"] > div {
 }
 
 .chat-history {
-    padding: 14px 14px 2px 14px;
+    padding: 14px 14px 8px 14px;
     min-height: 0;
     background:
         linear-gradient(180deg, rgba(250,252,254,0.88) 0%, rgba(244,248,252,0.92) 100%);
 }
 
 .composer-wrap {
-    padding: 4px 12px 12px 12px;
+    padding: 0 12px 12px 12px;
     background: transparent;
-}
-
-.topic-response-region {
-    margin-top: -8px;
-}
-
-.topic-toolbar + div[data-testid="stButton"] {
-    position: sticky;
-    top: 10px;
-    z-index: 25;
-    display: flex;
-    justify-content: flex-end;
-    margin: 0 0 8px 0;
-}
-
-.topic-toolbar + div[data-testid="stButton"] > button {
-    width: auto !important;
-    min-width: 230px !important;
-    border-radius: 999px !important;
-    padding: 0.55rem 1rem !important;
-    border: 1px solid #f2c4c4 !important;
-    background: #fff6f6 !important;
-    color: #a33b3b !important;
-    box-shadow: 0 8px 16px rgba(163, 59, 59, 0.08) !important;
 }
 
 .chat-row {
@@ -938,20 +803,6 @@ div[data-baseweb="select"] > div {
 .chat-row.assistant .chat-bubble {
     color: #17324a;
     border-top-left-radius: 6px;
-}
-
-.chat-row.assistant.current-question .chat-bubble {
-    background: linear-gradient(180deg, #fffdf7 0%, #fff7de 100%);
-    border: 1px solid #f2d98a;
-    box-shadow: 0 10px 22px rgba(191, 149, 0, 0.10);
-}
-
-.chat-row.assistant.current-question .chat-role::after {
-    content: "  CURRENT QUESTION";
-    color: #9b7a0a;
-    font-weight: 800;
-    letter-spacing: 0.08em;
-    margin-left: 4px;
 }
 
 .chat-row.user .chat-bubble {
@@ -1091,7 +942,7 @@ div[data-baseweb="select"] > div {
     overflow: hidden;
     border: 1px solid #d7e1eb;
     background: #ffffff;
-    min-height: 148px;
+    min-height: 164px;
     box-shadow: 0 8px 18px rgba(23, 50, 74, 0.05);
     margin-bottom: 10px;
 }
@@ -1125,7 +976,7 @@ div[data-baseweb="select"] > div {
 }
 
 .report-topic-body {
-    padding: 10px 12px;
+    padding: 12px;
 }
 
 .report-topic-name {
@@ -1424,12 +1275,12 @@ div[data-baseweb="select"] > div {
 }
 
 .active-question {
-    background: rgba(247, 251, 254, 0.92);
-    border: 1px solid #d9e4ed;
-    border-radius: 18px;
-    padding: 10px 12px;
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    padding: 0;
     margin: 0 0 10px 0;
-    box-shadow: 0 8px 18px rgba(23, 50, 74, 0.04);
+    box-shadow: none;
 }
 
 .active-question .label {
@@ -1461,41 +1312,14 @@ div[data-baseweb="select"] > div {
 .composer-shell {
     background: rgba(255,255,255,0.92);
     border: 1px solid #d9e4ed;
-    border-radius: 22px;
-    padding: 6px 12px 10px 12px;
+    border-radius: 26px;
+    padding: 12px;
     box-shadow: 0 18px 36px rgba(23, 50, 74, 0.08);
     backdrop-filter: blur(10px);
-    position: relative;
 }
 
 .composer-shell.compact {
-    padding: 6px 12px 10px 12px;
-}
-
-.composer-inline-voice {
-    display: flex;
-    align-items: stretch;
-}
-
-.composer-shell [data-testid="stHorizontalBlock"] {
-    gap: 0.55rem !important;
-    align-items: stretch !important;
-}
-
-.composer-shell [data-testid="column"] {
-    display: flex;
-    flex-direction: column;
-    justify-content: stretch;
-}
-
-.composer-shell [data-testid="column"]:last-child {
-    max-width: 100%;
-    min-width: 0;
-    flex: 1 1 auto;
-}
-
-.composer-shell [data-testid="column"]:last-child > div {
-    height: 100%;
+    padding: 12px;
 }
 
 
@@ -1544,16 +1368,6 @@ div[data-baseweb="select"] > div {
     color: #10375a !important;
 }
 
-.common-answer-buttons {
-    margin: 0 0 10px 0;
-}
-
-.common-answer-buttons [data-testid="stRadio"] label {
-    font-size: 12px !important;
-    font-weight: 700 !important;
-    color: #607589 !important;
-}
-
 .suggested-replies-note {
     margin: 8px 0 10px 2px;
     font-size: 11px;
@@ -1577,17 +1391,6 @@ div[data-baseweb="select"] > div {
     margin-bottom: 0 !important;
 }
 
-.composer-shell [data-testid="stTextInput"] > label,
-.composer-shell [data-testid="stTextInput"] label {
-    margin-bottom: 2px !important;
-    padding-bottom: 0 !important;
-}
-
-.composer-shell [data-testid="stTextInput"] label p {
-    margin: 0 !important;
-    line-height: 1.2 !important;
-}
-
 .composer-shell [data-testid="stTextInput"] input {
     min-height: 52px !important;
     height: 52px !important;
@@ -1596,59 +1399,46 @@ div[data-baseweb="select"] > div {
     padding-left: 16px !important;
 }
 
-.composer-shell form > div:first-child,
-.composer-shell [data-testid="stForm"] > div:first-child {
-    margin-top: 0 !important;
-    padding-top: 0 !important;
-}
-
 .composer-shell [data-testid="stSelectbox"] {
     margin-bottom: 0 !important;
 }
 
 .composer-shell [data-testid="stAudioInput"] {
-    background: linear-gradient(180deg, #fdfefe 0%, #f5f9fd 100%);
-    border: 1px solid #d7e4ee;
-    border-radius: 999px;
-    min-height: 38px;
-    max-width: 38px;
-    width: 38px;
-    min-width: 38px;
-    margin-left: auto;
-    margin-right: 0;
+    background: transparent;
+    border: none;
+    border-radius: 16px;
+    min-height: 46px;
+    width: 100%;
+    min-width: 100%;
+    max-width: 100%;
     display: flex;
     align-items: center;
     justify-content: center;
     padding: 0;
-    margin-top: 0;
-    margin-bottom: 0;
-    box-shadow: 0 6px 12px rgba(23, 50, 74, 0.06) !important;
-    overflow: hidden;
+    margin: 10px 0 0 0;
+    box-shadow: none !important;
 }
 
 .composer-shell [data-testid="stAudioInput"] > div {
-    width: 38px;
-    min-width: 38px;
-    height: 38px;
+    width: 100%;
+    min-width: 100%;
     display: flex;
     justify-content: center;
     align-items: center;
     padding: 0 !important;
     margin: 0 !important;
-    overflow: hidden;
 }
 
 .composer-shell [data-testid="stAudioInput"] button {
-    border-radius: 999px !important;
-    width: 38px !important;
-    height: 38px !important;
-    min-height: 38px !important;
-    min-width: 38px !important;
+    border-radius: 16px !important;
+    width: 100% !important;
+    height: 48px !important;
+    min-width: 100% !important;
     padding: 0 !important;
     margin: 0 !important;
-    border: none !important;
-    background: transparent !important;
-    box-shadow: none !important;
+    border: 1px solid #d7e4ee !important;
+    background: linear-gradient(180deg, #ffffff 0%, #f5f9fd 100%) !important;
+    box-shadow: 0 8px 18px rgba(23, 50, 74, 0.08) !important;
 }
 
 @media (max-width: 768px) {
@@ -1681,124 +1471,15 @@ div[data-baseweb="select"] > div {
 }
 
 .composer-shell [data-testid="stAudioInput"] button:hover {
-    background: rgba(255,255,255,0.65) !important;
-    box-shadow: none !important;
+    border-color: #bed4e7 !important;
+    background: #ffffff !important;
+    box-shadow: 0 10px 20px rgba(15, 108, 189, 0.10) !important;
 }
 
 .composer-shell [data-testid="stAudioInput"] button svg {
-    width: 14px !important;
-    height: 14px !important;
+    width: 17px !important;
+    height: 17px !important;
     color: #0f6cbd !important;
-}
-
-.composer-shell [data-testid="stAudioInput"] audio {
-    display: none !important;
-}
-
-.inline-voice-row {
-    display: flex;
-    justify-content: flex-end;
-    align-items: center;
-}
-
-.inline-voice-row [data-testid="stAudioInput"] {
-    width: 38px !important;
-    min-width: 38px !important;
-    max-width: 38px !important;
-    height: 38px !important;
-    min-height: 38px !important;
-    margin: 0 !important;
-    padding: 0 !important;
-    border: none !important;
-    background: transparent !important;
-    box-shadow: none !important;
-    overflow: hidden !important;
-    font-size: 0 !important;
-    line-height: 0 !important;
-    color: transparent !important;
-}
-
-.inline-voice-row [data-testid="stAudioInput"] > div {
-    width: 38px !important;
-    min-width: 38px !important;
-    max-width: 38px !important;
-    height: 38px !important;
-    min-height: 38px !important;
-    padding: 0 !important;
-    margin: 0 !important;
-    overflow: hidden !important;
-}
-
-.inline-voice-row [data-testid="stAudioInput"] button {
-    width: 38px !important;
-    min-width: 38px !important;
-    max-width: 38px !important;
-    height: 38px !important;
-    min-height: 38px !important;
-    border-radius: 999px !important;
-    border: 1px solid #d7e4ee !important;
-    background: linear-gradient(180deg, #ffffff 0%, #f5f9fd 100%) !important;
-    box-shadow: 0 6px 12px rgba(23, 50, 74, 0.06) !important;
-    padding: 0 !important;
-    margin: 0 !important;
-    position: relative !important;
-}
-
-.inline-voice-row [data-testid="stAudioInput"] button svg {
-    display: none !important;
-}
-
-.inline-voice-row [data-testid="stAudioInput"] button::after {
-    content: "🎙️";
-    font-size: 14px;
-    line-height: 38px;
-    position: absolute;
-    inset: 0;
-    text-align: center;
-}
-
-.inline-voice-row [data-testid="stAudioInput"] audio,
-.demo-reasoning-card {
-    background: rgba(255,255,255,0.92);
-    border: 1px solid #d9e4ed;
-    border-radius: 22px;
-    padding: 14px 14px 10px 14px;
-    box-shadow: 0 18px 36px rgba(23, 50, 74, 0.08);
-    backdrop-filter: blur(10px);
-    position: sticky;
-    top: 72px;
-}
-
-.demo-reasoning-card .demo-title {
-    font-size: 12px;
-    font-weight: 800;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: #6b7d92;
-    margin-bottom: 6px;
-}
-
-.demo-reasoning-card .demo-subtitle {
-    font-family: 'Manrope', sans-serif;
-    font-size: 18px;
-    line-height: 1.25;
-    font-weight: 800;
-    color: #153652;
-    letter-spacing: -0.03em;
-    margin-bottom: 10px;
-}
-
-@media (max-width: 1100px) {
-    .demo-reasoning-card {
-        position: static;
-        top: auto;
-        margin-top: 10px;
-    }
-}
-.inline-voice-row [data-testid="stAudioInput"] small,
-.inline-voice-row [data-testid="stAudioInput"] span,
-.inline-voice-row [data-testid="stAudioInput"] p {
-    display: none !important;
 }
 
 
@@ -1864,40 +1545,13 @@ def _step_prompt_text(step: dict, topic_key: Optional[str] = None, state: Option
     return question_text
 
 
-def _clear_current_prompt_flags(state: dict):
-    for msg in state.get("chat", []):
-        if msg.get("role") == "assistant":
-            msg["is_current_prompt"] = False
-
-
-def _append_assistant_message(
-    state: dict,
-    text: str,
-    *,
-    prompt_step: Optional[dict] = None,
-    prompt_text: str = "",
-):
+def _append_assistant_message(state: dict, text: str):
     text = (text or "").strip()
     if not text:
         return
     if state["chat"] and state["chat"][-1]["role"] == "assistant" and state["chat"][-1]["content"].strip() == text:
-        if prompt_step or prompt_text:
-            _clear_current_prompt_flags(state)
-            state["chat"][-1]["is_current_prompt"] = True
-            if prompt_step:
-                state["chat"][-1]["prompt_step_id"] = prompt_step.get("id")
-            if prompt_text:
-                state["chat"][-1]["prompt_text"] = prompt_text.strip()
         return
-    message = {"role": "assistant", "content": text}
-    if prompt_step or prompt_text:
-        _clear_current_prompt_flags(state)
-        message["is_current_prompt"] = True
-        if prompt_step:
-            message["prompt_step_id"] = prompt_step.get("id")
-        if prompt_text:
-            message["prompt_text"] = prompt_text.strip()
-    state["chat"].append(message)
+    state["chat"].append({"role": "assistant", "content": text})
 
 
 def _remember_prompted_step(state: dict, step: Optional[dict], prompt_text: str = ""):
@@ -1914,9 +1568,8 @@ def _ensure_step_prompted(topic_key: str, state: dict, step: Optional[dict]):
     if last_id == step.get("id") and (
         last_text == prompt_text or _is_semantically_redundant_question(last_text, prompt_text)
     ):
-        _append_assistant_message(state, last_text or prompt_text, prompt_step=step, prompt_text=prompt_text)
         return
-    _append_assistant_message(state, prompt_text, prompt_step=step, prompt_text=prompt_text)
+    _append_assistant_message(state, prompt_text)
     _remember_prompted_step(state, step, prompt_text)
 
 
@@ -1955,11 +1608,9 @@ def _question_already_asked(state: dict, question_text: str) -> bool:
     return False
 
 
-def render_chat_bubble(role: str, content: str, highlight: bool = False):
+def render_chat_bubble(role: str, content: str):
     safe = _html.escape(content or "").replace("\n", "<br>")
     role_cls = "user" if role == "user" else "assistant"
-    if highlight and role != "user":
-        role_cls = f"{role_cls} current-question"
     role_label = "You" if role == "user" else "Care Assistant"
     avatar_label = "Y" if role == "user" else "I"
     timestamp = datetime.now().strftime("%H:%M")
@@ -1993,7 +1644,7 @@ _openai_error: Optional[str] = None
 # Performance defaults: keep the common path fast.
 ENABLE_DYNAMIC_PROMPT_REWRITE = False
 ENABLE_LLM_SEMANTIC_REDUNDANCY = True
-ENABLE_FULL_PIPELINE_FOR_EXACT_STRUCTURED_OPTIONS = True
+ENABLE_FULL_PIPELINE_FOR_EXACT_STRUCTURED_OPTIONS = False
 
 if OPENAI_API_KEY:
     try:
@@ -2115,7 +1766,6 @@ def voice_widget(key_suffix: str, label: str = "Speak your answer") -> Optional[
 # ══════════════════════════════════════════════════════════════════
 
 def _step_is_relevant(topic_key: str, step: dict, data: dict, raw_answers: Optional[dict] = None) -> bool:
-    raw_answers = raw_answers or {}
     if topic_key == "nutrition" and step.get("id") == "weight_impact":
         try:
             current_weight = float(data.get("weight"))
@@ -2130,39 +1780,6 @@ def _step_is_relevant(topic_key: str, step: dict, data: dict, raw_answers: Optio
         if current_weight is None or prior_weight is None:
             return False
         return current_weight < prior_weight
-
-    if topic_key == "nutrition" and step.get("id") == "iv_adjust":
-        if data.get("iv_helping") == "Yes":
-            return False
-
-    if topic_key == "mood" and step.get("id") == "anxiety_impact":
-        emotional_text = _norm_text(raw_answers.get("emotional_state") or data.get("emotional_state") or "")
-        negative_screen = (
-            "not worried" in emotional_text
-            or "no anxiety" in emotional_text
-            or "not anxious" in emotional_text
-            or "im okay" in emotional_text
-            or "i m okay" in emotional_text
-            or "i am okay" in emotional_text
-            or "doing okay" in emotional_text
-            or "not really worried" in emotional_text
-        )
-        if negative_screen:
-            return False
-
-    if topic_key == "oral" and step.get("id") == "oral_rinse_open":
-        denied_oral_symptoms = (
-            data.get("mouth_sores") == "No"
-            and data.get("dry_mouth") == "No"
-            and data.get("mucus_issues") == "No"
-            and data.get("teeth_gum_issues") == "No"
-        )
-        if denied_oral_symptoms:
-            return False
-
-    if topic_key == "fatigue" and step.get("id") == "drowsy_schedule":
-        if data.get("medication_drowsy") == "No":
-            return False
 
     return True
 
@@ -2211,279 +1828,6 @@ def get_topic_progress(topic_key: str, data: dict, raw_answers: Optional[dict] =
     return len(answered), len(applicable)
 
 
-def _topic_status_label(topic_key: str) -> str:
-    state = st.session_state.topic_states.get(topic_key, {})
-    status = state.get("status", "not_started")
-    if status == "completed":
-        return "Completed"
-    if status == "in_progress":
-        return "In progress"
-    if state.get("data"):
-        return "Incomplete"
-    return "Not started"
-
-
-def _guided_current_topic_key() -> Optional[str]:
-    """Return the next clinician-ordered topic the patient should answer."""
-    selected = st.session_state.get("selected_topic")
-    if selected and selected != "freeform":
-        selected_state = st.session_state.topic_states.get(selected, {})
-        if selected_state.get("status") == "in_progress" and not topic_is_complete(
-            selected,
-            selected_state.get("data", {}),
-            selected_state.get("raw_answers"),
-        ):
-            return selected
-
-    for _, key in TOPICS:
-        state = st.session_state.topic_states[key]
-        if state.get("status") == "in_progress" and not topic_is_complete(
-            key, state.get("data", {}), state.get("raw_answers")
-        ):
-            return key
-
-    for _, key in TOPICS:
-        if st.session_state.topic_states[key].get("status") != "completed":
-            return key
-    return None
-
-
-def _sync_guided_topic_selection() -> Optional[str]:
-    current = _guided_current_topic_key()
-    st.session_state.selected_topic = current
-    return current
-
-
-def _overall_progress() -> tuple[int, int, int]:
-    answered_total = 0
-    applicable_total = 0
-    completed_topics = 0
-    for _, key in TOPICS:
-        state = st.session_state.topic_states[key]
-        answered, applicable = get_topic_progress(key, state.get("data", {}), state.get("raw_answers"))
-        answered_total += answered
-        applicable_total += applicable
-        if state.get("status") == "completed":
-            completed_topics += 1
-    return answered_total, applicable_total, completed_topics
-
-
-def _record_response_metadata(
-    topic_key: str,
-    step: dict,
-    answer: Any,
-    source: str,
-    raw_answer: Any,
-    display: str,
-):
-    """Store structured response metadata for clinician summary and demos."""
-    entry = {
-        "timestamp": datetime.now().isoformat(timespec="seconds"),
-        "topic": topic_key,
-        "question_id": step.get("id"),
-        "question_text": step.get("text"),
-        "answer_type": step.get("type", "options"),
-        "answer": answer,
-        "raw_answer": raw_answer,
-        "display_answer": display,
-        "source": source,
-        "is_followup_answer": source == "followup" or str(step.get("id", "")).endswith("_llm_followup"),
-    }
-    st.session_state.setdefault("structured_responses", []).append(entry)
-
-
-def _record_agent_trace(topic_key: str, step: dict, pipeline: dict):
-    """Keep a compact demo trace of the latest agent/orchestrator decisions."""
-    trace = {
-        "topic": topic_key,
-        "question_id": step.get("id"),
-        "question": step.get("text"),
-        "mode": "pipeline",
-        "patient_answer": pipeline.get("patient_answer"),
-        "agent_1_answer_interpreter": {
-            "matched_option": pipeline.get("matched_option"),
-        },
-        "agent_2_urgency": {
-            "urgency_tier": pipeline.get("urgency_tier", 0),
-            "urgency_message_shown": bool(pipeline.get("urgency_message")),
-        },
-        "agent_3_engagement": {
-            "reduce_follow_up": pipeline.get("reduce_follow_up", False),
-            "wants_to_stop": pipeline.get("wants_to_stop", False),
-        },
-        "agent_4_doctor_relevance": {
-            "doctor_note": pipeline.get("doctor_note"),
-            "clinical_priority": pipeline.get("clinical_priority"),
-            "follow_up_goal": pipeline.get("follow_up_goal"),
-            "next_step_action": pipeline.get("next_step_action"),
-        },
-        "agent_5_next_move": {
-            "follow_up_triggered": pipeline.get("follow_up", False),
-            "follow_up_question": pipeline.get("follow_up_question"),
-        },
-        "orchestrator": {
-            "assistant_message": pipeline.get("assistant_message"),
-            "special_signals": pipeline.get("special_signals", {}),
-            "final_decision": None,
-            "next_question": None,
-        },
-    }
-    st.session_state.setdefault("agent_traces", []).append(trace)
-    st.session_state["last_agent_trace"] = trace
-
-
-def _record_fastpath_trace(
-    topic_key: str,
-    step: dict,
-    answer: Any,
-    source: str,
-    note: str,
-):
-    trace = {
-        "topic": topic_key,
-        "question_id": step.get("id"),
-        "question": step.get("text"),
-        "mode": "fast_path",
-        "source": source,
-        "patient_answer": answer,
-        "agent_1_answer_interpreter": {
-            "matched_option": answer,
-        },
-        "agent_2_urgency": {
-            "urgency_tier": 0,
-        },
-        "agent_3_engagement": {
-            "wants_to_stop": False,
-            "reduce_follow_up": False,
-        },
-        "agent_4_doctor_relevance": {
-            "clinical_priority": "low",
-            "follow_up_goal": None,
-        },
-        "agent_5_next_move": {
-            "follow_up_triggered": False,
-            "follow_up_question": None,
-        },
-        "orchestrator": {
-            "assistant_message": None,
-            "final_decision": note,
-            "next_question": None,
-        },
-    }
-    st.session_state.setdefault("agent_traces", []).append(trace)
-    st.session_state["last_agent_trace"] = trace
-
-
-def _finalize_demo_trace(decision: str, next_question: Optional[str] = None):
-    trace = st.session_state.get("last_agent_trace")
-    if not trace:
-        return
-    orch = trace.setdefault("orchestrator", {})
-    orch["final_decision"] = decision
-    orch["next_question"] = next_question
-    st.session_state["last_agent_trace"] = trace
-    traces = st.session_state.get("agent_traces", [])
-    if traces:
-        traces[-1] = trace
-        st.session_state["agent_traces"] = traces
-
-
-def _current_prompt_text_for_topic(topic_key: Optional[str]) -> str:
-    if not topic_key:
-        return ""
-    state = st.session_state.get("topic_states", {}).get(topic_key, {})
-    for msg in reversed(state.get("chat", [])):
-        if msg.get("role") == "assistant" and msg.get("is_current_prompt"):
-            content = str(msg.get("prompt_text") or msg.get("content") or "").strip()
-            if content:
-                parts = [part.strip() for part in content.split("\n\n") if part.strip()]
-                return parts[-1] if parts else content
-    return str(state.get("last_prompted_text") or "").strip()
-
-
-def _mark_patient_fatigue(topic_key: Optional[str] = None):
-    st.session_state["patient_fatigue"] = True
-    st.session_state["fatigue_requested_at"] = datetime.now().isoformat(timespec="seconds")
-    if topic_key and topic_key in st.session_state.topic_states:
-        state = st.session_state.topic_states[topic_key]
-        state["_patient_fatigue"] = True
-        _append_assistant_message(
-            state,
-            "I understand. I’ll keep this as brief as I can and focus on the most important questions.",
-        )
-
-
-def _render_demo_agent_panel(topic_key: Optional[str] = None):
-    if not st.session_state.get("demo_mode"):
-        return
-    trace = st.session_state.get("last_agent_trace")
-    current_prompt = _current_prompt_text_for_topic(
-        topic_key or st.session_state.get("selected_topic")
-    )
-    st.markdown(
-        '<div class="demo-reasoning-card">'
-        '<div class="demo-title">Demo Mode</div>'
-        '<div class="demo-subtitle">How the system made this decision</div>'
-        '</div>',
-        unsafe_allow_html=True,
-    )
-    if not trace:
-        st.caption("The system evaluates each answer across multiple clinical dimensions before deciding the next step.")
-        if current_prompt:
-            st.markdown(f"**Current question:** {current_prompt}")
-        st.info("No reasoning has been recorded yet for this step.")
-        return
-
-    interp = trace.get("agent_1_answer_interpreter") or {}
-    urgency = trace.get("agent_2_urgency") or {}
-    engagement = trace.get("agent_3_engagement") or {}
-    doctor = trace.get("agent_4_doctor_relevance") or {}
-    next_move = trace.get("agent_5_next_move") or {}
-    orchestrator = trace.get("orchestrator") or {}
-
-    interpreted_as = interp.get("matched_option") or trace.get("patient_answer") or "a valid answer"
-    urgency_tier = urgency.get("urgency_tier", 0)
-    if urgency_tier >= 3:
-        urgency_text = "Emergency concern detected."
-    elif urgency_tier == 2:
-        urgency_text = "Needs same-day care team attention."
-    else:
-        urgency_text = "No urgent symptoms detected."
-
-    if engagement.get("wants_to_stop"):
-        engagement_text = "Patient seems to want to stop or pause."
-    elif engagement.get("reduce_follow_up"):
-        engagement_text = "System is keeping follow-up lighter."
-    else:
-        engagement_text = "Engagement is normal."
-
-    missing = doctor.get("follow_up_goal")
-    if missing:
-        doctor_text = f"System still needs: {missing}"
-    else:
-        doctor_text = "No major detail is missing for this step."
-
-    decision = orchestrator.get("final_decision") or "System is moving to the next step."
-    next_question = orchestrator.get("next_question")
-    if next_move.get("follow_up_triggered") and next_move.get("follow_up_question"):
-        decision = f"Ask one follow-up: {next_move.get('follow_up_question')}"
-    elif next_question:
-        decision = f"Move to next question: {next_question}"
-    if current_prompt:
-        decision = f"Now asking: {current_prompt}"
-
-    st.caption("The system evaluates each answer across multiple clinical dimensions before deciding the next step.")
-    with st.expander("View reasoning", expanded=True):
-        if current_prompt:
-            st.markdown(f"**Current question:** {current_prompt}")
-        st.markdown(f"**Patient said:** `{trace.get('patient_answer')}`")
-        st.markdown(f"**Understanding:** System identified this as `{interpreted_as}`.")
-        st.markdown(f"**Urgency check:** {urgency_text}")
-        st.markdown(f"**Patient state:** {engagement_text}")
-        st.markdown(f"**Doctor relevance:** {doctor_text}")
-        st.markdown(f"**Final decision:** {decision}")
-
-
 
 # ══════════════════════════════════════════════════════════════════
 # MULTI-AGENT CLINICAL SYSTEM
@@ -2520,6 +1864,85 @@ _RED_FLAGS = (
     "- New neurological symptoms: sudden weakness, numbness, confusion\n"
     "- Medication non-adherence affecting symptom control"
 )
+
+# ── Urgency message lookup — resolved in code, never in prompts ──────────────
+URGENCY_MESSAGES: dict[str, str] = {
+    "tier2_standard": (
+        "Thank you for sharing this with us. We can see you're having a really "
+        "difficult time. A member of your care team will be reaching out to you today. "
+        "Please keep your phone nearby. Your responses have been saved."
+    ),
+    "tier3_medical": (
+        "We're concerned about what you've shared. Please call 911 or go to your "
+        "nearest emergency room immediately. Your care team has been notified."
+    ),
+    "tier3_psychological": (
+        "We hear you, and we want you to know your safety matters. Please call or "
+        "text 988 right now — the Suicide & Crisis Lifeline is available 24/7. "
+        "If you are in immediate danger, call 911 or go to your nearest emergency "
+        "room. Your care team has been notified."
+    ),
+}
+
+
+def _build_session_context() -> dict:
+    """
+    Compact snapshot of current session state.
+    Agents receive this to calibrate output without needing
+    to duplicate cross-agent logic in their prompts.
+    """
+    urg = st.session_state.get("urgency_state", {})
+    sent = st.session_state.get("sentiment_state", {})
+    return {
+        "urgency_tier": urg.get("current_tier", 0),
+        "active_urgency_signals": urg.get("all_signals", []),
+        "active_sentiment_signals": sent.get("all_signals", []),
+        "engagement_trajectory": sent.get("engagement_trajectory", "insufficient_data"),
+        "emotional_state": sent.get("emotional_state", "neutral"),
+    }
+
+
+def _expected_answer_type(step: dict) -> str:
+    """
+    Infer what KIND of answer the question is asking for.
+    Used by Answer Interpreter to detect type mismatches before calling the model.
+    """
+    text = step.get("text", "").lower()
+    qtype = step.get("type", "options")
+    if qtype == "number":
+        return "severity"
+    if any(w in text for w in ["where", "location", "which part", "body part", "area"]):
+        return "location"
+    if any(w in text for w in ["how bad", "scale", "rate", "0", "10", "worst"]):
+        return "severity"
+    if any(w in text for w in ["when", "how long", "since", "started"]):
+        return "time"
+    if any(w in text for w in ["yes or no", "do you have", "are you", "have you"]):
+        return "yes_no"
+    return "any"
+
+
+def _find_catchall_option(opts: list[str]) -> Optional[str]:
+    """
+    Find the catch-all option in a list if one exists.
+    Returns the option string or None.
+    """
+    catchall_labels = {
+        "somewhere else", "other", "none of these",
+        "something else", "other symptom", "other medication",
+    }
+    for o in opts:
+        if o.lower().strip() in catchall_labels:
+            return o
+    return None
+
+
+def _is_voice_input(answer: str) -> bool:
+    """
+    Heuristic: if the answer came from voice transcription it was stored
+    with a _voice_ prefix in session state. Check that flag.
+    """
+    return bool(st.session_state.get("_last_answer_was_voice", False))
 
 
 def _call_agent(system_prompt: str, user_content: dict, max_tokens: int = 500) -> dict:
@@ -2841,7 +2264,7 @@ def run_topic_summary_agent(topic_label: str, topic_data: dict) -> dict:
     result = _run_report_support_agent("topic_summary", {
         "topic_label": topic_label,
         "topic_data": topic_data,
-    }, max_tokens=100)
+    }, max_tokens=80)
     return {**default, **result}
 
 
@@ -2858,7 +2281,7 @@ def run_report_topic_insight_agent(topic_label: str, last_topic_data: dict, curr
         "topic_label": topic_label,
         "last_topic_data": last_topic_data,
         "current_topic_data": current_topic_data,
-    }, max_tokens=220)
+    }, max_tokens=200)
     return {**default, **result}
 
 
@@ -2871,7 +2294,7 @@ def run_report_overview_agent(topic_insights: list[dict]) -> dict:
     }
     result = _run_report_support_agent("overview", {
         "topic_insights": topic_insights,
-    }, max_tokens=180)
+    }, max_tokens=160)
     return {**default, **result}
 
 
@@ -2880,139 +2303,155 @@ def run_report_overview_agent(topic_insights: list[dict]) -> dict:
 # ══════════════════════════════════════════════════════════════════
 
 _ANSWER_INTERPRETER_SYS = f"""
-You are the Answer Interpreter Agent for a clinical chatbot serving head and neck
-cancer patients. {_HNC_CONTEXT}
+You classify a patient's free-text answer for a clinical chatbot serving head and
+neck cancer patients. {_HNC_CONTEXT}
 
-Your ONLY job: classify a patient's free-text answer for the current question.
+You will receive:
+  - question_text: the question that was asked
+  - question_type: options / multi_select / free_text / number
+  - expected_answer_type: location / severity / time / yes_no / any
+    (pre-computed by the system — use it to detect type mismatches)
+  - options: the available answer choices (may be empty)
+  - patient_answer: what the patient typed or said
+  - recent_topic_history: recent back-and-forth in this topic
 
-MATCHING RULES:
-1. EXACT MATCH — case-insensitive, ignore minor punctuation → match_type "exact"
+YOUR TWO TASKS:
 
-2. IMPLICIT/SEMANTIC MATCH — use natural language understanding to determine if the
-   answer clearly and unambiguously implies one specific option.
-   Exception for severity questions: map numbers to ranges:
-     0 → "0 — No pain/None", 1-3 → Mild, 4-6 → Moderate, 7-9 → Severe/High, 10 → Worst
-   - Treat natural conversational yes/no language as valid yes/no:
-     "yeah", "yep", "yup", "sure" → Yes
-     "nope", "nah", "not really" → No
-   - When a question asks for a body location, any real body part is a meaningful answer.
-     Do NOT reject "hand", "head", "jaw", "neck", "arm", etc. just because it is not
-     one of the named specific options.
-   - For location questions with a catch-all option such as "Somewhere else" or "Other",
-     any concrete anatomical location that is not one of the named specific options MUST
-     map to the catch-all option.
-   - If the patient wording directly names one of the listed specific options in natural language,
-     prefer that specific option over the catch-all.
-   - For yes/no options, treat brief natural replies as valid:
-     "fine", "not really", "none", "no issues", "doing okay" should map to the appropriate negative option
-     when they clearly answer the current symptom question.
-   - Across all topics, prefer the patient's real-world meaning over the literal wording of the option list.
-   - Accept common typos, misspellings, speech-to-text errors, shorthand, and close synonyms when the meaning is reasonably clear.
-   - If the patient gives a concrete everyday answer and one option is clearly the best fit, map to that option instead of forcing a no_match.
-   - This includes locations such as nose, face, cheek, scalp, lip, gums, ear, shoulder,
-     chest, back, stomach, leg, foot, or any other specific body area.
+TASK 1 — CLASSIFY THE ANSWER
 
-3. CATCH-ALL OPTION RULE (CRITICAL) — if the options list contains a catch-all such
-   as "Somewhere else", "Other", "None of these", or "Something else", AND the
-   patient's answer does not match any specific option but IS a valid, meaningful
-   response to the question, you MUST map it to the catch-all option.
-   - match_type = "implicit", confidence = 0.85
-   - Examples for options ["Throat", "Tongue", "Somewhere else"]:
-       "headache" → "Somewhere else"   (it's a valid pain location, just not listed)
-       "my hand"  → "Somewhere else"
-       "jaw"      → "Somewhere else"
-       "shoulder" → "Somewhere else"
-       "ear"      → "Somewhere else"
-       "neck"     → "Somewhere else"
-       "nose"     → "Somewhere else"
-       "my face"  → "Somewhere else"
-   - Examples for options ["Gabapentin", "Oxycodone", "Other"]:
-       "Tylenol"  → "Other"
-       "ibuprofen"→ "Other"
-   NEVER return no_match when a catch-all option exists and the answer is a
-   recognisable, meaningful response to the question asked.
+First: if expected_answer_type is not "any", check whether the patient answered
+the right kind of thing. If they gave timing when asked for location, or a body
+part when asked for a severity number, that is a type_mismatch.
 
-4. TYPE MISMATCH DETECTION — if the question asks for one type of information but
-   the patient provides a different type, return match_type "no_match" even if a
-   catch-all option exists. Do NOT accept a wrong-type answer via catch-all.
-   Examples of type mismatches:
-     - Question asks WHERE the pain is (a location) but patient says "comes and goes",
-       "all the time", "only when I swallow", "sometimes" (these are timing/pattern, not location)
-     - Question asks HOW BAD the pain is (severity) but patient names a body part
-     - Question asks WHEN pain started but patient describes the type of pain
-   In these cases: match_type = "no_match", matched_option = null,
-   reasoning should explain the type mismatch so the chatbot can ask again clearly.
+If the type is correct, decide whether the answer is meaningful for this question.
 
-5. AMBIGUITY — two or more SPECIFIC (non-catch-all) options equally plausible
-   → match_type "no_match", list candidates
+If options exist, find the closest matching option when possible.
+  Accept: exact wording, natural-language equivalents, typos, shorthand,
+  speech-to-text substitutions, and clear synonyms.
+    Accept: "yeah / yep / yup / sure" → Yes
+    Accept: "nope / nah / not really / no issues / fine" → No
+    Accept: any recognisable body part, medication name, or food as a valid answer
+    Accept: numbers within a range as matching the appropriate range option
 
-6. NO MATCH — answer is completely unrelated/nonsensical AND no catch-all exists
-   → match_type "no_match"
+Use recent_topic_history to understand short contextual replies.
+"yes", "that one", "same as before" — resolve against what was just discussed.
+Short answers are normal. Patients in pain do not type long responses.
 
-6. SPECIAL STATES:
-   a) DISTRESS FLAG: any expression of being unable to cope, hopelessness, suicidal
-      ideation → distress_flag true
-   b) URGENCY FLAG: sudden severe pain, breathing difficulty, "worst of my life",
-      fever with chills, bleeding, or any red flag symptom → urgency_flag true
-   c) OFF-TOPIC: answer is entirely unrelated to the question (e.g. patient asks
-      about appointment scheduling when asked about pain location) → match_type "off_topic"
-   d) INVALID: empty or gibberish → match_type "invalid"
+TASK 2 — FLAG DISTRESS OR URGENCY
+  distress_flag: hopelessness, inability to cope, suicidal ideation → true
+  urgency_flag: sudden severe pain, cannot breathe, fever with chills, bleeding → true
+  Still attempt a match even when these flags are true.
 
-CONFIDENCE: 1.0 exact, 0.85-0.95 strong implicit, 0.85 catch-all, <0.7 → no_match.
-matched_option MUST be copied VERBATIM from options list, or null.
+IMPORTANT: matched_option must be copied exactly as it appears in the options list.
+Do not rephrase, abbreviate, or paraphrase it. If nothing matches, set it to null.
 
-TOPIC-HISTORY RULES:
-  - You will receive recent conversation history for this topic only.
-  - Use it to resolve conversational replies like "yes", "no", "only soup", "my sister helps some",
-    or "every day almost" in context of the current question.
-  - Do not treat the patient's answer as unrelated just because it is brief; use the immediate topic history.
-  - Prefer the most specific valid option, not the most generic one.
-  - If the assistant has already been clarifying the same concept, use that context to resolve short confirmation replies like "yes", "right", "that one", or "the left side".
-  - Do not force a mapping if the answer is meaningful but clearly does not fit any option; prefer the catch-all option when available.
-  - If the patient already gave a concrete location, medication, food type, support source, or other real-world example,
-    preserve that meaning by mapping to the correct catch-all option instead of asking them to classify it themselves.
-
-Return ONLY valid JSON:
+Return only this JSON — no other text:
 {{
-  "match_type": "exact|implicit|no_match|off_topic|invalid",
-  "matched_option": "..." or null,
-  "confidence": 0.0-1.0,
-  "candidates": [],
+  "is_meaningful_for_question": false,
+  "matched_option": null,
+  "confidence": "high|somewhat|low",
+  "off_topic": false,
   "distress_flag": false,
-  "urgency_flag": false,
-  "reasoning": "One sentence."
+  "urgency_flag": false
 }}
 """
 
 
-def run_answer_interpreter(step: dict, patient_answer: str, topic_history: Optional[list[dict[str, str]]] = None) -> dict:
+def run_answer_interpreter(
+    step: dict,
+    patient_answer: str,
+    topic_history: Optional[list[dict[str, str]]] = None,
+) -> dict:
     """
-    Agent 1: Classify patient's free-text answer against predefined options.
-    Returns interpreter output dict, or safe default on failure.
+    Agent 1: Classify patient free-text answer against question options.
+    Control logic enforced in Python. Model only handles language judgment.
     """
     default = {
-        "match_type": "no_match", "matched_option": None, "confidence": 0.0,
-        "candidates": [], "distress_flag": False, "urgency_flag": False,
-        "reasoning": "Agent unavailable."
+        "match_type": "no_match",
+        "matched_option": None,
+        "confidence": "low",
+        "is_meaningful_for_question": False,
+        "off_topic": False,
+        "distress_flag": False,
+        "urgency_flag": False,
     }
+
     if not patient_answer.strip():
-        return {**default, "match_type": "invalid"}
+        return {**default, "match_type": "invalid", "off_topic": False}
+
+    opts = step.get("opts", [])
+    question_type = step.get("type", "options")
+
+    expected_type = _expected_answer_type(step)
+    catchall_option = _find_catchall_option(opts)
+
+    normalized_input = _norm_text(patient_answer)
+    for opt in opts:
+        if _norm_text(opt) == normalized_input:
+            return {
+                **default,
+                "match_type": "exact",
+                "matched_option": opt,
+                "confidence": "high",
+                "is_meaningful_for_question": True,
+            }
+
+    if not openai_client:
+        return default
 
     result = _call_agent(_ANSWER_INTERPRETER_SYS, {
         "question_text": step.get("text", ""),
-        "options": step.get("opts", []),
+        "question_type": question_type,
+        "expected_answer_type": expected_type,
+        "options": opts,
         "patient_answer": patient_answer,
         "recent_topic_history": topic_history or [],
-    }, max_tokens=200)
+    }, max_tokens=160)
 
     if not result:
         return default
 
-    # Validate matched_option is actually in the options list
+    confidence = str(result.get("confidence", "low")).strip().lower()
+    if confidence not in {"high", "somewhat", "low"}:
+        confidence = "low"
+
     mo = result.get("matched_option")
-    if mo and mo not in step.get("opts", []):
-        result["matched_option"] = None
-        result["match_type"] = "no_match"
+    meaningful = bool(result.get("is_meaningful_for_question", False))
+    off_topic = bool(result.get("off_topic", False))
+
+    if mo and question_type != "multi_select":
+        if mo not in opts:
+            mo = None
+            meaningful = False
+
+    if (
+        not meaningful
+        and catchall_option
+        and not off_topic
+        and confidence in {"high", "somewhat"}
+        and expected_type in ("location", "any")
+    ):
+        mo = catchall_option
+        meaningful = True
+        confidence = "high"
+
+    if question_type == "multi_select":
+        if isinstance(mo, str):
+            mo = [mo]
+        mo = [m for m in (mo or []) if m in opts] or None
+        meaningful = bool(mo)
+
+    match_type = "off_topic" if off_topic else "no_match"
+    if meaningful:
+        match_type = "semantic" if mo else "exact"
+    if question_type == "multi_select" and mo:
+        match_type = "exact"
+
+    result["match_type"] = match_type
+    result["matched_option"] = mo
+    result["confidence"] = confidence
+    result["is_meaningful_for_question"] = meaningful
+    result["off_topic"] = off_topic
 
     return {**default, **result}
 
@@ -3026,95 +2465,70 @@ def run_answer_interpreter(step: dict, patient_answer: str, topic_history: Optio
 # ══════════════════════════════════════════════════════════════════
 
 _URGENCY_SYS = f"""
-You are the Urgency & Criticality Agent for a clinical chatbot serving head and
-neck cancer patients. {_HNC_CONTEXT}
+You are the safety monitor for a symptom check-in chatbot used by head and neck
+cancer patients. {_HNC_CONTEXT}
 
-You monitor patient safety. Read ALL raw answers across the session — urgency
-signals often appear in free-text not captured by structured options.
-Be conservative about calling something urgent. Use Tier 2 only for clearly serious,
-time-sensitive problems that likely require same-day outreach. When in doubt between
-Tier 1 and Tier 2, prefer Tier 1 unless there is a strong acute-risk signal.
+You are the only agent in this system that makes safety decisions.
 
-RED FLAGS TO DETECT:
+SAFETY LEVELS:
+  0 — Nothing concerning. Continue normally.
+  1 — Worth noting. Log for the doctor's report. Continue normally.
+  2 — Requires same-day care team outreach. Continue the chat.
+  3 — Immediate threat to life or safety. Terminate the session.
+
+When genuinely uncertain between Level 1 and Level 2, always choose Level 1.
+Only use Level 2 for things that are clearly serious and time-sensitive.
+
+---
+CRITICAL HNC CONTEXT:
+Pain of 7–8 out of 10 is clinically expected during active chemoradiation for
+head and neck cancer. A high pain score alone is NOT a Level 2 signal in this
+population. You must identify a second converging signal alongside it.
+
+---
+RED FLAGS TO ASSESS:
 {_RED_FLAGS}
 
-TIER DEFINITIONS:
-  0 — NO URGENCY: Continue normally.
-  1 — WATCH: Notable signal. Log for report, continue session normally.
-  2 — URGENT: Care team must contact patient today. Continue session.
-       Show one care team message to the patient.
-  3 — EMERGENCY: Immediate threat. Terminate session. Patient to emergency services.
+MEDICAL SIGNALS:
+  M1 — Severe uncontrolled pain:
+    Level 1 only: high pain score alone, or pain disrupting sleep but manageable
+    Level 2: high pain AND at least one of — medication not helping at all,
+             cannot eat or drink because of the pain, pain suddenly and sharply
+             worse than their recent baseline, or fever/chills present alongside
+    Level 2 always: pain described as 10/10, "worst of my life", or "unbearable"
+  M2 — Sudden new severe pain in the head or neck → Level 2
+  M3 — Fever with chills (immunocompromised patient) → Level 2 always
+  M4 — Cannot swallow any liquids at all → Level 2
+  M5 — Breathing difficulty at rest, or wheezing → Level 2
+  M6 — Stopped prescription medication → Level 2 only if clearly causing
+        uncontrolled symptoms or immediate harm; otherwise Level 1
+  M7 — Falls or near-falls → Level 1
+  M8 — Cannot sleep 3+ consecutive nights, or unable to eat for multiple days → Level 2
 
-STRICT TIERING PRINCIPLE:
-  - Tier 2 should be used only for clearly acute, high-risk, or rapidly worsening problems.
-  - Moderate symptoms, expected treatment side effects, partial information, or manageable problems
-    should usually stay at Tier 0 or Tier 1.
-  - Do not use Tier 2 just because something sounds clinically important; use it only when it sounds truly urgent.
+PSYCHOLOGICAL SIGNALS:
+  P1 — Direct statement of suicidal intent or self-harm → Level 3 always
+       Only for explicit statements like "I want to kill myself" or
+       "I'm going to hurt myself". Venting about treatment hardship does not count.
+  P2 — Passive death wish: "I don't care if I make it" → Level 2
+  P3 — Crisis desperation about life itself, not just a symptom → Level 2
+  P4 — Complete isolation combined with high pain and an overall unsafe picture → Level 2
 
-SIGNAL RULES:
+If is_voice_input is true in the input, apply extra tolerance. A single
+ambiguous or garbled word should not drive escalation on its own.
 
-  IMPORTANT CLINICAL CONTEXT FOR HNC PATIENTS:
-  Pain scores of 7-8/10 are clinically expected during active chemoradiation for head
-  and neck cancer — mucositis, dysphagia, and treatment toxicity routinely produce this
-  level. A high pain score ALONE does not warrant Tier 2 escalation in this population.
-  You MUST look for additional signals beyond the number itself.
+message_key must be one of these exact strings, or null:
+  "tier2_standard"       — for Level 2
+  "tier3_medical"        — for Level 3 medical emergencies
+  "tier3_psychological"  — for Level 3 psychological crises (P1)
+The system resolves this key to the actual patient message in code.
+Do not write the patient-facing message text in your output.
 
-  Medical signals:
-    M1 — SEVERE UNCONTROLLED PAIN:
-      Tier 1 (WATCH): Pain 7-9/10 alone, without other signals.
-      Tier 2 (URGENT): Pain 7-9/10 AND strong acute-risk evidence such as:
-        - Patient states nothing helps OR medication is not working
-        - Patient cannot eat or drink at all because of pain
-        - Pain is suddenly much worse than baseline
-        - Fever/chills present alongside severe pain
-      Tier 1 (WATCH): Pain disrupting sleep or daily activities but still sounding manageable / expected during treatment
-      Tier 2 (URGENT): Pain reported as 10/10 or "worst of my life" or "unbearable"
-    M2: Sudden new severe pain in head/neck — Tier 2
-    M3: Fever with chills in an HNC patient (immunocompromised) — Tier 2 always
-    M4: Complete inability to swallow ANY liquids — Tier 2
-    M5: Breathing difficulty at rest or wheezing — Tier 2
-    M6: Prescription medication suddenly stopped — Tier 2 only if it is clearly causing uncontrolled symptoms or creates clear immediate risk; otherwise Tier 1
-    M7: Reported falls — Tier 1
-    M8: Significant functional disruption (3+ nights no sleep, cannot eat for days, or similarly severe prolonged disruption) — Tier 2
-  
-  Psychological signals:
-    P1: Explicit suicidal ideation or self-harm intent → TIER 3 ALWAYS
-    P2: Passive death wish ("I don't care if I make it") → Tier 2
-    P3: Crisis desperation ("I can't take this anymore" about life, not just pain) → Tier 2
-    P4: Complete isolation ("no one to help me") with high pain → Tier 2 only if the overall picture sounds unstable or unsafe; otherwise Tier 1
-
-  Accumulation: multiple Tier 1 signals alone do NOT automatically require Tier 2 unless together they create a clearly urgent picture.
-
-IMPORTANT NON-ESCALATION GUARDRAILS:
-  - Do NOT escalate just because an answer is brief, partial, or missing one detail.
-  - Do NOT escalate just because the patient does not remember a dose, timing, or exact amount.
-  - Do NOT escalate just because a patient reports PRN or non-daily use without saying it is prescribed daily.
-  - Do NOT treat "every 2 days", "sometimes", or similar medication-use frequency by itself as urgent.
-  - Do NOT escalate expected but moderate treatment side effects to Tier 2 unless they sound severe, acute, or clearly unsafe.
-  - Do NOT escalate manageable pain, manageable nausea, manageable fatigue, or mild functional impact to Tier 2.
-  - Medication adherence becomes urgent only if the patient clearly reports they stopped an important prescribed medication,
-    cannot access it, or their symptoms are uncontrolled because they are missing it.
-  - If the patient gives usable but incomplete information, continue normally unless another red flag is clearly present.
-
-PATIENT MESSAGES (verbatim — do not modify):
-  Tier 2: "Thank you for sharing this with us. We can see you're having a really
-    difficult time. A member of your care team will be reaching out to you today.
-    Please keep your phone nearby. Your responses have been saved."
-  Tier 3 (medical): "We're concerned about what you've shared. Please call 911 or
-    go to your nearest emergency room immediately. Your care team has been notified."
-  Tier 3 (P1/P2): "We hear you, and we want you to know your safety matters.
-    Please call or text 988 right now — the Suicide & Crisis Lifeline is available
-    24/7. If you are in immediate danger, call 911 or go to your nearest emergency
-    room. Your care team has been notified."
-
-Return ONLY valid JSON:
+Return only this JSON — no other text:
 {{
-  "session_tier": 0-3,
-  "new_signals": ["M1", "P3"],
-  "escalation_reason": "..." or null,
-  "patient_message": "..." or null,
-  "continue_session": true/false,
-  "clinical_note": "..." or null
+  "urgency_flag": false,
+  "safety_level": 0,
+  "confidence": "high|somewhat|low",
+  "message_key": null
 }}
 """
 
@@ -3125,37 +2539,60 @@ def run_urgency_agent(
     current_answer_matched: Optional[str],
     session_answers: dict,
     prior_baseline: dict,
-    active_signals: list,
-    distress_flag: bool,
+    active_urgency_signals: list,
+    distress: bool,
     urgency_flag: bool,
 ) -> dict:
     """
-    Agent 3: Patient safety monitoring. Returns urgency assessment.
+    Agent 2: Patient safety monitoring.
+    Control logic (message lookup, keep_going, signal accumulation) enforced in code.
     """
     default = {
-        "session_tier": 0, "new_signals": [], "escalation_reason": None,
-        "patient_message": None, "continue_session": True, "clinical_note": None
+        "urgency_flag": False,
+        "safety_level": 0,
+        "confidence": "low",
+        "new_signals": [],
+        "message_key": None, "patient_message": None, "keep_going": True,
     }
+
+    if not openai_client:
+        return default
+
+    is_voice = _is_voice_input(current_answer_raw)
+
     result = _call_agent(_URGENCY_SYS, {
         "current_question": step.get("text", ""),
-        "current_answer_raw": current_answer_raw,
-        "current_answer_matched": current_answer_matched,
-        "distress_flag_from_interpreter": distress_flag,
-        "urgency_flag_from_interpreter": urgency_flag,
-        "all_session_answers_so_far": session_answers,
-        "active_signals_this_session": active_signals,
-        "prior_baseline_summary": prior_baseline,
-    }, max_tokens=300)
+        "current_answer": current_answer_raw,
+        "pre_flagged_distress": distress,
+        "pre_flagged_urgency": urgency_flag,
+        "is_voice_input": is_voice,
+        "session_answers": session_answers,
+        "prior_baseline": prior_baseline,
+        "active_urgency_signals": active_urgency_signals,
+    }, max_tokens=180)
 
     if not result:
         return default
 
-    # Safety: P1 (suicidal ideation) from the distress flag always forces Tier 3
-    if distress_flag and "suicid" in current_answer_raw.lower():
-        result["session_tier"] = 3
-        result["continue_session"] = False
+    level = int(result.get("safety_level", 0))
+    level = max(0, min(3, level))
 
-    return {**default, **result}
+    message_key = result.get("message_key")
+    if level in (0, 1):
+        message_key = None
+    patient_message = URGENCY_MESSAGES.get(message_key) if message_key else None
+    keep_going = level < 3
+
+    return {
+        **default,
+        "urgency_flag": level >= 2,
+        "safety_level": level,
+        "confidence": str(result.get("confidence", "low")).strip().lower() if result.get("confidence") else "low",
+        "new_signals": result.get("new_signals", []),
+        "message_key": message_key,
+        "patient_message": patient_message,
+        "keep_going": keep_going,
+    }
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -3163,76 +2600,51 @@ def run_urgency_agent(
 # ══════════════════════════════════════════════════════════════════
 
 _SENTIMENT_SYS = f"""
-You are the Patient Sentiment & Engagement Monitor for a clinical chatbot serving
+You monitor patient engagement for a clinical chatbot used by
 head and neck cancer patients. {_HNC_CONTEXT}
 
-You track the patient's emotional state and engagement quality across the session.
-You do NOT classify safety crises — that belongs to the Urgency Agent.
+You do not make safety decisions — the Urgency Agent handles those.
+Keep your output minimal and direct.
 
-IMPORTANT POPULATION CONTEXT:
-  - Brief answers ≠ disengagement (pain impairs fluency)
-  - Stoicism is common — calibrate against reported pain level
-  - Emotional flooding (long distressed answers) needs acknowledgment before next Q
-  - Repeated clarifications can themselves cause frustration; use recent topic history to detect that.
+You will receive resistance_detection_active in the input. If it is false,
+do not flag E3_resistance regardless of what you observe in the answer.
 
-CONTEXT RULES:
-  - You will receive recent topic history and recent question texts from this topic.
-  - If the assistant has asked very similar clarification questions more than once and the patient replies tersely,
-    you may treat that as resistance or declining engagement.
-  - Apply this consistently across every topic, not just emotional topics. Repetition-driven frustration can happen anywhere in the interview.
-  - Be strict and safety-biased about conversational burden: if there is meaningful evidence that the patient wants less questioning, treat it as real.
+---
+READING THIS PATIENT POPULATION:
+Short answers do not mean disengagement. Pain and treatment fatigue make typing
+difficult. Stoicism is common — calibrate against the reported pain level.
+Emotional flooding (unusually long, distressed answers) needs a warm acknowledgment
+before the next question is asked.
 
-DIMENSION SCORES:
-  emotional_state: positive|neutral|fatigued|distressed|frustrated|anxious|overwhelmed|resigned
-  engagement_level: high|moderate|low|resistant|confused
-  engagement_trajectory: stable|improving|declining|insufficient_data
+---
+ENGAGEMENT LEVEL — pick one:
+  high, somewhat, low
 
-SIGNALS TO DETECT (set to true if present):
-  E3_resistance: patient explicitly pushes back ("I already told you", "can we be done")
-    or gives terse/frustrated replies after repeated similar clarifications in the same topic
-  E7_wants_to_stop: patient clearly wants the conversation paused, stopped, or shortened
-    Examples include: "stop", "pause", "skip this", "move on", "enough", "I'm done",
-    "I need to stop", "I can't do this right now", or similarly clear control statements
-    about how the chat should continue.
-    Treat this strictly: if the patient uses short control language that reasonably sounds like ending, pausing,
-    or cutting down the questioning, prefer E7_wants_to_stop=true over continuing the interview.
-  EM1_pain_frustration: venting about their pain situation
-  EM2_sadness_grief: expressing loss or grief about what they can no longer do
-  EM6_emotional_flooding: unusually long, distressed, emotionally dense answer
+---
+DETECT THESE ONLY IF CLEARLY PRESENT IN THIS ANSWER:
 
-ADAPTATION SIGNALS:
-  tone_profile: standard|warm|gentle|simplified
-  acknowledgment_required: true if EM1/EM2/EM6 active in current answer
-  acknowledgment_text: ≤25 words, first person chatbot voice, warm but not effusive,
-    reflects what patient shared emotionally (NOT their clinical data back at them).
-    Example: "That sounds really hard to carry. Thank you for sharing that."
-  simplify_next_question: true if patient seems confused or cognitively fatigued
-  reduce_follow_up_depth: true if E3/E7 active or engagement declining
-  - When reduce_follow_up_depth=true, this means the system should prefer the next formal question or no extra follow-up, not another custom clarification.
-  - If the patient's emotional tone is calm/reassuring and their symptom report suggests they are doing okay, you may support less follow-up depth.
-  - If E7_wants_to_stop is true, the chat should pause rather than continue probing that topic.
-  - If E3_resistance is true and the current question is non-urgent, strongly favor reducing or ending further probing in that topic.
+wants_to_stop:
+  Patient is directing the INTERVIEW ITSELF to stop, pause, or move on.
+  Counts: "I'm done answering", "skip this section", "stop asking me", "can we move on".
+  Does NOT count: "make the pain stop", "I want this treatment to be over",
+  "I wish this would end" — those refer to their physical situation, not the chat.
+  When the language is ambiguous between the interview and their situation, do not flag.
 
-Return ONLY valid JSON:
+needs_warmth:
+  true only if this answer is clearly emotionally heavy and the next question
+  should be softened with a short warm line first.
+
+warm_message:
+  Use only if needs_warmth=true. Maximum 20 words.
+  Respond to how the patient feels, not to the clinical facts.
+
+Return only this JSON — no other text:
 {{
-  "emotional_state": "...",
-  "engagement_level": "...",
-  "engagement_trajectory": "...",
-  "signals": {{
-    "E3_resistance": false,
-    "E7_wants_to_stop": false,
-    "EM1_pain_frustration": false,
-    "EM2_sadness_grief": false,
-    "EM6_emotional_flooding": false
-  }},
-  "adaptation": {{
-    "tone_profile": "standard",
-    "acknowledgment_required": false,
-    "acknowledgment_text": null,
-    "simplify_next_question": false,
-    "reduce_follow_up_depth": false
-  }},
-  "engagement_note_for_doctor": null
+  "engagement_level": "somewhat",
+  "confidence": "high|somewhat|low",
+  "wants_to_stop": false,
+  "needs_warmth": false,
+  "warm_message": null
 }}
 """
 
@@ -3247,48 +2659,80 @@ def run_sentiment_agent(
     recent_questions: list[str],
 ) -> dict:
     """
-    Agent 4: Track patient sentiment and engagement. Returns adaptation signals.
+    Agent 3: Emotional state and engagement monitoring.
+    Resistance detection threshold enforced in code.
     """
     default = {
-        "emotional_state": "neutral", "engagement_level": "moderate",
-        "engagement_trajectory": "insufficient_data",
+        "emotional_state": "neutral", "engagement_level": "high",
+        "engagement_trend": "not enough information yet",
+        "engagement_confidence": "low",
+        "wants_to_stop": False,
         "signals": {
             "E3_resistance": False, "E7_wants_to_stop": False,
             "EM1_pain_frustration": False, "EM2_sadness_grief": False,
             "EM6_emotional_flooding": False,
         },
         "adaptation": {
-            "tone_profile": "standard", "acknowledgment_required": False,
-            "acknowledgment_text": None, "simplify_next_question": False,
-            "reduce_follow_up_depth": False,
+            "tone": "standard", "say_something_warm_first": False,
+            "warm_message": None, "simplify_next_question": False,
+            "reduce_follow_up": False,
         },
-        "engagement_note_for_doctor": None,
+        "note_for_doctor": None,
     }
+
+    if not openai_client:
+        return {
+            **default,
+            "engagement_trajectory": default["engagement_trend"],
+            "engagement_note_for_doctor": default["note_for_doctor"],
+        }
+
+    resistance_detection_active = question_count >= 2
+
     result = _call_agent(_SENTIMENT_SYS, {
         "current_question": step.get("text", ""),
         "current_answer": current_answer_raw,
-        "questions_answered_so_far": question_count,
-        "all_session_answers": session_answers,
+        "resistance_detection_active": resistance_detection_active,
+        "questions_answered": question_count,
+        "session_answers": session_answers,
         "active_sentiment_signals": active_signals,
         "recent_topic_history": topic_history,
         "recent_question_texts": recent_questions,
-    }, max_tokens=300)
+    }, max_tokens=260)
 
     if not result:
-        return default
+        return {
+            **default,
+            "engagement_trajectory": default["engagement_trend"],
+            "engagement_note_for_doctor": default["note_for_doctor"],
+        }
 
-    # Merge nested dicts carefully
+    level = str(result.get("engagement_level", "high")).strip().lower()
+    if level not in {"high", "somewhat", "low"}:
+        level = "high"
+    confidence = str(result.get("confidence", "low")).strip().lower()
+    if confidence not in {"high", "somewhat", "low"}:
+        confidence = "low"
+    wants_to_stop = bool(result.get("wants_to_stop", False))
+    needs_warmth = bool(result.get("needs_warmth", False))
+    warm_message = result.get("warm_message")
+
     merged = {**default}
-    merged["emotional_state"] = result.get("emotional_state", default["emotional_state"])
-    merged["engagement_level"] = result.get("engagement_level", default["engagement_level"])
-    merged["engagement_trajectory"] = result.get("engagement_trajectory", default["engagement_trajectory"])
-    merged["engagement_note_for_doctor"] = result.get("engagement_note_for_doctor")
+    merged["engagement_level"] = level
+    merged["engagement_confidence"] = confidence
+    merged["wants_to_stop"] = wants_to_stop
+    merged["signals"]["E7_wants_to_stop"] = wants_to_stop
+    merged["signals"]["E3_resistance"] = resistance_detection_active and level == "low" and not wants_to_stop
+    merged["adaptation"]["say_something_warm_first"] = needs_warmth
+    merged["adaptation"]["warm_message"] = warm_message if needs_warmth else None
+    merged["adaptation"]["tone"] = "gentle" if level == "low" else ("warm" if level == "somewhat" else "standard")
+    merged["adaptation"]["simplify_next_question"] = level != "high"
+    merged["adaptation"]["reduce_follow_up"] = level != "high" or wants_to_stop
+    merged["emotional_state"] = "distressed" if level == "low" else ("anxious" if level == "somewhat" else "neutral")
+    merged["engagement_trend"] = "declining" if level != "high" else "stable"
 
-    if "signals" in result and isinstance(result["signals"], dict):
-        merged["signals"] = {**default["signals"], **result["signals"]}
-    if "adaptation" in result and isinstance(result["adaptation"], dict):
-        merged["adaptation"] = {**default["adaptation"], **result["adaptation"]}
-
+    merged["engagement_trajectory"] = merged.get("engagement_trend", "not enough information yet")
+    merged["engagement_note_for_doctor"] = merged.get("note_for_doctor")
     return merged
 
 
@@ -3297,164 +2741,43 @@ def run_sentiment_agent(
 # ══════════════════════════════════════════════════════════════════
 
 _DOCTOR_RELEVANCE_SYS = f"""
-You are the Doctor-Relevance Agent for a clinical chatbot serving head and neck
-cancer patients. {_HNC_CONTEXT}
+You evaluate a patient's answer from a physician's perspective for a clinical
+chatbot serving head and neck cancer patients. {_HNC_CONTEXT}
 
-You evaluate patient answers from the physician's perspective in one pass. Your outputs:
-  1. Clinical sufficiency verdict on the current answer
-  2. Follow-up recommendation with a precise information GOAL (not the question itself)
-  3. Comparison to the same question from the prior visit when prior data exists
-  4. A compact doctor-facing note (≤35 words, third person)
-  5. A short patient-facing comparison or acknowledgment note only when useful
+Keep the output minimal.
 
-FOLLOW-UP RULES:
-  - The question list is a question bank, not a rigid script. Judge the current answer
-    like a clinician deciding whether anything important is still missing.
-  - Follow-up should be rare. If the next formal step already gathers the missing detail, do not request a custom follow-up.
-  - These follow-up rules must generalize across all topics and all question types. Do not rely on topic-specific assumptions.
-  - Be strict about reducing conversational burden: when there is evidence of frustration, resistance, or a desire to stop, bias strongly toward no follow-up.
-  - A meaningful free-text answer in the patient's own words is clinically usable even if it does not match the option wording.
-  - If a free-text question contains yes/no wording and the patient gives a simple "yes" or "no", treat that as minimally usable data unless the question clearly asked for a descriptive detail like where, when, how often, or what kind.
-  - If the patient gave a broad but meaningful answer, break down what is missing conceptually; do NOT treat it as meaningless.
-  - If the patient gives a meaningful negative screen ("no", "not really", "I am okay", "fine") to a broad symptom or emotional check-in question, treat that as a usable answer rather than forcing an unnecessary impact follow-up.
-  - If the patient gives a negative screen to a broad opener, set screen_negative_signal=true when the next likely question would otherwise just ask about downstream impact of the same denied problem.
-  - If the patient clearly indicates they do not have a problem in that domain, prefer skipping nonessential downstream questions rather than completing the whole branch mechanically.
-  - If the patient indicates the symptom is okay, controlled, mild, manageable, resolved, improving, or not affecting function, strongly prefer ending that branch quickly unless a safety-critical detail is still missing.
-  - In general, follow-up questions are most useful when there is an active problem, worsening symptom, functional impact, uncontrolled symptom, treatment issue, or meaningful uncertainty.
-  - Ask only questions that are still clinically necessary after the patient's actual answer.
-  - If the patient already explained the reason in their own words, do NOT recommend a generic "what is making this difficult" follow-up.
-  - If the patient supplies one detail and explicitly does not know another, accept the known detail and only ask for the missing one if it is truly necessary.
-  - If the missing detail is something the patient reasonably may not know right now, prefer no follow-up over repetitive questioning.
-  - Never imply the presence of a symptom the patient just denied.
-  - You will receive recent conversation history for this topic only. Use it to avoid repeated questions.
-  - Do NOT create a custom follow-up whose only purpose is to ask the same thing as the candidate next step in different words.
-  - If the next formal step already covers the natural next question, prefer no custom follow-up and let that next step be asked once.
-  - A patient should never have to answer a natural-language version of a question and then immediately answer the form version of the same question.
-  - If recent topic history shows the patient has already been asked about the same detail once or twice, strongly prefer no custom follow-up unless the missing detail is clinically high priority.
-  - If the assistant has already asked for clarification on the same concept and the patient replies briefly, assume repetition risk is high and avoid another custom follow-up unless the detail is truly essential.
-  - If the patient already gave a real-world answer that the system can store directly, prefer next_step_action with carry_forward_answer over follow-up.
-  - This is especially important after structured option answers like Yes/No or category selections: if the next formal step can ask the next needed detail directly, prefer no custom bridge follow-up.
-  - If the current answer already addresses the candidate next step, set next_step_action to skip that step.
-  - If the current answer is reassuring and suggests no active problem, use next_step_action aggressively to skip downstream burden/management questions that only matter when the symptom is present.
-  - If several upcoming questions become unnecessary for the same reason, include them in next_step_action.plan.
-  - If the patient's raw wording already fully answers the candidate next step, skip that step and carry the raw detail forward instead of asking it again.
-  - If the candidate next step, or any proposed follow-up, would substantially repeat a recent question already asked in this topic, suppress it.
-  - If a natural assistant acknowledgment has already effectively asked the next question, do not ask it again.
-  - If the patient explicitly says they do not know a detail, treat that as usable uncertainty rather than pushing repeatedly.
-  - If the patient appears frustrated, resistant, or terse after repeated questioning, downgrade nonessential follow-up across any topic.
-  - If the patient appears frustrated, resistant, or controlling the pace of the chat, recommend follow-up only for urgent or clearly high-value missing information.
-  - If the patient provided some but not all of the detail, mark it as partial and describe the single missing detail in follow_up_goal.
-  - ONLY recommend follow-up if information_completeness is "partial" or "none"
-    AND follow_up_count is 0 AND the missing info is clinically meaningful
-  - NEVER recommend follow-up if follow_up_count ≥ 1 (absolute limit: 1 per question)
-  - NEVER recommend follow-up if patient showed resistance in their answer
+You will receive candidate_next_step_covers_gap (boolean, pre-computed by the system).
+If true, the next scheduled question already asks for the missing detail — do not
+recommend a custom follow-up.
 
-PRIOR-COMPARISON RULES:
-  - You will receive last_checkin_answer for this same question when available.
-  - You should actively use comparable prior data when it exists; comparison is not optional background.
-  - Compare current answer to the same question from the prior visit.
-  - change_direction:
-      improved       — current answer suggests less pain / better status
-      worsened       — current answer suggests more pain / worse status
-      neutral_change — changed but direction unclear
-      no_change      — answers are the same or equivalent
-      new_data       — no prior data available
-  - change_magnitude:
-      numeric severity: large=3+ points difference, moderate=2, small=1, none=0
-      non-numeric: large if clinically major, moderate for meaningful change, small for minor wording difference
-  - clinical_note:
-      one short plain-English comparison sentence; if no prior data, say no prior data available
-  - patient_facing_note:
-      one short natural sentence only when the comparison adds value
-      good uses: weight up/down, pain improved/worsened, symptom burden better/worse
-      do NOT use for trivial yes/no comparisons like "Last time you said yes"
-  - If there is no comparable prior answer for this exact question but related prior topic data suggests a meaningful comparison, you may use that context conservatively in your reasoning.
-  - patient_acknowledgment:
-      optional short acknowledgment when uncertainty itself should be accepted naturally
-      example: "Thanks for sharing that. It's okay if you're not sure of the exact dose."
+Return only the simplest clinically useful decision:
+  - answer_complete: true if the answer is enough for this question
+  - recommend_follow_up: true only if an important detail is still missing
+  - follow_up_goal: a short description of the missing detail, not a question
+  - priority: high / medium / low
+  - patient_note: short sentence only if useful to show the patient
+  - doctor_note: short factual sentence only if useful for the report
+  - skip: whether the next planned question should be skipped
+  - flags.medication_stopped: true only if clearly present
 
-SPECIAL CLINICAL SIGNALS (set if present):
-  trajectory_mismatch: patient says improving but comparison shows worsening (or vice versa)
-  medication_stop_signal: patient stopped taking prescription medication without explanation
-  aggravating_medication_signal: patient reports their medication makes symptoms worse
-  severity_underreporting: patient rates low severity but describes severe functional impact
-  screen_negative_signal: patient's answer functions as a meaningful negative screen for the symptom/concern being assessed
+Keep follow_up_goal and notes short. Do not add extra explanation.
 
-next_step_action:
-  - Use this to suppress an immediate next question when it no longer makes clinical sense
-  - This is the main mechanism for skipping downstream impact/management/change questions generically across topics
-  - Only use it when the candidate next step would be unnecessary, redundant, or context-mismatched given the current answer and session answers
-  - Prefer using next_step_action instead of follow-up whenever the issue is redundant branching rather than truly missing information
-  - When the patient's answer is reassuring or indicates the symptom is okay, controlled, absent, or not bothersome, prefer next_step_action over additional questioning whenever clinically safe
-  - Prefer suggested_answer to be an exact option from the candidate next step when obvious, often "No"
-  - plan is optional and may list additional upcoming steps that should also be auto-resolved to avoid unnecessary questioning
-  - carry_forward_answer is optional and should be used when the patient's current raw answer already provides the value for a downstream step, especially a free-text detail step that would otherwise repeat the same question
-  - Good examples:
-    - Patient denies emotional distress and next step asks whether anxiety is affecting sleep/eating → skip with suggested_answer "No"
-    - Patient denies depression or feeling down and the next questions only elaborate on mood burden or support needs → skip them unless there is another clear concern
-    - Patient says the symptom is mild, okay, or not bothering them and the next questions are about burden, management failure, or escalation → skip those downstream questions
-    - Patient answers a location chooser with a specific body part like "nose" and the next step asks which body part hurts → skip that next step and carry forward "nose"
-    - Patient says a sore is not painful and next step asks whether treatment for painful sores is helping → skip with suggested_answer "No"
-    - Patient says IV fluids are helping and gives no sign they want changes, and next step asks about adjusting frequency → skip with suggested_answer "No"
-    - Patient says medication is not causing drowsiness and next step asks whether drowsiness is affecting schedule → skip with suggested_answer "No"
-  - Do not use this to skip structurally essential questions like a severity rating or a new symptom location unless the current answer already fully covers them
-
-follow_up_goal: A statement of WHAT information is needed — NOT a question.
-  Example: "Obtain a numeric pain severity score — patient described pain without rating it."
-
-information_completeness:
-  complete — answer fully satisfies the clinical information need
-  partial  — has some value but key information missing
-  none     — no clinically usable information
-
-change_significance:
-  critical — large worsening, urgency flag, new alarming symptom, medication stopped
-  notable  — meaningful change worth highlighting
-  stable   — no meaningful change
-  no_baseline — first session or no prior data
-
-clinical_priority: high | medium | low
-doctor_note: ≤35 words, third person, factual only, include comparison if change is critical/notable.
-
-Return ONLY valid JSON:
+Return only this JSON — no other text:
 {{
-  "information_completeness": "complete|partial|none",
-  "clinical_value_score": 0.0-1.0,
-  "follow_up_recommended": true/false,
-  "follow_up_goal": "..." or null,
-  "follow_up_urgency": "immediate|routine|none",
-  "patient_acknowledgment": "..." or null,
-  "answered_with_uncertainty": false,
-  "has_prior_data": true/false,
-  "last_answer": "..." or null,
-  "change_detected": true/false,
-  "change_direction": "improved|worsened|neutral_change|no_change|new_data",
-  "change_magnitude": "large|moderate|small|none",
-  "clinical_note": "..." or null,
-  "patient_facing_note": "..." or null,
-  "change_significance": "critical|notable|stable|no_baseline",
-  "clinical_priority": "high|medium|low",
-  "doctor_note": "..." or null,
-  "next_step_action": {{
-    "skip_immediate_next_step": false,
-    "suggested_answer": "..." or null,
-    "reason": "..." or null,
-    "carry_forward_answer": "..." or null,
-    "plan": [
-      {{
-        "step_id": "...",
-        "suggested_answer": "..." or null,
-        "carry_forward_answer": "..." or null,
-        "reason": "..." or null
-      }}
-    ]
+  "answer_complete": true,
+  "recommend_follow_up": false,
+  "follow_up_goal": null,
+  "priority": "medium",
+  "patient_note": null,
+  "doctor_note": null,
+  "skip": {{
+    "skip": false,
+    "auto_fill_answer": null,
+    "carry_forward": null,
+    "also_skip": []
   }},
-  "special_signals": {{
-    "trajectory_mismatch": false,
-    "medication_stop_signal": false,
-    "aggravating_medication_signal": false,
-    "severity_underreporting": false,
-    "screen_negative_signal": false
+  "flags": {{
+    "medication_stopped": false
   }}
 }}
 """
@@ -3471,85 +2794,91 @@ def run_doctor_relevance(
     recent_questions: list[str],
     candidate_next_step: Optional[dict] = None,
     upcoming_steps: Optional[list[dict]] = None,
+    sentiment_out: Optional[dict] = None,
 ) -> dict:
     """
-    Clinical assessment agent: assess sufficiency, prior-visit comparison,
-    and follow-up relevance in one pass.
+    Agent 4: Clinical completeness and prior-visit comparison.
+    Follow-up blocking rules enforced entirely in code.
+    Agent only performs language judgment tasks.
     """
-    last_answer = None
-    if last_topic_data:
-        raw_last = last_topic_data.get(step["id"])
-        if raw_last is not None:
-            last_answer = str(raw_last)
     default = {
-        "information_completeness": "complete", "clinical_value_score": 0.7,
-        "follow_up_recommended": False, "follow_up_goal": None,
-        "follow_up_urgency": "none", "change_significance": "no_baseline",
-        "patient_acknowledgment": None,
-        "answered_with_uncertainty": False,
-        "has_prior_data": bool(last_answer),
-        "last_answer": last_answer,
-        "change_detected": False,
-        "change_direction": "new_data" if last_answer is None else "no_change",
-        "change_magnitude": "none",
-        "clinical_note": "No prior data available." if last_answer is None else "",
-        "patient_facing_note": None,
-        "clinical_priority": "medium", "doctor_note": None,
-        "next_step_action": {
-            "skip_immediate_next_step": False,
-            "suggested_answer": None,
-            "reason": None,
-            "carry_forward_answer": None,
-            "plan": [],
+        "answer_complete": True,
+        "recommend_follow_up": False,
+        "follow_up_goal": None,
+        "priority": "medium",
+        "patient_note": None,
+        "doctor_note": None,
+        "skip": {
+            "skip": False, "auto_fill_answer": None,
+            "carry_forward": None, "also_skip": [],
         },
-        "special_signals": {
-            "trajectory_mismatch": False, "medication_stop_signal": False,
-            "aggravating_medication_signal": False, "severity_underreporting": False,
-            "screen_negative_signal": False,
+        "flags": {
+            "medication_stopped": False,
         },
     }
+
+    force_no_followup = followup_count >= 1
+
+    if sentiment_out:
+        sigs = sentiment_out.get("signals", {})
+        adapt = sentiment_out.get("adaptation", {})
+        if sigs.get("E3_resistance") or sigs.get("E7_wants_to_stop"):
+            force_no_followup = True
+        if adapt.get("reduce_follow_up"):
+            force_no_followup = True
+
+    candidate_covers_gap = False
+    if candidate_next_step and not force_no_followup:
+        candidate_text = _norm_text(candidate_next_step.get("text", ""))
+        current_text = _norm_text(step.get("text", ""))
+        if candidate_text and current_text:
+            c_words = set(candidate_text.split())
+            s_words = set(current_text.split())
+            overlap_ratio = len(c_words & s_words) / max(len(s_words), 1)
+            candidate_covers_gap = overlap_ratio > 0.45
+
+    prior_answer = None
+    if last_topic_data:
+        raw = last_topic_data.get(step.get("id", ""))
+        if raw is not None:
+            prior_answer = str(raw)
+
+    if not openai_client:
+        return {**default}
+
     result = _call_agent(_DOCTOR_RELEVANCE_SYS, {
         "question_text": step.get("text", ""),
         "question_type": step.get("type", "options"),
         "options": step.get("opts", []),
         "current_answer_raw": current_answer_raw,
         "current_answer_matched": current_answer_matched,
-        "last_checkin_answer": last_answer,
-        "session_answers_so_far": session_answers,
+        "last_checkin_answer": prior_answer,
+        "session_answers": session_answers,
         "recent_topic_history": topic_history,
-        "recent_question_texts": recent_questions,
-        "follow_up_count_this_question": followup_count,
+        "candidate_next_step_covers_gap": candidate_covers_gap,
         "candidate_next_step": {
             "id": candidate_next_step.get("id"),
             "text": candidate_next_step.get("text"),
             "type": candidate_next_step.get("type"),
-            "options": candidate_next_step.get("opts", []),
         } if candidate_next_step else None,
-        "upcoming_steps": [
-            {
-                "id": s.get("id"),
-                "text": s.get("text"),
-                "type": s.get("type"),
-                "options": s.get("opts", []),
-            }
-            for s in (upcoming_steps or [])
-        ],
-    }, max_tokens=400)
+    }, max_tokens=380)
 
     if not result:
-        return default
+        return {**default}
 
-    # Hard-enforce the follow-up limit
-    if followup_count >= 1:
-        result["follow_up_recommended"] = False
+    if force_no_followup:
+        result["recommend_follow_up"] = False
         result["follow_up_goal"] = None
 
-    merged = {**default, **result}
-    if "next_step_action" in result and isinstance(result["next_step_action"], dict):
-        merged["next_step_action"] = {**default["next_step_action"], **result["next_step_action"]}
-    if "special_signals" in result and isinstance(result["special_signals"], dict):
-        merged["special_signals"] = {**default["special_signals"], **result["special_signals"]}
+    skip_block = result.get("skip", {})
+    if isinstance(skip_block.get("also_skip"), list):
+        skip_block["also_skip"] = skip_block["also_skip"][:3]
 
+    merged = {**default, **result}
+    if "skip" in result and isinstance(result["skip"], dict):
+        merged["skip"] = {**default["skip"], **result["skip"]}
+    if "flags" in result and isinstance(result["flags"], dict):
+        merged["flags"] = {**default["flags"], **result["flags"]}
     return merged
 
 
@@ -3558,58 +2887,59 @@ def run_doctor_relevance(
 # ══════════════════════════════════════════════════════════════════
 
 _NEXT_MOVE_SYS = f"""
-You are the Next-Move Agent for a clinical chatbot serving head and neck cancer patients.
-{_HNC_CONTEXT}
+You write one follow-up question for a symptom check-in chatbot used by head and
+neck cancer patients. {_HNC_CONTEXT}
 
-You receive a follow-up GOAL and write the actual follow-up question the patient sees.
-The decision to follow up has already been made. Your job is HOW to ask it.
+The decision to ask a follow-up has already been made by another agent.
+Your only job is to write one short natural question.
+
+You will receive:
+  follow_up_goal:            what information is still needed (not the question)
+  tone:                      standard / warm / gentle / simplified — apply it exactly
+  patient_answer:            what the patient just said
+  recent_topic_history:      recent back-and-forth in this topic
+  recent_question_texts:     questions already asked recently
+  candidate_next_step_text:  the next scheduled question (avoid duplicating it)
 
 TONE PROFILES:
-  standard  — professional, warm, clear
-  warm      — add genuine warmth; soften clinical phrasing; sincere, not effusive
-  gentle    — softest possible; avoid anything demanding or clinical
-  simplified — short sentences, very simple words, one idea only
+  standard   — professional, warm, clear
+  warm       — extra warmth, softened phrasing, sincere
+  gentle     — as soft as possible, nothing demanding or clinical
+  simplified — very short sentences, one idea only, simplest possible words
 
-RULES:
-  - Treat the original form question as background only; you are not tied to its exact wording
-  - Ask the most clinically useful next single question, as a doctor or nurse naturally would
-  - Stay anchored to the patient's last answer; the follow-up should feel like a direct continuation of what they just said
-  - If the patient used plain-language wording, mirror that wording naturally instead of switching back to rigid form language
-  - Ask only for the single missing detail; never restate details the patient already provided
-  - If the patient said they do not know a detail, do not challenge that or sound repetitive
-  - Never contradict an explicit "no" or "yes" the patient just gave
-  - Never write a follow-up like "Besides anxiety..." or otherwise imply a symptom exists after the patient denied it
-  - You will receive recent topic history and recent question texts from this topic only
-  - Do not write a question that substantially repeats any recent question in that history
-  - If the candidate next step already asks the same thing, return null instead of paraphrasing it
-  - If the follow-up goal materially overlaps the candidate next step, return null
-  - If recent topic history suggests the patient is getting frustrated by repetition, return null rather than asking another version of the same detail
-  - These rules apply across every topic and every question type. When in doubt, avoid repeating the same concept in a new wording.
-  - If the patient appears okay with respect to the symptom being discussed and there is no active problem to explore, return null rather than creating another follow-up.
-  - Be strict: if there is credible evidence the patient wants less questioning, return null unless the missing detail is urgent.
-  - If comparable last-visit information is provided and it helps make the question clearer, you may use it briefly to frame the question naturally.
-  - Good uses of prior history: "Is that still about the same as last time?" or "Is this lower than your usual weight?" when such wording is directly supported by the provided history.
-  - Do not mention prior history if it would sound awkward, speculative, or repetitive.
-  - After a structured option answer, do not pre-ask the next formal step in different words just to sound conversational.
-  - Never ask the patient to translate their own concrete answer into the form's categories. For example, after a patient says "nose", do not ask "throat, tongue, or somewhere else?" because that classification should happen internally.
-  - More generally: do not ask the patient to convert a real-world answer into the app's taxonomy when the system can infer it.
-  - If the patient's answer already gives a concrete real-world example, assume the system can preserve it and ask only the next clinically meaningful question.
-  - If prior-comparison context is clinically useful, you may briefly reflect it in a natural way, but only as conversational context, never as a rigid template
-  - Write in second person, conversational language
-  - Never use medical jargon without immediate plain explanation
-  - NEVER ask a multi-part question
-  - NEVER repeat the original question verbatim
-  - Keep the question to ≤25 words
-  - An acknowledgment may be shown BEFORE your question — do not repeat it
-  - If simplify=true: use the shortest phrasing possible
+WRITE THE QUESTION SO THAT IT:
+  — Asks only for the single detail described in follow_up_goal
+  — Feels like a direct continuation of what the patient just said
+  — Uses the patient's own words and language rather than clinical terms
+  — Never restates details the patient already gave
+  — Never implies a symptom the patient just denied
+  — Never asks the patient to classify their own answer into app categories
+    Example: if patient said "my nose", do not ask "is that throat, tongue,
+    or somewhere else?" — that classification is handled by the system
+  — Does not substantially repeat any question in recent_question_texts
+  — Does not duplicate candidate_next_step_text
 
-Return ONLY valid JSON:
+If follow_up_goal substantially overlaps with candidate_next_step_text,
+return null — the scheduled question will handle it.
+
+Return only this JSON — no other text:
 {{
-  "follow_up_question": "..." or null,
-  "preamble": "..." or null
+  "question": null
 }}
-preamble: ≤10 words transitional phrase if naturally needed, else null.
 """
+
+
+def _question_already_asked_in_state(question: str, recent_questions: list[str]) -> bool:
+    """Code-level duplicate check before trusting model output."""
+    norm_q = _norm_text(question)
+    for rq in recent_questions:
+        if _norm_text(rq) == norm_q:
+            return True
+        if ENABLE_LLM_SEMANTIC_REDUNDANCY and openai_client:
+            rel = run_question_relation_agent(question, rq)
+            if rel.get("same_intent"):
+                return True
+    return False
 
 
 def run_next_move_agent(
@@ -3620,38 +2950,52 @@ def run_next_move_agent(
     simplify: bool,
     topic_history: list[dict[str, str]],
     recent_questions: list[str],
-    candidate_next_step: Optional[dict],
+    candidate_next_step: Optional[dict] = None,
     last_checkin_answer: Optional[str] = None,
     candidate_next_step_last_answer: Optional[str] = None,
+    urgency_tier: int = 0,
 ) -> dict:
     """
-    Agent 6: Author the follow-up question in natural language.
+    Agent 5: Write the follow-up question in natural language.
+    Urgency gate and duplicate-question check enforced in code.
     """
+    null_result = {"question": None}
+
+    if urgency_tier >= 2:
+        return null_result
+
+    valid_tones = {"standard", "warm", "gentle", "simplified"}
+    if tone_profile not in valid_tones:
+        tone_profile = "standard"
+
+    if not openai_client:
+        return {"question": "Could you tell me a bit more about that?"}
+
     result = _call_agent(_NEXT_MOVE_SYS, {
         "original_question": step.get("text", ""),
         "patient_answer": current_answer_raw,
         "follow_up_goal": followup_goal,
-        "tone_profile": tone_profile,
+        "tone": tone_profile,
         "simplify": simplify,
         "recent_topic_history": topic_history,
         "recent_question_texts": recent_questions,
-        "last_checkin_answer": last_checkin_answer,
-        "candidate_next_step": {
-            "id": candidate_next_step.get("id"),
-            "text": candidate_next_step.get("text"),
-            "type": candidate_next_step.get("type"),
-            "options": candidate_next_step.get("opts", []),
-        } if candidate_next_step else None,
-        "candidate_next_step_last_answer": candidate_next_step_last_answer,
-    }, max_tokens=120)
+        "candidate_next_step_text": candidate_next_step.get("text") if candidate_next_step else None,
+    }, max_tokens=90)
 
-    if result and "follow_up_question" in result:
-        return result
-    # Fallback: derive a question from the goal
-    return {
-        "follow_up_question": "Could you tell me a bit more about that?",
-        "preamble": None,
-    }
+    if not result or not result.get("question"):
+        return null_result
+
+    generated_q = result.get("question", "")
+    if generated_q and _question_already_asked_in_state(generated_q, recent_questions):
+        return null_result
+
+    if candidate_next_step and generated_q:
+        if _is_semantically_redundant_question(
+            generated_q, candidate_next_step.get("text", "")
+        ):
+            return null_result
+
+    return {"question": result.get("question")}
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -3717,11 +3061,6 @@ def _build_all_topic_data() -> dict:
             "applicable": applicable,
         }
     payload["_topic_progress"] = topic_progress
-    payload["_structured_responses"] = st.session_state.get("structured_responses", [])
-    payload["_patient_context"] = {
-        "patient_fatigue": bool(st.session_state.get("patient_fatigue", False)),
-        "fatigue_requested_at": st.session_state.get("fatigue_requested_at"),
-    }
     return payload
 
 
@@ -3732,198 +3071,170 @@ def run_agent_pipeline(
     raw_answer: Optional[str],
     state: dict,
     last_topic_data: dict,
+    source: str = "typed",
 ) -> dict:
     """
-    Orchestrator: runs all agents in sequence (with parallelism where safe)
-    and returns a unified decision dict consumed by handle_answer.
-
-    Returns:
-    {
-        "matched_option": str|None,
-        "follow_up": bool,
-        "follow_up_question": str,
-        "acknowledgment": str,
-        "assistant_message": str,
-        "urgency_tier": int,
-        "urgency_message": str|None,
-        "reduce_follow_up": bool,
-        "wants_to_stop": bool,
-        "doctor_note": str|None,
-        "clinical_priority": str,
-        "change_significance": str,
-        "change_clinical_note": str,
-        "special_signals": dict,
-        "sentiment_note": str|None,
-    }
+    Orchestrator: coordinates all agents.
+    All deterministic blocking rules live here, not in prompts.
     """
     if not openai_client:
         return _pipeline_default()
 
-    question_count = len(state.get("data", {}))
-    current_raw_answer = str(raw_answer if raw_answer is not None else answer)
+    current_raw = str(raw_answer if raw_answer is not None else answer)
     session_answers = _build_session_answers(topic_key)
-    prior_baseline  = _build_prior_baseline(topic_key)
+    prior_baseline = _build_prior_baseline(topic_key)
     last_step_answer = _last_checkin_answer(topic_key, step.get("id"))
-    followup_count  = state.get("followup_counts", {}).get(step["id"], 0)
+    followup_count = state.get("followup_counts", {}).get(step["id"], 0)
     topic_history = _build_topic_history(topic_key)
     recent_questions = _build_recent_question_texts(topic_key)
-    candidate_next_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
-    candidate_next_step_last_answer = _last_checkin_answer(
-        topic_key,
-        candidate_next_step.get("id") if candidate_next_step else None,
+    candidate_next = get_next_step(topic_key, state["data"], state.get("raw_answers"))
+    candidate_last_a = _last_checkin_answer(
+        topic_key, candidate_next.get("id") if candidate_next else None
     )
-    upcoming_steps = get_upcoming_steps(topic_key, state["data"], state.get("raw_answers"), limit=5)
+    upcoming_steps = get_upcoming_steps(
+        topic_key, state["data"], state.get("raw_answers"), limit=5
+    )
+    question_count = len(state.get("data", {}))
 
-    # ── STEP 1: Answer Interpreter (must run first) ────────────────
-    interp = run_answer_interpreter(step, current_raw_answer, topic_history=topic_history)
+    interp = run_answer_interpreter(step, current_raw, topic_history=topic_history)
     matched = interp.get("matched_option")
     distress = interp.get("distress_flag", False)
-    urgency_flag = interp.get("urgency_flag", False)
-    # ── STEP 2: Run urgency and sentiment in parallel ──────────────
+    urgency_pre = interp.get("urgency_flag", False)
+
+    active_urgency_sigs = st.session_state.get("urgency_state", {}).get("all_signals", [])
+    active_sentiment_sigs = st.session_state.get("sentiment_state", {}).get("all_signals", [])
+    should_run_sentiment = source in {"typed", "voice", "free_text"}
+
     urgency_out = {}
     sentiment_out = {}
 
-    active_urgency_signals = st.session_state.get("urgency_state", {}).get("all_signals", [])
-    active_sentiment_signals = st.session_state.get("sentiment_state", {}).get("all_signals", [])
-
     def _run_urgency():
         return run_urgency_agent(
-            step, current_raw_answer, matched, session_answers, prior_baseline,
-            active_urgency_signals, distress, urgency_flag
+            step, current_raw, matched, session_answers, prior_baseline,
+            active_urgency_sigs, distress, urgency_pre
         )
 
     def _run_sentiment():
+        if not should_run_sentiment:
+            return {
+                "emotional_state": "neutral",
+                "engagement_level": "high",
+                "engagement_trend": "stable",
+                "engagement_trajectory": "stable",
+                "engagement_confidence": "high",
+                "wants_to_stop": False,
+                "signals": {
+                    "E3_resistance": False, "E7_wants_to_stop": False,
+                    "EM1_pain_frustration": False, "EM2_sadness_grief": False,
+                    "EM6_emotional_flooding": False,
+                },
+                "adaptation": {
+                    "tone": "standard", "say_something_warm_first": False,
+                    "warm_message": None, "simplify_next_question": False,
+                    "reduce_follow_up": False,
+                },
+                "note_for_doctor": None,
+                "engagement_note_for_doctor": None,
+            }
         return run_sentiment_agent(
-            step, current_raw_answer, session_answers, active_sentiment_signals, question_count,
-            topic_history=topic_history, recent_questions=recent_questions,
+            step, current_raw, session_answers, active_sentiment_sigs,
+            question_count, topic_history=topic_history,
+            recent_questions=recent_questions,
         )
 
     with _futures.ThreadPoolExecutor(max_workers=2) as pool:
-        f_urgency   = pool.submit(_run_urgency)
-        f_sentiment = pool.submit(_run_sentiment)
-        urgency_out  = f_urgency.result()
-        sentiment_out = f_sentiment.result()
+        f_urg = pool.submit(_run_urgency)
+        f_sent = pool.submit(_run_sentiment)
+        urgency_out = f_urg.result()
+        sentiment_out = f_sent.result()
 
-    # ── STEP 3: Urgency interrupt check ───────────────────────────
-    tier = urgency_out.get("session_tier", 0)
-
-    # Update session-level urgency state
+    tier = urgency_out.get("safety_level", 0)
     _merge_urgency_state(tier, urgency_out)
 
     if tier == 3:
-        # Emergency — bypass all other agents
         return {
             **_pipeline_default(),
-            "matched_option": matched,
-            "urgency_tier": 3,
+            "matched_option":  matched,
+            "urgency_tier":    3,
             "urgency_message": urgency_out.get("patient_message"),
-            "wants_to_stop": True,
+            "wants_to_stop":   True,
         }
 
-    # ── STEP 4: Doctor-Relevance ───────────────────────────────────
     dr_out = run_doctor_relevance(
-        step, current_raw_answer, matched, last_topic_data, session_answers, followup_count,
+        step, current_raw, matched, last_topic_data, session_answers,
+        followup_count,
         topic_history=topic_history, recent_questions=recent_questions,
-        candidate_next_step=candidate_next_step,
+        candidate_next_step=candidate_next,
         upcoming_steps=upcoming_steps,
+        sentiment_out=sentiment_out,
     )
 
-    # ── STEP 5: Apply follow-up decision logic ─────────────────────
     adapt = sentiment_out.get("adaptation", {})
-    sigs  = sentiment_out.get("signals", {})
-    reduce = adapt.get("reduce_follow_up_depth", False)
-    wants_to_stop = sigs.get("E7_wants_to_stop", False)
-    if st.session_state.get("patient_fatigue"):
+    sigs = sentiment_out.get("signals", {})
+    reduce = adapt.get("reduce_follow_up", False)
+    wants_stop = sigs.get("E7_wants_to_stop", False)
+    if should_run_sentiment and _engagement_stop_now(sentiment_out):
+        wants_stop = True
         reduce = True
+        sentiment_out.setdefault("signals", {})["E7_wants_to_stop"] = True
+    dr_recommends = dr_out.get("recommend_follow_up", False)
+    followup_goal = dr_out.get("follow_up_goal", "")
+    priority = dr_out.get("priority", "medium")
 
-    dr_recommends  = dr_out.get("follow_up_recommended", False)
-    followup_goal  = dr_out.get("follow_up_goal", "")
-    priority       = dr_out.get("clinical_priority", "medium")
-
-    # Override rules (clinical necessity > patient experience)
     force_followup = False
-    if step.get("type") == "number" and dr_out.get("information_completeness") != "complete":
-        force_followup = True  # Numeric severity is always high priority
-    if dr_out.get("special_signals", {}).get("medication_stop_signal") and followup_count == 0:
+    if step.get("type") == "number" and not dr_out.get("answer_complete", True):
+        force_followup = True
+    if dr_out.get("flags", {}).get("medication_stopped") and followup_count == 0:
         force_followup = True
 
-    # Suppression rules
-    suppress = False
-    if followup_count >= 1:
-        suppress = True  # Absolute limit
-    if wants_to_stop:
-        suppress = True
-    if interp.get("match_type") in ("off_topic", "invalid"):
-        suppress = True
-    if reduce and priority != "high":
-        suppress = True
-    if sigs.get("E3_resistance") and priority != "high":
-        suppress = True
-    if (
-        step.get("type") == "options"
-        and candidate_next_step
-        and matched in (step.get("opts") or [])
-        and dr_out.get("information_completeness") == "complete"
-        and not force_followup
-    ):
-        suppress = True
+    suppress = (
+        followup_count >= 1
+        or wants_stop
+        or interp.get("match_type") in ("off_topic", "invalid")
+        or (reduce and priority != "high")
+        or (sigs.get("E3_resistance") and priority != "high")
+    )
+
     do_follow_up = (force_followup or dr_recommends) and not suppress
 
-    # ── STEP 6: Compose follow-up question if needed ───────────────
     follow_up_question = ""
     if do_follow_up and followup_goal:
-        tone = adapt.get("tone_profile", "standard")
+        tone = adapt.get("tone", "standard")
         simplify = adapt.get("simplify_next_question", False)
         nm_out = run_next_move_agent(
-            step, current_raw_answer, followup_goal, tone, simplify,
+            step, current_raw, followup_goal, tone, simplify,
             topic_history=topic_history, recent_questions=recent_questions,
-            candidate_next_step=candidate_next_step,
+            candidate_next_step=candidate_next,
             last_checkin_answer=last_step_answer,
-            candidate_next_step_last_answer=candidate_next_step_last_answer,
+            candidate_next_step_last_answer=candidate_last_a,
+            urgency_tier=tier,
         )
-        preamble = nm_out.get("preamble") or ""
-        fq = nm_out.get("follow_up_question", "")
-        follow_up_question = f"{preamble} {fq}".strip() if preamble and fq else fq
-        if _question_already_asked(state, follow_up_question):
-            follow_up_question = ""
+        follow_up_question = nm_out.get("question") or ""
+        if not follow_up_question:
             do_follow_up = False
 
-    # ── STEP 7: Build assistant message for non-follow-up case ─────
     assistant_message = ""
     if not do_follow_up:
-        comp_note    = dr_out.get("clinical_note", "")
-        patient_change_note = (dr_out.get("patient_facing_note") or "").strip()
-        change_dir   = dr_out.get("change_direction", "new_data")
-        prev_answer  = dr_out.get("last_answer", "")
-        emotional    = sentiment_out.get("emotional_state", "neutral")
+        patient_note = (dr_out.get("patient_note") or "").strip()
+        emotional = sentiment_out.get("emotional_state", "neutral")
 
-        # Build a brief contextual acknowledgment
-        if dr_out.get("patient_acknowledgment") and dr_out.get("answered_with_uncertainty"):
-            assistant_message = dr_out["patient_acknowledgment"]
-        elif patient_change_note:
-            assistant_message = patient_change_note
-        elif comp_note and change_dir in ("worsened", "improved") and prev_answer:
-            assistant_message = comp_note
+        if adapt.get("say_something_warm_first") and adapt.get("warm_message"):
+            assistant_message = adapt["warm_message"]
+        elif patient_note:
+            assistant_message = patient_note
         elif emotional == "distressed":
-            assistant_message = "That sounds really difficult. I've made a note of this for your care team."
+            assistant_message = "That sounds really difficult. I've made a note for your care team."
         elif emotional in ("anxious", "overwhelmed"):
-            assistant_message = "I hear you — I've made a note of that for your care team."
-        elif change_dir == "worsened":
-            assistant_message = "I've noted that, and I can see things have been harder than last time."
-        elif change_dir == "improved":
-            assistant_message = "That's helpful to know, and it sounds like there's been some improvement since last time."
+            assistant_message = "I hear you — I've noted that for your care team."
         else:
             assistant_message = _default_chatty_reply(topic_key, answer, step, last_topic_data)
 
-    # ── STEP 8: Compose acknowledgment if needed ───────────────────
     acknowledgment = ""
-    if adapt.get("acknowledgment_required") and adapt.get("acknowledgment_text"):
-        acknowledgment = adapt["acknowledgment_text"]
+    if adapt.get("say_something_warm_first") and adapt.get("warm_message") and do_follow_up:
+        acknowledgment = adapt["warm_message"]
 
-    # ── STEP 9: Merge urgency and sentiment state ──────────────────
     _merge_sentiment_state(sentiment_out)
 
-    # ── STEP 10: Tier 2 notice ─────────────────────────────────────
     urgency_msg = None
     urg_state = st.session_state.get("urgency_state", {})
     if tier == 2 and not urg_state.get("escalation_shown", False):
@@ -3931,25 +3242,49 @@ def run_agent_pipeline(
         urg_state["escalation_shown"] = True
         st.session_state["urgency_state"] = urg_state
 
+    skip_action = dr_out.get("skip")
+    compat_next_step_action = None
+    if isinstance(skip_action, dict):
+        compat_next_step_action = {
+            "skip_immediate_next_step": bool(skip_action.get("skip")),
+            "suggested_answer": skip_action.get("auto_fill_answer"),
+            "carry_forward_answer": skip_action.get("carry_forward"),
+            "plan": [
+                {
+                    "step_id": step_id,
+                    "suggested_answer": None,
+                    "carry_forward_answer": None,
+                }
+                for step_id in (skip_action.get("also_skip") or [])[:3]
+            ],
+        }
+
+    flags = dr_out.get("flags", {})
+
     return {
-        "patient_answer": current_raw_answer,
-        "matched_option": matched,
-        "follow_up": do_follow_up,
-        "follow_up_question": follow_up_question,
-        "acknowledgment": acknowledgment,
-        "assistant_message": assistant_message,
-        "urgency_tier": tier,
-        "urgency_message": urgency_msg,
-        "reduce_follow_up": reduce,
-        "wants_to_stop": wants_to_stop,
+        "matched_option":       matched,
+        "follow_up":            do_follow_up,
+        "follow_up_question":   follow_up_question,
+        "follow_up_intro":      "",
+        "acknowledgment":       acknowledgment,
+        "assistant_message":    assistant_message,
+        "urgency_tier":         tier,
+        "urgency_message":      urgency_msg,
+        "reduce_follow_up":     reduce,
+        "wants_to_stop":        wants_stop,
         "doctor_note": dr_out.get("doctor_note"),
-        "clinical_priority": priority,
-        "follow_up_goal": followup_goal,
-        "change_significance": dr_out.get("change_significance", "no_baseline"),
-        "change_clinical_note": dr_out.get("clinical_note", ""),
-        "next_step_action": dr_out.get("next_step_action"),
-        "special_signals": dr_out.get("special_signals", {}),
-        "sentiment_note": sentiment_out.get("engagement_note_for_doctor"),
+        "priority":             priority,
+        "clinical_priority":    priority,
+        "change_significance":  "no_baseline",
+        "change_note":          "",
+        "change_clinical_note": "",
+        "skip_action":          skip_action,
+        "flags":                flags,
+        "next_step_action":     compat_next_step_action,
+        "special_signals": {
+            "medication_stop_signal": flags.get("medication_stopped", False),
+        },
+        "sentiment_note":       sentiment_out.get("note_for_doctor"),
     }
 
 
@@ -3960,9 +3295,10 @@ def _pipeline_default() -> dict:
         "acknowledgment": "", "assistant_message": "",
         "urgency_tier": 0, "urgency_message": None,
         "reduce_follow_up": False, "wants_to_stop": False,
-        "doctor_note": None, "clinical_priority": "medium",
+        "doctor_note": None, "clinical_priority": "medium", "priority": "medium",
         "change_significance": "no_baseline", "change_clinical_note": "",
-        "next_step_action": None,
+        "change_note": "", "follow_up_intro": "",
+        "skip_action": None, "flags": {}, "next_step_action": None,
         "special_signals": {}, "sentiment_note": None,
     }
 
@@ -3988,7 +3324,29 @@ def _merge_sentiment_state(sentiment_out: dict):
     state["all_signals"] = list(set(existing + new_sigs))
     state["engagement_trajectory"] = sentiment_out.get("engagement_trajectory", "insufficient_data")
     state["emotional_state"] = sentiment_out.get("emotional_state", "neutral")
+    level = sentiment_out.get("engagement_level")
+    if level == "low":
+        state["engagement_low_count"] = int(state.get("engagement_low_count", 0)) + 1
+    elif level == "somewhat":
+        state["engagement_somewhat_count"] = int(state.get("engagement_somewhat_count", 0)) + 1
     st.session_state["sentiment_state"] = state
+
+
+def _engagement_stop_now(sentiment_out: dict) -> bool:
+    """
+    Hard-stop burden control:
+    - more than 2 low-engagement answers => stop
+    - more than 4 somewhat-engagement answers => stop
+    """
+    state = st.session_state.get("sentiment_state", {})
+    low_count = int(state.get("engagement_low_count", 0))
+    somewhat_count = int(state.get("engagement_somewhat_count", 0))
+    level = sentiment_out.get("engagement_level")
+
+    projected_low = low_count + (1 if level == "low" else 0)
+    projected_somewhat = somewhat_count + (1 if level == "somewhat" else 0)
+
+    return projected_low > 2 or projected_somewhat > 4
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -4009,10 +3367,6 @@ def interpret_user_input_with_options(step, user_input, topic_history: Optional[
     for opt in step.get("opts", []):
         if _norm_text(opt) == normalized:
             return opt
-
-    local_match = _local_option_match(step, user_input)
-    if local_match:
-        return local_match
 
     opts = step.get("opts", [])
     if (
@@ -4102,79 +3456,78 @@ def render_urgency_indicator_html() -> str:
 # ══════════════════════════════════════════════════════════════════
 
 _REPORT_AGENT_SYS = f"""
-You are the Doctor-Facing Report Agent for ChatReport, a clinical symptom check-in
-chatbot for head and neck cancer (HNC) patients. {_HNC_CONTEXT}
+You write a pre-visit clinical summary for a doctor or nurse practitioner.
+The patient is a head and neck cancer patient who just completed a symptom
+check-in chatbot session. {_HNC_CONTEXT}
 
-You synthesise all collected session data into a structured clinical pre-visit report
-for the treating physician.
+DATA RULE — READ FIRST:
+Only write about what the patient actually reported in the input data.
+Do not infer, extrapolate, or add clinical detail not present in their answers.
+When uncertain, quote the patient's own words in quotation marks rather than
+translating into clinical language. Omit any topic with no data entirely —
+do not write "N/A" or placeholder text.
 
-THE DOCTOR'S READING CONTEXT:
-An oncologist or NP reviewing reports before clinic appointments.
-May read multiple reports. They need to:
-  • Know in 10 seconds: is action required today?
-  • Understand patient's current status in 30 seconds.
-  • Have full symptom detail available if needed.
-  • Know what to address or follow up at the visit.
-
-REPORT FORMAT — use this exact structure:
 ---
+REPORT FORMAT — follow this structure exactly:
+
 CHATREPORT — PRE-VISIT CLINICAL SUMMARY
 Patient: [name]  |  Date: [date]
 ═══════════════════════════════════════════════════
 
 🔴 FLAGS FOR PROVIDER ATTENTION
-[List ONLY items matching red flag criteria — each as a concise bullet.
- Include: urgency signals detected, medication stops, crisis signals.
- If none: "No urgent flags identified."]
+If flags_section_prominent is true in the data, make this the first and most
+visible section. List only items matching the red flags below — one bullet each.
+If none: write exactly "No urgent concerns identified." and nothing else.
 
-📋 CLINICAL OVERVIEW
-[2-3 sentences: current status, most prominent issues, notable changes since last visit.
- Written for a clinician who has 10 seconds to orient.]
+📋 OVERVIEW
+Two to three sentences. Current status, most prominent active problems, and the
+single most significant change since the last visit if one exists.
+A clinician must be able to read this in 10 seconds and know whether to act.
 
-📊 SYMPTOM DETAILS BY DOMAIN
-[One bold subsection per topic with any current-session data, even if the topic was not fully completed. Include:
- - Symptom presence/severity in clinical language
- - Patient-reported management strategies and medications
- - Functional impact where reported
- - Comparison to last visit where available
- - Clinically meaningful direct quotes in quotation marks]
+📊 SYMPTOMS BY AREA
+One bold subsection per topic that has data. Include for each:
+  — Symptom presence and severity in clinical terms
+  — What the patient is doing to manage it
+  — How it affects daily life (if reported)
+  — Comparison to last visit when available and meaningful
+  — Patient's own words in quotes when they are more specific than a translation
+Keep each topic section to three to five lines.
 
-💊 MEDICATION SUMMARY
-[List all medications mentioned, doses/frequencies if reported, adherence status,
- and whether they are helping. Note any stops or side effects reported.]
+💊 MEDICATIONS
+All medications the patient mentioned. For each: dose and frequency if reported,
+whether they are taking it as prescribed, whether it is helping.
+Note any stops, side effects, or access problems.
 
-🗣️ PATIENT ENGAGEMENT NOTES
-[Only include if engagement was notable — e.g., declining engagement, distress,
- stoic underreporting, or patient explicitly shared emotional content.
- Omit this section if engagement was unremarkable.]
+🗣️ ENGAGEMENT NOTES
+Include this section ONLY if include_engagement_notes is true in the input data.
+If it is false, omit this section entirely — do not write "None noted."
 
-✅ SUGGESTED DISCUSSION POINTS
-[2-4 bullets: items for provider to address or follow up — medication adjustment,
- referral, patient education need, unresolved concern.
- Do NOT repeat red flags already listed above.]
+✅ DISCUSSION POINTS
+Two to four bullet points for the provider to address at the visit.
+Do not repeat items already listed in FLAGS.
+
 ---
-
-CLINICAL LANGUAGE RULES:
-- Convert patient language to clinical terms where appropriate
-  (e.g., "sore in my mouth" → "oral mucositis", "can't swallow" → "dysphagia")
-- Include patient's own words in quotes only when clinically meaningful
-- Treat partially completed topics as valid current-session data when answers are present
-- Omit topics with no data — do not write "N/A"
-- Third person throughout ("Patient reports…")
-- Never write "Unfortunately" or emotional commentary
+LANGUAGE RULES:
+  Convert patient language to clinical terms:
+    "sore in my mouth" → oral mucositis
+    "can't swallow" → dysphagia
+    "throwing up" → emesis
+    "tired all the time" → fatigue
+  Use patient's own words in quotes when they are more specific or more accurate
+  than a clinical translation.
+  Third person throughout: "Patient reports…", "Patient denies…"
+  Never write "Unfortunately" or any emotional commentary.
+  Do not speculate about diagnosis or treatment decisions not supported by the data.
 
 RED FLAGS TO SCREEN FOR:
 {_RED_FLAGS}
-
-Urgency state will be provided. If emergency_tier >= 2, open with the flags section prominently.
-Write only the completed report. No AI disclaimers or generation notes.
 """
 
 
 def generate_report(name: str, all_data: dict) -> str:
     """
-    Doctor-Facing Report Agent: synthesise all session data into a clinical report.
-    Falls back to plain-text summary if OpenAI is unavailable.
+    Agent 6: Doctor-facing clinical report.
+    Section control (engagement notes, flag prominence) decided in code.
     """
     topic_summaries = {}
     for label, key in TOPICS:
@@ -4196,52 +3549,42 @@ def generate_report(name: str, all_data: dict) -> str:
             lines.append("")
         return "\n".join(lines)
 
-    today    = datetime.now().strftime("%B %d, %Y")
     urg_tier = st.session_state.get("urgency_state", {}).get("current_tier", 0)
-    urg_sigs = st.session_state.get("urgency_state", {}).get("all_signals", [])
+    urg_signals = st.session_state.get("urgency_state", {}).get("all_signals", [])
+    sent_state = st.session_state.get("sentiment_state", {})
 
-    # Collect doctor notes from topic states
-    doctor_notes = {}
-    for _, key in TOPICS:
-        topic_state = st.session_state.topic_states.get(key, {})
-        notes = [
-            v for k, v in topic_state.items()
-            if k.endswith("_doctor_note") and v
-        ]
-        if notes:
-            doctor_notes[key] = notes
+    engagement_notable = (
+        urg_tier >= 1
+        or any(
+            s in sent_state.get("all_signals", [])
+            for s in ("E3_resistance", "E7_wants_to_stop")
+        )
+        or sent_state.get("engagement_trajectory") == "declining"
+        or sent_state.get("emotional_state") in ("distressed", "overwhelmed")
+    )
 
-    sentiment_notes = []
-    for _, key in TOPICS:
-        state = st.session_state.topic_states.get(key, {})
-        note = state.get("_sentiment_note")
-        if note:
-            sentiment_notes.append(note)
+    flags_prominent = urg_tier >= 2
 
-    # Build prompt payload — note notes already collected above
     data_json = json.dumps({
-        "patient_name": name,
-        "report_date": today,
-        "symptom_data_by_topic": topic_summaries,
-        "freeform_notes": all_data.get("freeform_notes", []),
-        "urgency_tier": urg_tier,
-        "urgency_signals_active": urg_sigs,
-        "last_checkin_data": st.session_state.get("last_checkin", {}),
+        "patient_name":             name,
+        "report_date":              datetime.now().strftime("%B %d, %Y"),
+        "symptom_data_by_topic":    topic_summaries,
+        "freeform_notes":           all_data.get("freeform_notes", []),
+        "urgency_tier":             urg_tier,
+        "urgency_signals_active":   urg_signals,
+        "include_engagement_notes": engagement_notable,
+        "flags_section_prominent":  flags_prominent,
+        "last_checkin_data":        st.session_state.get("last_checkin", {}),
     }, indent=2, ensure_ascii=False)
-
-    report_prompt = f"DATA:\n{data_json}\n\nGenerate the clinical report following the format in your instructions."
-
-    if not openai_client:
-        return "Report generation unavailable — OpenAI API not configured."
 
     try:
         resp = openai_client.chat.completions.create(
             model="gpt-4.1-mini",
             messages=[
                 {"role": "system", "content": _REPORT_AGENT_SYS},
-                {"role": "user",   "content": report_prompt},
+                {"role": "user",   "content": f"DATA:\n{data_json}\n\nWrite the report."},
             ],
-            max_tokens=2500,
+            max_tokens=1200,
             temperature=0.2,
         )
         return resp.choices[0].message.content.strip()
@@ -4287,12 +3630,6 @@ def _init_state():
         "last_checkin":        {},
         "has_prev_checkin":    False,
         "freeform_chat":       [],
-        "structured_responses": [],
-        "agent_traces":        [],
-        "last_agent_trace":    None,
-        "demo_mode":           False,
-        "patient_fatigue":     False,
-        "fatigue_requested_at": None,
         "urgency_state": {
             "current_tier": 0,
             "all_signals": [],
@@ -4309,54 +3646,6 @@ def _init_state():
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
-
-
-def _fresh_topic_states() -> dict:
-    return {
-        key: {
-            "status": "not_started",
-            "data": {},
-            "chat": [],
-            "followup_counts": {},
-            "raw_answers": {},
-            "last_prompted_step_id": None,
-            "last_prompted_text": "",
-            "generated_prompts": {},
-        }
-        for _, key in TOPICS
-    }
-
-
-def _reset_checkin_session_state(preserve_demo_mode: bool = True):
-    demo_mode = bool(st.session_state.get("demo_mode", False)) if preserve_demo_mode else False
-    st.session_state.topic_states = _fresh_topic_states()
-    st.session_state.selected_topic = TOPIC_KEYS[0] if TOPIC_KEYS else None
-    st.session_state.report = ""
-    st.session_state.report_saved = False
-    st.session_state.freeform_chat = []
-    st.session_state.structured_responses = []
-    st.session_state.agent_traces = []
-    st.session_state.last_agent_trace = None
-    st.session_state.patient_fatigue = False
-    st.session_state.fatigue_requested_at = None
-    st.session_state.urgency_state = {
-        "current_tier": 0,
-        "all_signals": [],
-        "escalation_shown": False,
-        "emergency_shown": False,
-        "patient_message": None,
-    }
-    st.session_state.sentiment_state = {
-        "all_signals": [],
-        "engagement_trajectory": "insufficient_data",
-        "emotional_state": "neutral",
-    }
-    st.session_state.demo_mode = demo_mode
-
-
-def _invalidate_report_cache():
-    st.session_state.report = ""
-    st.session_state.report_saved = False
 
 
 _init_state()
@@ -4739,14 +4028,13 @@ def _append_next_question(
     prompt_consumed = False
     if message and next_text and _is_semantically_redundant_question(message, next_text):
         prompt_consumed = True
-    if next_text and not prompt_consumed:
-        combined = "\n\n".join(part for part in [message, next_text] if part)
-        _append_assistant_message(state, combined, prompt_step=next_step, prompt_text=next_text)
-        _remember_prompted_step(state, next_step, next_text)
-    elif message:
+    if message:
         _append_assistant_message(state, message)
+    if next_text:
+        if not prompt_consumed:
+            _append_assistant_message(state, next_text)
+        _remember_prompted_step(state, next_step, next_text)
     elif not next_step:
-        _clear_current_prompt_flags(state)
         _remember_prompted_step(state, None, "")
 
 
@@ -4766,7 +4054,6 @@ def _apply_agent_next_step_action(topic_key: str, state: dict, action: Optional[
                 "step_id": next_step.get("id"),
                 "suggested_answer": action.get("suggested_answer"),
                 "carry_forward_answer": action.get("carry_forward_answer"),
-                "reason": action.get("reason"),
             })
     for item in action.get("plan", []) or []:
         if isinstance(item, dict) and item.get("step_id"):
@@ -4838,9 +4125,6 @@ def _capture_rich_answer_into_next_step(
         return
     if next_step.get("type") != "options":
         return
-    next_opts_norm = {_norm_text(opt) for opt in next_step.get("opts", [])}
-    if next_opts_norm == {"yes", "no"}:
-        return
 
     interpreted = interpret_user_input_with_options(
         next_step,
@@ -4909,37 +4193,6 @@ def _resolve_next_step(topic_key: str, state: dict) -> Optional[dict]:
     return get_next_step(topic_key, state["data"], state.get("raw_answers"))
 
 
-def _suggestions_for_prompt_text(prompt_text: str, step: Optional[dict] = None) -> list[str]:
-    if step and step.get("opts"):
-        opts = []
-        for opt in step.get("opts", []):
-            text = str(opt or "").strip()
-            if not text:
-                continue
-            if text.lower() in {"other", "something else"}:
-                continue
-            opts.append(text)
-        if opts:
-            return opts[:5]
-
-    text = _norm_text(prompt_text or "")
-    if not text:
-        return []
-    if any(word in text for word in ("when", "start", "started", "how long", "since")):
-        return ["Today", "Yesterday", "A few days ago", "More than a week ago", "Not sure"]
-    if "dose" in text or "how often" in text:
-        return ["As prescribed", "Once a day", "Twice a day", "Three times a day", "Not sure"]
-    if "where exactly" in text or "where is the pain" in text or "which body part" in text:
-        return ["Throat", "Tongue", "Jaw", "Neck", "Mouth/cheek"]
-    if "what are you able to eat" in text or "what can you eat" in text:
-        return ["Soft foods", "Liquids", "Small meals", "Not sure"]
-    if "who is supporting you" in text or "who supports you" in text:
-        return ["Family", "Friends", "Caregiver", "No one nearby"]
-    if "what kind of support" in text:
-        return ["Emotional support", "Transportation help", "Help at home", "More information"]
-    return []
-
-
 def _quick_reply_suggestions(topic_key: str, state: dict, step: dict) -> list[str]:
     if step.get("opts"):
         return []
@@ -4947,54 +4200,15 @@ def _quick_reply_suggestions(topic_key: str, state: dict, step: dict) -> list[st
         return []
 
     explicit = step.get("suggestions")
+    if not isinstance(explicit, (list, tuple)):
+        return []
+
     cleaned = []
-    if isinstance(explicit, (list, tuple)):
-        for item in explicit:
-            text = str(item or "").strip()
-            if text:
-                cleaned.append(text)
-    if cleaned:
-        return cleaned
-    return _suggestions_for_prompt_text(step.get("text", ""), step=step)
-
-
-def _render_suggested_reply_buttons(
-    suggestions: list[str],
-    key_prefix: str,
-    target_input_key: Optional[str] = None,
-) -> Optional[str]:
-    suggestions = [str(s or "").strip() for s in suggestions if str(s or "").strip()]
-    if not suggestions:
-        return None
-    clicked = None
-    st.markdown('<div class="common-answer-buttons">', unsafe_allow_html=True)
-    cols = st.columns(len(suggestions))
-    for idx, suggestion in enumerate(suggestions):
-        with cols[idx]:
-            if st.button(suggestion, key=f"{key_prefix}_{idx}", use_container_width=True):
-                if target_input_key:
-                    st.session_state[target_input_key] = suggestion
-                clicked = suggestion
-    st.markdown('</div>', unsafe_allow_html=True)
-    return clicked
-
-
-def _render_numeric_choice_buttons(
-    values: list[int],
-    key_prefix: str,
-) -> Optional[int]:
-    clean_values = [int(v) for v in values]
-    if not clean_values:
-        return None
-    clicked = None
-    st.markdown('<div class="common-answer-buttons">', unsafe_allow_html=True)
-    cols = st.columns(len(clean_values))
-    for idx, value in enumerate(clean_values):
-        with cols[idx]:
-            if st.button(str(value), key=f"{key_prefix}_{idx}", use_container_width=True):
-                clicked = value
-    st.markdown('</div>', unsafe_allow_html=True)
-    return clicked
+    for item in explicit:
+        text = str(item or "").strip()
+        if text:
+            cleaned.append(text)
+    return cleaned
 
 
 def _mark_submission_once(submitted_key: str, candidate: str) -> bool:
@@ -5063,7 +4277,7 @@ def _respect_patient_control_signal(topic_key: str, step: dict, candidate: str) 
     signals = sentiment_out.get("signals", {})
     if signals.get("E7_wants_to_stop"):
         state["chat"].append({"role": "user", "content": text})
-        acknowledgment = sentiment_out.get("adaptation", {}).get("acknowledgment_text")
+        acknowledgment = sentiment_out.get("adaptation", {}).get("warm_message")
         closing = "Of course — we'll pause here. The answers you've shared have been saved for your care team."
         if acknowledgment:
             closing = f"{acknowledgment}\n\n{closing}"
@@ -5182,7 +4396,6 @@ def _store_followup_prompt(
     target_step: Optional[dict] = None,
 ):
     state["waiting_for_followup"] = True
-    prompt_step = target_step or step
     state["pending_followup"] = {
         "source_step_id": step["id"],
         "question": question,
@@ -5193,8 +4406,7 @@ def _store_followup_prompt(
         "target_step_id": target_step.get("id") if target_step else None,
     }
     combined_prompt = "\n\n".join([part for part in [assistant_message.strip(), question.strip()] if part])
-    _append_assistant_message(state, combined_prompt, prompt_step=prompt_step, prompt_text=combined_prompt)
-    _remember_prompted_step(state, prompt_step, combined_prompt)
+    _append_assistant_message(state, combined_prompt)
 
 
 def _request_retry_for_step(topic_key: str, step: dict, raw_input: str, source: str = "typed"):
@@ -5216,8 +4428,6 @@ def _request_retry_for_step(topic_key: str, step: dict, raw_input: str, source: 
         retry_current_step=True,
         allow_other_detail=("Other" in step.get("opts", [])),
     )
-    if state.get("pending_followup") is not None:
-        state["pending_followup"]["raw_input"] = text
     st.rerun()
 
 
@@ -5230,7 +4440,6 @@ def _clear_step_inputs(topic_key: str, step: dict):
         keys_to_clear.extend([
             f"text_{topic_key}_{sid}",
             f"text_{topic_key}_{sid}_submitted",
-            f"radio_{topic_key}_{sid}",
             f"dropdown_{topic_key}_{sid}",
             f"dropdown_{topic_key}_{sid}_submitted",
             f"voice_{topic_key}_{sid}_submitted",
@@ -5241,21 +4450,16 @@ def _clear_step_inputs(topic_key: str, step: dict):
         keys_to_clear.extend([
             f"text_{topic_key}_{sid}",
             f"text_{topic_key}_{sid}_submitted",
-            f"multi_{topic_key}_{sid}",
             f"dropdown_{topic_key}_{sid}",
             f"dropdown_{topic_key}_{sid}_submitted",
             f"voice_{topic_key}_{sid}_submitted",
             f"_vt_{topic_key}_{sid}_multi",
             f"_vh_{topic_key}_{sid}_multi",
         ])
-        for idx, _ in enumerate(step.get("opts", [])):
-            keys_to_clear.append(f"multi_{topic_key}_{sid}_{idx}")
     elif stype == "number":
         keys_to_clear.extend([
             f"text_{topic_key}_{sid}",
             f"text_{topic_key}_{sid}_submitted",
-            f"num_{topic_key}_{sid}",
-            f"num_text_{topic_key}_{sid}",
             f"suggested_{topic_key}_{sid}",
             f"suggested_{topic_key}_{sid}_submitted",
             f"_vt_{topic_key}_{sid}_num",
@@ -5278,13 +4482,11 @@ def _clear_step_inputs(topic_key: str, step: dict):
 
 def handle_pending_followup(topic_key: str, answer: str, source: str = "typed"):
     state = st.session_state.topic_states[topic_key]
-    _invalidate_report_cache()
     pending = state.get("pending_followup") or {}
     answer_key = pending.get("answer_key")
     if not answer_key:
         state["waiting_for_followup"] = False
         state.pop("pending_followup", None)
-        _clear_current_prompt_flags(state)
         st.rerun()
         return
 
@@ -5293,25 +4495,13 @@ def handle_pending_followup(topic_key: str, answer: str, source: str = "typed"):
         source_step = STEP_BY_ID.get(source_step_id)
         state["waiting_for_followup"] = False
         state.pop("pending_followup", None)
-        _clear_current_prompt_flags(state)
         if not source_step:
             st.rerun()
             return
 
         retry_text = (answer or "").strip()
         if source_step["type"] == "options":
-            previous_raw = _norm_text(pending.get("raw_input", ""))
-            retry_norm = _norm_text(retry_text)
-            interpreted = None
-            if (
-                source_step.get("id") == "sore_location"
-                and retry_norm in {"yes", "yeah", "yep", "correct"}
-                and previous_raw in {"chick", "cheek"}
-                and "Inside the mouth/cheek" in source_step.get("opts", [])
-            ):
-                interpreted = "Inside the mouth/cheek"
-            if interpreted is None:
-                interpreted = interpret_user_input_with_options(source_step, retry_text, topic_history=_recent_topic_history(state))
+            interpreted = interpret_user_input_with_options(source_step, retry_text, topic_history=_recent_topic_history(state))
             if interpreted in source_step.get("opts", []):
                 handle_answer(
                     topic_key,
@@ -5437,18 +4627,6 @@ def handle_pending_followup(topic_key: str, answer: str, source: str = "typed"):
 
     state["chat"].append({"role": "user", "content": answer})
     state["data"][answer_key] = answer
-    _record_response_metadata(
-        topic_key,
-        {
-            "id": answer_key,
-            "text": pending.get("question", ""),
-            "type": "free_text",
-        },
-        answer,
-        source,
-        answer,
-        str(answer),
-    )
     pending_key = f"pending_followup_{topic_key}_{pending.get('answer_key', 'pending')}"
     st.session_state.pop(pending_key, None)
     submitted_pending_key = f"{pending_key}_submitted"
@@ -5456,7 +4634,6 @@ def handle_pending_followup(topic_key: str, answer: str, source: str = "typed"):
     st.session_state.pop(f"{pending_key}_voice_sync", None)
     state["waiting_for_followup"] = False
     state.pop("pending_followup", None)
-    _clear_current_prompt_flags(state)
 
     last_topic_data = st.session_state.last_checkin.get(topic_key, {})
     closing = _default_chatty_reply(
@@ -5497,7 +4674,6 @@ def handle_answer(
     For free-text, voice, and typed answers we run the full multi-agent pipeline.
     """
     state = st.session_state.topic_states[topic_key]
-    _invalidate_report_cache()
 
     # ── Ensure followup_counts dict exists (backward compat) ──────
     if "followup_counts" not in state:
@@ -5513,7 +4689,6 @@ def handle_answer(
     if "generated_quick_replies" not in state:
         state["generated_quick_replies"] = {}
     if state.get("last_prompted_step_id") == step.get("id"):
-        _clear_current_prompt_flags(state)
         _remember_prompted_step(state, None, "")
     _clear_step_inputs(topic_key, step)
 
@@ -5534,7 +4709,6 @@ def handle_answer(
         state["data"][f"{step['id']}_other_detail"] = verbatim.strip()
     answer = _coerce_structured_answer(topic_key, step, answer, state["data"], raw_answer=raw_answer)
     state["data"][step["id"]] = answer
-    _record_response_metadata(topic_key, step, answer, source, verbatim, display)
     _capture_rich_answer_into_next_step(topic_key, state, step, answer, verbatim)
     if topic_key == "pain" and step.get("id") == "pain_medications":
         meds = answer if isinstance(answer, list) else [answer]
@@ -5556,15 +4730,7 @@ def handle_answer(
         _is_exact_structured_option_reply(answer, verbatim, step, source)
         and not ENABLE_FULL_PIPELINE_FOR_EXACT_STRUCTURED_OPTIONS
     ):
-        _record_fastpath_trace(
-            topic_key,
-            step,
-            answer,
-            source,
-            "Exact structured option matched. Agents skipped and the app moved to the next regular step.",
-        )
         if topic_is_complete(topic_key, state["data"], state.get("raw_answers")):
-            _finalize_demo_trace("Topic complete.")
             state["status"] = "completed"
             state["chat"].append({
                 "role": "assistant",
@@ -5572,10 +4738,6 @@ def handle_answer(
             })
             st.rerun()
             return
-        _finalize_demo_trace(
-            "Move to the next regular question.",
-            _step_prompt_text(next_step, topic_key=topic_key, state=state) if next_step else None,
-        )
         _append_next_question(topic_key, state, next_step)
         st.rerun()
         return
@@ -5587,15 +4749,7 @@ def handle_answer(
     # still go through the agents so the app can skip irrelevant follow-ups.
     # ══════════════════════════════════════════════════════════════
     if source == "structured" and not isinstance(answer, str):
-        _record_fastpath_trace(
-            topic_key,
-            step,
-            answer,
-            source,
-            "Structured numeric or multi-select answer accepted. Agents skipped and the app moved forward.",
-        )
         if topic_is_complete(topic_key, state["data"], state.get("raw_answers")):
-            _finalize_demo_trace("Topic complete.")
             state["status"] = "completed"
             state["chat"].append({
                 "role": "assistant",
@@ -5603,10 +4757,6 @@ def handle_answer(
             })
             st.rerun()
             return
-        _finalize_demo_trace(
-            "Move to the next regular question.",
-            _step_prompt_text(next_step, topic_key=topic_key, state=state) if next_step else None,
-        )
         _append_next_question(topic_key, state, next_step)
         st.rerun()
         return
@@ -5631,12 +4781,11 @@ def handle_answer(
                     raw_answer=verbatim if isinstance(verbatim, str) else str(verbatim),
                     state=state,
                     last_topic_data=last_topic_data,
+                    source=source,
                 )
-                _record_agent_trace(topic_key, step, pipeline)
 
             # ── Emergency: terminate session ──────────────────────
             if pipeline.get("urgency_tier", 0) == 3:
-                _finalize_demo_trace("Stop the session and show emergency guidance.")
                 emergency_msg = pipeline.get("urgency_message") or (
                     "We are concerned about what you've shared. Please call 911 or "
                     "go to your nearest emergency room immediately. "
@@ -5661,7 +4810,6 @@ def handle_answer(
 
             # ── Patient wants to stop ─────────────────────────────
             if pipeline.get("wants_to_stop"):
-                _finalize_demo_trace("Pause here because the patient appears to want to stop.")
                 closing = "Of course — we'll pause here. The answers you've shared have been saved for your care team."
                 if ack:
                     closing = f"{ack}\n\n{closing}"
@@ -5672,7 +4820,6 @@ def handle_answer(
 
             # ── Tier 2: avoid detached follow-ups in the same turn ─
             if tier2_msg:
-                _finalize_demo_trace("Pause this topic so the care team can follow up directly.")
                 state["chat"].append({
                     "role": "assistant",
                     "content": "We'll pause this topic here for now so your care team can follow up directly.",
@@ -5699,7 +4846,6 @@ def handle_answer(
                         topic_key, state, step, fq, ack,
                         target_step=next_step,
                     )
-                    _finalize_demo_trace("Ask one follow-up question.", fq)
                     st.rerun()
                     return
 
@@ -5720,13 +4866,6 @@ def handle_answer(
 
         else:
             # No OpenAI — use fallback reply
-            _record_fastpath_trace(
-                topic_key,
-                step,
-                answer,
-                source,
-                "OpenAI unavailable. Used fallback handling without live agent calls.",
-            )
             assistant_message = _default_chatty_reply(
                 topic_key, answer, step, last_topic_data
             )
@@ -5739,7 +4878,6 @@ def handle_answer(
 
     # ── Topic complete check ──────────────────────────────────────
     if topic_is_complete(topic_key, state["data"], state.get("raw_answers")):
-        _finalize_demo_trace("Topic complete.")
         state["status"] = "completed"
         final_message = "✅ Thank you — I have everything I need for this topic."
         if assistant_message:
@@ -5748,10 +4886,6 @@ def handle_answer(
         st.rerun()
         return
 
-    _finalize_demo_trace(
-        "Move to the next regular question.",
-        _step_prompt_text(next_step, topic_key=topic_key, state=state) if next_step else None,
-    )
     _append_next_question(topic_key, state, next_step, assistant_message)
     st.rerun()
     return
@@ -5769,34 +4903,93 @@ def render_input(topic_key: str, step: dict):
 
     state = st.session_state.topic_states[topic_key]
     topic_history = _recent_topic_history(state)
+
+    def render_option_buttons(button_topic_key: str, button_step: dict, multi: bool = False):
+        opts = button_step.get("opts", [])
+        selected = _render_choice_button_grid(opts, f"btn_{button_topic_key}_{button_step['id']}")
+        if selected:
+            payload = [selected] if multi else selected
+            handle_answer(button_topic_key, button_step, payload, source="structured")
+            return
+
+    def render_suggested_buttons(button_topic_key: str, button_step: dict):
+        if button_step.get("opts") or button_step.get("type") not in {"free_text", "number"}:
+            return
+        suggestions = _quick_reply_suggestions(button_topic_key, state, button_step)
+        if not suggestions:
+            return
+        st.markdown('<div class="suggested-replies-note">Suggested replies</div>', unsafe_allow_html=True)
+        pills_key = f"suggested_{button_topic_key}_{button_step['id']}"
+        submitted_key = f"{pills_key}_submitted"
+
+        selected = None
+        if hasattr(st, "pills"):
+            selected = st.pills(
+                "Suggested replies",
+                suggestions,
+                key=pills_key,
+                label_visibility="collapsed",
+            )
+        else:
+            selected = _render_choice_button_grid(
+                suggestions,
+                f"suggest_{button_topic_key}_{button_step['id']}",
+            )
+
+        if not selected or not _mark_submission_once(submitted_key, selected):
+            return
+        if button_step["type"] == "number":
+            try:
+                numeric_value = int(float(selected))
+            except (TypeError, ValueError):
+                handle_answer(
+                    button_topic_key,
+                    button_step,
+                    selected,
+                    source="typed",
+                    display_override=selected,
+                    raw_answer=selected,
+                )
+                return
+            handle_answer(
+                button_topic_key,
+                button_step,
+                numeric_value,
+                source="typed",
+                display_override=selected,
+                raw_answer=selected,
+            )
+            return
+        handle_answer(
+            button_topic_key,
+            button_step,
+            selected,
+            source="free_text",
+            display_override=selected,
+            raw_answer=selected,
+        )
+        return
+
     # ── Options ─────────────────────────────────────────────────
     if stype == "options":
         st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
-        opts = step.get("opts", [])
-        form_key = f"form_{topic_key}_{sid}_options"
-        with st.form(form_key, clear_on_submit=False):
-            selected = st.radio("Choose one", opts, key=f"radio_{topic_key}_{sid}", horizontal=(len(opts) <= 3))
-            text_col, mic_col = st.columns([20, 1], vertical_alignment="bottom")
-            with text_col:
-                typed = st.text_input(
-                    "Add details or type a different answer",
-                    key=f"text_{topic_key}_{sid}",
-                    placeholder="Optional details...",
-                )
-            with mic_col:
-                st.markdown('<div class="inline-voice-row">', unsafe_allow_html=True)
-                voice_text = voice_widget(f"{topic_key}_{sid}_opt", label="🎙️")
-                st.markdown('</div>', unsafe_allow_html=True)
-            submitted = st.form_submit_button("Continue", type="primary", use_container_width=True)
-        if submitted:
-            typed_clean = (typed or "").strip()
-            if typed_clean:
-                if _process_option_submission(topic_key, step, typed_clean, "typed", f"text_{topic_key}_{sid}_submitted", topic_history):
-                    return
-            else:
-                handle_answer(topic_key, step, selected, source="structured")
-                return
-        if _process_option_submission(topic_key, step, voice_text, "voice", f"voice_{topic_key}_{sid}_submitted", topic_history):
+        user_text = st.text_input(
+            "Message",
+            key=f"text_{topic_key}_{sid}",
+            label_visibility="collapsed",
+            placeholder="Type a reply..."
+        )
+        render_option_buttons(topic_key, step, multi=False)
+
+        with st.container():
+            voice_text = voice_widget(f"{topic_key}_{sid}_opt", label="Mic")
+
+        submitted_key = f"text_{topic_key}_{sid}_submitted"
+        if _process_option_submission(topic_key, step, user_text, "typed", submitted_key, topic_history):
+            return
+
+        voice_submitted_key = f"voice_{topic_key}_{sid}_submitted"
+        if _process_option_submission(topic_key, step, voice_text, "voice", voice_submitted_key, topic_history):
             return
         st.markdown('</div>', unsafe_allow_html=True)
                 
@@ -5804,136 +4997,45 @@ def render_input(topic_key: str, step: dict):
     # ── Multi-select ─────────────────────────────────────────────
     elif stype == "multi_select":
         st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
-        opts = step.get("opts", [])
-        form_key = f"form_{topic_key}_{sid}_multi"
-        with st.form(form_key, clear_on_submit=False):
-            st.markdown("**Choose all that apply**")
-            selected = []
-            checkbox_cols = st.columns(2)
-            for idx, opt in enumerate(opts):
-                with checkbox_cols[idx % 2]:
-                    if st.checkbox(opt, key=f"multi_{topic_key}_{sid}_{idx}"):
-                        selected.append(opt)
-            text_col, mic_col = st.columns([20, 1], vertical_alignment="bottom")
-            with text_col:
-                typed = st.text_input(
-                    "Other or details",
-                    key=f"text_{topic_key}_{sid}",
-                    placeholder="Optional: type another medication or detail...",
-                )
-            with mic_col:
-                st.markdown('<div class="inline-voice-row">', unsafe_allow_html=True)
-                voice_text = voice_widget(f"{topic_key}_{sid}_multi", label="🎙️")
-                st.markdown('</div>', unsafe_allow_html=True)
-            submitted = st.form_submit_button("Continue", type="primary", use_container_width=True)
-        if submitted:
-            typed_clean = (typed or "").strip()
-            if typed_clean and (not selected or selected == ["Other"] or "Other" in selected):
-                payload = selected or ["Other"]
-                if "Other" not in payload and typed_clean:
-                    payload = [*payload, "Other"]
-                handle_answer(topic_key, step, payload, source="structured", display_override=typed_clean, raw_answer=typed_clean)
-                return
-            if selected:
-                handle_answer(topic_key, step, selected, source="structured")
-                return
-            if typed_clean and _process_multiselect_submission(topic_key, step, typed_clean, "typed", f"text_{topic_key}_{sid}_submitted"):
-                return
-            st.warning("Please choose at least one option, or type an answer.")
-        if _process_multiselect_submission(topic_key, step, voice_text, "voice", f"voice_{topic_key}_{sid}_submitted"):
+        text_key = f"text_{topic_key}_{sid}"
+        submit_key = f"{text_key}_submitted"
+        user_text = st.text_input(
+            "Reply",
+            key=text_key,
+            label_visibility="collapsed",
+            placeholder="Type one or more answers, separated by commas..."
+        )
+        render_option_buttons(topic_key, step, multi=True)
+        with st.container():
+            voice_text = voice_widget(f"{topic_key}_{sid}_multi", label="Mic")
+
+        if _process_multiselect_submission(topic_key, step, user_text, "typed", submit_key):
+            return
+
+        voice_submit_key = f"voice_{topic_key}_{sid}_submitted"
+        if _process_multiselect_submission(topic_key, step, voice_text, "voice", voice_submit_key):
             return
         st.markdown('</div>', unsafe_allow_html=True)
 
     # ── Number ───────────────────────────────────────────────────
     elif stype == "number":
         st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
-        min_v = int(step.get("min_v", 0))
-        max_v = int(step.get("max_v", 10))
-        default_v = int(step.get("default_v", min_v))
-        is_weight_step = topic_key == "nutrition" and sid == "weight"
-        direct_button_values = list(range(min_v, max_v + 1)) if (max_v - min_v) <= 10 and not is_weight_step else []
-        unit = "lbs"
+        text_key = f"text_{topic_key}_{sid}"
+        submit_key = f"{text_key}_submitted"
+        if text_key not in st.session_state:
+            st.session_state[text_key] = ""
+        user_text = st.text_input(
+            "Reply",
+            key=text_key,
+            label_visibility="collapsed",
+            placeholder=f"Enter a number ({int(step['min_v'])}-{int(step['max_v'])})"
+        )
+        render_suggested_buttons(topic_key, step)
+        with st.container():
+            voice_text = voice_widget(f"{topic_key}_{sid}_num", label="Mic")
 
-        if direct_button_values:
-            clicked_value = _render_numeric_choice_buttons(
-                direct_button_values,
-                key_prefix=f"num_btn_{topic_key}_{sid}",
-            )
-            if clicked_value is not None:
-                handle_answer(topic_key, step, clicked_value, source="structured")
-                return
-
-        if is_weight_step:
-            unit_key = f"unit_{topic_key}_{sid}"
-            if unit_key not in st.session_state:
-                st.session_state[unit_key] = "lbs"
-            unit = st.radio(
-                "Weight unit",
-                ["lbs", "kg"],
-                key=unit_key,
-                horizontal=True,
-            )
-            quick_values = [100, 120, 140, 160, 180, 200, 220] if unit == "lbs" else [45, 55, 65, 75, 85, 95, 105]
-            clicked_weight = _render_numeric_choice_buttons(
-                quick_values,
-                key_prefix=f"weight_btn_{topic_key}_{sid}_{unit}",
-            )
-            if clicked_weight is not None:
-                final_value = clicked_weight if unit == "lbs" else round(clicked_weight * 2.20462, 1)
-                handle_answer(
-                    topic_key,
-                    step,
-                    final_value,
-                    source="structured",
-                    display_override=f"{clicked_weight} {unit}",
-                )
-                return
-
-        with st.form(f"form_{topic_key}_{sid}_number", clear_on_submit=False):
-            input_col, mic_col = st.columns([20, 1], vertical_alignment="center")
-            with input_col:
-                input_min = min_v
-                input_max = max_v
-                input_default = max(min(default_v, input_max), input_min)
-                input_label = f"Enter a number from {min_v} to {max_v}"
-                if is_weight_step and unit == "kg":
-                    input_min = max(20, round(min_v / 2.20462))
-                    input_max = round(max_v / 2.20462)
-                    input_default = max(min(round(default_v / 2.20462), input_max), input_min)
-                    input_label = f"Enter your weight in kilograms from {input_min} to {input_max}"
-                elif is_weight_step:
-                    input_label = f"Enter your weight in pounds from {input_min} to {input_max}"
-                value_text = st.text_input(
-                    input_label,
-                    key=f"num_text_{topic_key}_{sid}",
-                    value=str(input_default),
-                )
-            with mic_col:
-                st.markdown('<div class="inline-voice-row">', unsafe_allow_html=True)
-                voice_text = voice_widget(f"{topic_key}_{sid}_num", label="🎙️")
-                st.markdown('</div>', unsafe_allow_html=True)
-            submitted = st.form_submit_button("Continue", type="primary", use_container_width=True)
-        if submitted:
-            typed_value = (value_text or "").strip()
-            try:
-                numeric_value = float(typed_value)
-            except (TypeError, ValueError):
-                st.warning("Please enter a valid number.")
-            else:
-                final_value = numeric_value
-                display_value = typed_value
-                if is_weight_step and unit == "kg":
-                    final_value = round(numeric_value * 2.20462, 1)
-                    display_value = f"{typed_value} kg"
-                elif is_weight_step:
-                    display_value = f"{typed_value} lbs"
-                if float(final_value) < min_v or float(final_value) > max_v:
-                    st.warning(f"Please enter a value between {min_v} and {max_v}.")
-                else:
-                    int_or_float = int(final_value) if float(final_value).is_integer() else round(float(final_value), 1)
-                    handle_answer(topic_key, step, int_or_float, source="structured", display_override=display_value)
-                    return
-        if _process_number_submission(topic_key, step, voice_text or "", f"voice_{topic_key}_{sid}_submitted"):
+        candidate = user_text or voice_text or ""
+        if _process_number_submission(topic_key, step, candidate, submit_key):
             return
         st.markdown('</div>', unsafe_allow_html=True)
 
@@ -5952,44 +5054,25 @@ def render_input(topic_key: str, step: dict):
             st.session_state[f"{widget_key}_voice_sync"] = transcript
 
         st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
-        suggestions = _quick_reply_suggestions(topic_key, state, step)
-        clicked_suggestion = None
-        if suggestions:
-            clicked_suggestion = _render_suggested_reply_buttons(
-                suggestions,
-                key_prefix=f"suggested_btn_{topic_key}_{sid}",
-                target_input_key=widget_key,
+        with st.container():
+            free_text = st.text_input(
+                "Reply",
+                placeholder=step.get("placeholder", "Please describe…"),
+                key=widget_key,
+                label_visibility="collapsed",
             )
-        if clicked_suggestion:
-            st.session_state[submit_key] = clicked_suggestion
-            handle_answer(topic_key, step, clicked_suggestion, source="free_text")
-            return
-        with st.form(f"form_{topic_key}_{sid}_free", clear_on_submit=False):
-            text_col, mic_col = st.columns([20, 1], vertical_alignment="bottom")
-            with text_col:
-                free_text = st.text_input(
-                    "Your answer",
-                    placeholder=step.get("placeholder", "Please describe..."),
-                    key=widget_key,
-                )
-            with mic_col:
-                st.markdown('<div class="inline-voice-row">', unsafe_allow_html=True)
-                voice_text = voice_widget(f"{topic_key}_{sid}", label="🎙️")
-                st.markdown('</div>', unsafe_allow_html=True)
-            submitted = st.form_submit_button("Continue", type="primary", use_container_width=True)
+        render_suggested_buttons(topic_key, step)
+        with st.container():
+            voice_text = voice_widget(f"{topic_key}_{sid}", label="Mic")
         if voice_text and voice_text != st.session_state.get(f"{widget_key}_voice_sync"):
             st.session_state[f"{widget_key}_voice_sync"] = voice_text
             st.session_state[submit_key] = voice_text
             handle_answer(topic_key, step, voice_text, source="voice")
             return
 
-        if submitted:
-            candidate = (free_text or "").strip()
-            if not candidate:
-                st.warning("Please type an answer or choose a common answer.")
-            elif st.session_state.get(submit_key) != candidate:
-                st.session_state[submit_key] = candidate
-                handle_answer(topic_key, step, candidate, source="free_text")
+        if free_text and st.session_state.get(submit_key) != free_text:
+            st.session_state[submit_key] = free_text
+            handle_answer(topic_key, step, free_text, source="free_text")
 
         st.markdown('</div>', unsafe_allow_html=True)
 
@@ -6055,7 +5138,6 @@ def render_freeform_chat():
              if m["role"] == "user"), None
         )
         if user_input.strip() != last_user:
-            _invalidate_report_cache()
             st.session_state.freeform_chat.append(
                 {"role": "user", "content": user_input.strip()}
             )
@@ -6135,18 +5217,7 @@ def render_topic_detail(topic_label: str, topic_key: str):
         if first_step:
             _ensure_step_prompted(topic_key, state, first_step)
 
-    st.markdown('<div class="topic-toolbar"></div>', unsafe_allow_html=True)
-    if st.button("I’m getting tired / need to stop soon", key=f"fatigue_topic_{topic_key}", use_container_width=False):
-        _mark_patient_fatigue(topic_key)
-        st.rerun()
-
     # ── Header with progress bar ─────────────────────────────────
-    answered, applicable = get_topic_progress(topic_key, state.get("data", {}), state.get("raw_answers"))
-    _, _, completed_topics = _overall_progress()
-    st.caption(
-        f"Current topic: {answered}/{applicable or 1} questions answered · "
-        f"Overall: {completed_topics}/{len(TOPICS)} topics complete"
-    )
     header_html = (
         '<div class="chat-shell">'
         '  <div class="chat-shell-header">'
@@ -6166,96 +5237,64 @@ def render_topic_detail(topic_label: str, topic_key: str):
     if state["chat"]:
         with st.container(border=False):
             for msg in state["chat"]:
-                highlight = bool(msg.get("role") == "assistant" and msg.get("is_current_prompt"))
-                render_chat_bubble(msg["role"], msg["content"], highlight=highlight)
-    st.markdown('</div></div>', unsafe_allow_html=True)
-
-    main_col, demo_col = st.columns([3.3, 1.15], gap="large")
-    if st.session_state.get("demo_mode"):
-        with demo_col:
-            _render_demo_agent_panel(topic_key)
+                render_chat_bubble(msg["role"], msg["content"])
 
     # ── Completed ────────────────────────────────────────────────
-    with main_col:
-        st.markdown('<div class="topic-response-region">', unsafe_allow_html=True)
-        if state["status"] == "completed":
-            st.markdown(
-                '<div class="completion-badge">✅ This topic is complete</div>',
-                unsafe_allow_html=True,
+    if state["status"] == "completed":
+        st.markdown(
+            '<div class="completion-badge">✅ This topic is complete</div>',
+            unsafe_allow_html=True,
+        )
+        if st.button("✏️ Add a note or correction", key=f"reopen_{topic_key}"):
+            state["status"] = "in_progress"
+            state["chat"].append({
+                "role": "assistant",
+                "content": "Of course — please share any correction or additional detail.",
+            })
+            state["data"].pop("_correction_note", None)
+            st.rerun()
+        st.markdown('</div><div class="composer-wrap"></div></div>', unsafe_allow_html=True)
+        return
+
+    # ── Current question ─────────────────────────────────────────
+    if state.get("waiting_for_followup"):
+        pending = state.get("pending_followup") or {}
+        pending_suffix = pending.get("answer_key", "pending")
+        pending_key = f"pending_followup_{topic_key}_{pending_suffix}"
+        pending_submit_key = f"{pending_key}_submitted"
+        if pending_key not in st.session_state:
+            st.session_state[pending_key] = ""
+        st.markdown('</div><div class="composer-wrap">', unsafe_allow_html=True)
+
+        st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
+        with st.container():
+            pending_text = st.text_input(
+                "Reply",
+                key=pending_key,
+                placeholder="Type or speak your answer here...",
+                label_visibility="collapsed",
             )
-            if st.button("✏️ Add a note or correction", key=f"reopen_{topic_key}"):
-                state["status"] = "in_progress"
-                state["chat"].append({
-                    "role": "assistant",
-                    "content": "Of course — please share any correction or additional detail.",
-                })
-                state["data"].pop("_correction_note", None)
-                st.rerun()
-            st.markdown('</div>', unsafe_allow_html=True)
+        with st.container():
+            pending_voice = voice_widget(f"pending_{topic_key}_{pending_suffix}", label="Mic")
+        if pending_voice and pending_voice != st.session_state.get(f"{pending_key}_voice_sync"):
+            st.session_state[f"{pending_key}_voice_sync"] = pending_voice
+            st.session_state[pending_submit_key] = pending_voice
+            handle_pending_followup(topic_key, pending_voice, source="voice")
             return
 
-        # ── Current question ─────────────────────────────────────────
-        if state.get("waiting_for_followup"):
-            pending = state.get("pending_followup") or {}
-            pending_suffix = pending.get("answer_key", "pending")
-            pending_key = f"pending_followup_{topic_key}_{pending_suffix}"
-            pending_submit_key = f"{pending_key}_submitted"
-            pending_target_step = None
-            if pending.get("target_step_id"):
-                pending_target_step = STEP_BY_ID.get(pending.get("target_step_id"))
-            elif pending.get("source_step_id"):
-                pending_target_step = STEP_BY_ID.get(pending.get("source_step_id"))
-            pending_suggestions = _suggestions_for_prompt_text(
-                pending.get("question", ""),
-                step=pending_target_step,
-            )
-            if pending_key not in st.session_state:
-                st.session_state[pending_key] = ""
-            st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
-            clicked_suggestion = None
-            if pending_suggestions:
-                clicked_suggestion = _render_suggested_reply_buttons(
-                    pending_suggestions,
-                    key_prefix=f"pending_suggested_btn_{topic_key}_{pending_suffix}",
-                    target_input_key=pending_key,
-                )
-            if clicked_suggestion:
-                st.session_state[pending_submit_key] = clicked_suggestion
-                handle_pending_followup(topic_key, clicked_suggestion, source="followup")
-                return
-            with st.form(f"form_pending_{topic_key}_{pending_suffix}", clear_on_submit=False):
-                text_col, mic_col = st.columns([20, 1], vertical_alignment="bottom")
-                with text_col:
-                    pending_text = st.text_input(
-                        "Reply",
-                        key=pending_key,
-                        placeholder="Type or speak your answer here...",
-                    )
-                with mic_col:
-                    st.markdown('<div class="inline-voice-row">', unsafe_allow_html=True)
-                    pending_voice = voice_widget(f"pending_{topic_key}_{pending_suffix}", label="🎙️")
-                    st.markdown('</div>', unsafe_allow_html=True)
-                pending_submitted = st.form_submit_button("Continue", type="primary", use_container_width=True)
-            if pending_voice and pending_voice != st.session_state.get(f"{pending_key}_voice_sync"):
-                st.session_state[f"{pending_key}_voice_sync"] = pending_voice
-                st.session_state[pending_submit_key] = pending_voice
-                handle_pending_followup(topic_key, pending_voice, source="voice")
-                return
+        if pending_text and st.session_state.get(pending_submit_key) != pending_text:
+            st.session_state[pending_submit_key] = pending_text
+            handle_pending_followup(topic_key, pending_text, source="followup")
 
-            if pending_submitted:
-                candidate = (pending_text or "").strip()
-                if candidate and st.session_state.get(pending_submit_key) != candidate:
-                    st.session_state[pending_submit_key] = candidate
-                    handle_pending_followup(topic_key, candidate, source="followup")
-
-            st.markdown('</div>', unsafe_allow_html=True)
-            st.markdown('</div>', unsafe_allow_html=True)
-            return
-        next_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
-        if next_step:
-            _ensure_step_prompted(topic_key, state, next_step)
-            render_input(topic_key, next_step)
         st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown('</div></div>', unsafe_allow_html=True)
+        return
+    next_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
+    if next_step:
+        _ensure_step_prompted(topic_key, state, next_step)
+        st.markdown('</div><div class="composer-wrap">', unsafe_allow_html=True)
+        render_input(topic_key, next_step)
+        st.markdown('</div></div>', unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -6296,74 +5335,57 @@ def render_sidebar():
             f'<div class="prog-label">{completed}/{total} topics complete</div>',
             unsafe_allow_html=True,
         )
+        st.progress(completed / total if total > 0 else 0)
         st.markdown('<div style="height:6px;"></div>', unsafe_allow_html=True)
+
+        # ── Topic nav buttons ─────────────────────────────────────
+        # Using st.button (not HTML anchors) so session state is preserved.
+        # The label has two parts separated by \n:
+        #   line 1: "{selected_marker}{icon} {topic_name}"
+        #   line 2: summary snippet or "No prior data" (when prev check-in exists)
+        # CSS white-space:pre-wrap renders the \n as a real line break.
 
         has_prev = st.session_state.get("has_prev_checkin", False)
         last_ck  = st.session_state.get("last_checkin", {})
-        current_topic = _guided_current_topic_key()
 
         for label, key in TOPICS:
             status = st.session_state.topic_states[key]["status"]
             icon   = {"completed": "✅", "in_progress": "🔵"}.get(status, "⚪")
             dname  = label.split(" ", 1)[1] if " " in label else label
-            marker = "▶ " if current_topic == key else "   "
-            answered, applicable = get_topic_progress(
-                key,
-                st.session_state.topic_states[key].get("data", {}),
-                st.session_state.topic_states[key].get("raw_answers"),
-            )
-            status_text = _topic_status_label(key)
-            line = f"{marker}{icon} {dname}\n   {status_text}"
-            if applicable:
-                line += f" · {answered}/{applicable}"
+            marker = "▶ " if st.session_state.selected_topic == key else "   "
+
+            # Build button label
+            btn = f"{marker}{icon} {dname}"
             if has_prev:
                 prev_data = last_ck.get(key, {})
                 if prev_data:
                     snip = _natural_summary(key, prev_data)
-                    line += f"\n   Last: {snip}" if snip else "\n   Last: data recorded"
+                    btn += f"\n   {snip}" if snip else "\n   No data recorded"
                 else:
-                    line += "\n   Last: no prior data"
-            st.markdown(
-                f'<div style="white-space:pre-wrap;border:1px solid #dde6f5;'
-                f'border-radius:12px;padding:8px 10px;margin-bottom:6px;'
-                f'background:{"#eef6ff" if current_topic == key else "#ffffff"};'
-                f'font-size:13px;color:#26364a;">{_html.escape(line)}</div>',
-                unsafe_allow_html=True,
-            )
+                    btn += "\n   No prior data"
+
+            if st.button(btn, key=f"nav_{key}", use_container_width=True):
+                st.session_state.selected_topic = key
+                st.rerun()
 
         # ── Anything else? ────────────────────────────────────────
         ff_msgs  = [m for m in st.session_state.freeform_chat if m["role"] == "user"]
-        st.markdown(
-            f'<div style="font-size:12px;color:#6b7280;margin-top:8px;">'
-            f'Anything else notes saved: <strong>{len(ff_msgs)}</strong>'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
-        st.session_state["demo_mode"] = st.checkbox(
-            "Show AI reasoning (Demo mode)",
-            value=bool(st.session_state.get("demo_mode", False)),
-            key="demo_mode_checkbox",
-        )
+        ff_badge = f" ({len(ff_msgs)})" if ff_msgs else ""
+        ff_mark  = "▶ " if st.session_state.selected_topic == "freeform" else "   "
+        if st.button(f"{ff_mark}💬 Anything else?{ff_badge}",
+                     key="nav_freeform", use_container_width=True):
+            st.session_state.selected_topic = "freeform"
+            st.rerun()
 
         # ── Submit ────────────────────────────────────────────────
         st.markdown(
             '<hr style="margin:8px 0 8px 0;border:none;border-top:1px solid #dde6f5;">',
             unsafe_allow_html=True,
         )
-        all_topics_done = completed == total
-        partial_allowed = bool(st.session_state.get("patient_fatigue", False))
         any_started = completed >= 1 or in_progress >= 1
         if any_started:
-            submit_label = "📤 Submit Check-In" if all_topics_done else "💾 Save Partial Check-In"
-            if not all_topics_done and not partial_allowed:
-                st.caption("Submit unlocks after the guided topics are complete. Use the tired/stop-soon button if you need to save a partial check-in.")
-            if st.button(
-                submit_label,
-                use_container_width=True,
-                type="primary",
-                key="sidebar_submit",
-                disabled=not (all_topics_done or partial_allowed),
-            ):
+            if st.button("📤 Submit Check-In", use_container_width=True,
+                         type="primary", key="sidebar_submit"):
                 all_data = _build_all_topic_data()
                 if ff_msgs:
                     all_data["freeform_notes"] = [
@@ -6399,7 +5421,7 @@ def screen_login():
         Your answers help your care team review symptoms before the visit.
         </p>
         <div class="subtle-note">
-            You can answer by selecting choices, typing, or using voice. We will guide you through the check-in in the order your care team needs.
+            You can answer by typing or by voice. You may switch topics at any time, and your most recent prior check-in will be used to guide the conversation.
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -6409,7 +5431,6 @@ def screen_login():
         name = st.text_input("Please enter your name:", placeholder="First and last name…")
         if st.button("Begin Check-In →", type="primary", use_container_width=True):
             if name.strip():
-                _reset_checkin_session_state()
                 st.session_state.patient_name = name.strip()
 
                 # ── Load previous check-in from Sheets ──────────
@@ -6423,6 +5444,7 @@ def screen_login():
                     st.session_state.last_checkin     = {}
                     st.session_state.has_prev_checkin = False
 
+                st.session_state.selected_topic = TOPIC_KEYS[0] if TOPIC_KEYS else None
                 st.session_state.app_stage      = "overview"
                 st.rerun()
             else:
@@ -6513,16 +5535,18 @@ def screen_overview():
 def screen_main():
     render_sidebar()
 
-    selected = _sync_guided_topic_selection()
+    selected = st.session_state.selected_topic
 
     if not selected:
-        st.markdown('<div class="card"><div style="font-size:12px;font-weight:800;color:#6b7b92;text-transform:uppercase;letter-spacing:0.08em;">Check-in complete</div><div style="font-size:28px;font-weight:800;letter-spacing:-0.03em;margin-top:6px;">You have finished the guided topics</div><div style="font-size:14px;color:#5f6f84;line-height:1.7;margin-top:8px;">You can submit the check-in from the sidebar, or add anything else below for your care team.</div></div>', unsafe_allow_html=True)
-        _render_demo_agent_panel()
-        render_freeform_chat()
+        st.markdown('<div class="card"><div style="font-size:12px;font-weight:800;color:#6b7b92;text-transform:uppercase;letter-spacing:0.08em;">Getting started</div><div style="font-size:28px;font-weight:800;letter-spacing:-0.03em;margin-top:6px;">Choose a symptom area from the sidebar</div><div style="font-size:14px;color:#5f6f84;line-height:1.7;margin-top:8px;">Move through the check-in in any order you prefer. Your answers are saved into a provider-ready summary for the care team.</div></div>', unsafe_allow_html=True)
         return
 
-    topic_label = TOPIC_LABELS.get(selected, selected)
-    render_topic_detail(topic_label, selected)
+    # Route to free-form chat or regular topic
+    if selected == "freeform":
+        render_freeform_chat()
+    else:
+        topic_label = TOPIC_LABELS.get(selected, selected)
+        render_topic_detail(topic_label, selected)
 
 
 def screen_report():
