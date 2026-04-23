@@ -1471,38 +1471,13 @@ div[data-baseweb="select"] > div {
 }
 
 .composer-shell [data-testid="column"]:last-child {
-    max-width: 98px;
-    min-width: 98px;
-    flex: 0 0 98px;
+    max-width: 100%;
+    min-width: 0;
+    flex: 1 1 auto;
 }
 
 .composer-shell [data-testid="column"]:last-child > div {
     height: 100%;
-}
-
-.composer-voice-panel {
-    height: 100%;
-    min-height: 164px;
-    border: 1px solid #d9e4ed;
-    border-radius: 18px;
-    background:
-        linear-gradient(180deg, rgba(255,255,255,0.98) 0%, rgba(244,248,252,0.98) 100%);
-    box-shadow: 0 12px 24px rgba(23, 50, 74, 0.06);
-    padding: 8px;
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    align-items: center;
-    gap: 6px;
-}
-
-.composer-voice-panel .voice-title {
-    font-size: 9px;
-    font-weight: 800;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: #7b8ea3;
-    text-align: center;
 }
 
 
@@ -1590,26 +1565,26 @@ div[data-baseweb="select"] > div {
     background: linear-gradient(180deg, #fdfefe 0%, #f5f9fd 100%);
     border: 1px solid #d7e4ee;
     border-radius: 999px;
-    min-height: 54px;
-    max-width: 54px;
-    width: 100%;
-    min-width: 100%;
+    min-height: 38px;
+    max-width: 38px;
+    width: 38px;
+    min-width: 38px;
     margin-left: auto;
-    margin-right: auto;
+    margin-right: 0;
     display: flex;
     align-items: center;
     justify-content: center;
     padding: 0;
     margin-top: 0;
     margin-bottom: 0;
-    box-shadow: 0 8px 18px rgba(23, 50, 74, 0.06) !important;
+    box-shadow: 0 6px 12px rgba(23, 50, 74, 0.06) !important;
     overflow: hidden;
 }
 
 .composer-shell [data-testid="stAudioInput"] > div {
-    width: 54px;
-    min-width: 54px;
-    height: 54px;
+    width: 38px;
+    min-width: 38px;
+    height: 38px;
     display: flex;
     justify-content: center;
     align-items: center;
@@ -1620,10 +1595,10 @@ div[data-baseweb="select"] > div {
 
 .composer-shell [data-testid="stAudioInput"] button {
     border-radius: 999px !important;
-    width: 54px !important;
-    height: 54px !important;
-    min-height: 54px !important;
-    min-width: 54px !important;
+    width: 38px !important;
+    height: 38px !important;
+    min-height: 38px !important;
+    min-width: 38px !important;
     padding: 0 !important;
     margin: 0 !important;
     border: none !important;
@@ -1666,12 +1641,90 @@ div[data-baseweb="select"] > div {
 }
 
 .composer-shell [data-testid="stAudioInput"] button svg {
-    width: 18px !important;
-    height: 18px !important;
+    width: 14px !important;
+    height: 14px !important;
     color: #0f6cbd !important;
 }
 
 .composer-shell [data-testid="stAudioInput"] audio {
+    display: none !important;
+}
+
+.inline-voice-anchor {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: -98px;
+    margin-right: 10px;
+    margin-bottom: 56px;
+    position: relative;
+    z-index: 5;
+    pointer-events: none;
+}
+
+.inline-voice-anchor > div {
+    pointer-events: auto;
+}
+
+.inline-voice-anchor [data-testid="stAudioInput"] {
+    width: 38px !important;
+    min-width: 38px !important;
+    max-width: 38px !important;
+    height: 38px !important;
+    min-height: 38px !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: none !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    overflow: hidden !important;
+    font-size: 0 !important;
+    line-height: 0 !important;
+    color: transparent !important;
+}
+
+.inline-voice-anchor [data-testid="stAudioInput"] > div {
+    width: 38px !important;
+    min-width: 38px !important;
+    max-width: 38px !important;
+    height: 38px !important;
+    min-height: 38px !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    overflow: hidden !important;
+}
+
+.inline-voice-anchor [data-testid="stAudioInput"] button {
+    width: 38px !important;
+    min-width: 38px !important;
+    max-width: 38px !important;
+    height: 38px !important;
+    min-height: 38px !important;
+    border-radius: 999px !important;
+    border: 1px solid #d7e4ee !important;
+    background: linear-gradient(180deg, #ffffff 0%, #f5f9fd 100%) !important;
+    box-shadow: 0 6px 12px rgba(23, 50, 74, 0.06) !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    position: relative !important;
+}
+
+.inline-voice-anchor [data-testid="stAudioInput"] button svg {
+    display: none !important;
+}
+
+.inline-voice-anchor [data-testid="stAudioInput"] button::after {
+    content: "🎙️";
+    font-size: 14px;
+    line-height: 38px;
+    position: absolute;
+    inset: 0;
+    text-align: center;
+}
+
+.inline-voice-anchor [data-testid="stAudioInput"] audio,
+.inline-voice-anchor [data-testid="stAudioInput"] small,
+.inline-voice-anchor [data-testid="stAudioInput"] span,
+.inline-voice-anchor [data-testid="stAudioInput"] p {
     display: none !important;
 }
 
@@ -5400,28 +5453,25 @@ def render_input(topic_key: str, step: dict):
         st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
         opts = step.get("opts", [])
         form_key = f"form_{topic_key}_{sid}_options"
-        form_col, voice_col = st.columns([14, 1], vertical_alignment="bottom")
-        with form_col:
-            with st.form(form_key, clear_on_submit=False):
-                selected = st.radio("Choose one", opts, key=f"radio_{topic_key}_{sid}", horizontal=(len(opts) <= 3))
-                typed = st.text_input(
-                    "Add details or type a different answer",
-                    key=f"text_{topic_key}_{sid}",
-                    placeholder="Optional details...",
-                )
-                submitted = st.form_submit_button("Continue", type="primary", use_container_width=True)
-            if submitted:
-                typed_clean = (typed or "").strip()
-                if typed_clean:
-                    if _process_option_submission(topic_key, step, typed_clean, "typed", f"text_{topic_key}_{sid}_submitted", topic_history):
-                        return
-                else:
-                    handle_answer(topic_key, step, selected, source="structured")
+        with st.form(form_key, clear_on_submit=False):
+            selected = st.radio("Choose one", opts, key=f"radio_{topic_key}_{sid}", horizontal=(len(opts) <= 3))
+            typed = st.text_input(
+                "Add details or type a different answer",
+                key=f"text_{topic_key}_{sid}",
+                placeholder="Optional details...",
+            )
+            submitted = st.form_submit_button("Continue", type="primary", use_container_width=True)
+        st.markdown('<div class="inline-voice-anchor">', unsafe_allow_html=True)
+        voice_text = voice_widget(f"{topic_key}_{sid}_opt", label="🎙️")
+        st.markdown('</div>', unsafe_allow_html=True)
+        if submitted:
+            typed_clean = (typed or "").strip()
+            if typed_clean:
+                if _process_option_submission(topic_key, step, typed_clean, "typed", f"text_{topic_key}_{sid}_submitted", topic_history):
                     return
-        with voice_col:
-            st.markdown('<div class="composer-voice-panel"><div class="voice-title">Voice</div>', unsafe_allow_html=True)
-            voice_text = voice_widget(f"{topic_key}_{sid}_opt", label="Mic")
-            st.markdown('</div>', unsafe_allow_html=True)
+            else:
+                handle_answer(topic_key, step, selected, source="structured")
+                return
         if _process_option_submission(topic_key, step, voice_text, "voice", f"voice_{topic_key}_{sid}_submitted", topic_history):
             return
         st.markdown('</div>', unsafe_allow_html=True)
@@ -5432,34 +5482,31 @@ def render_input(topic_key: str, step: dict):
         st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
         opts = step.get("opts", [])
         form_key = f"form_{topic_key}_{sid}_multi"
-        form_col, voice_col = st.columns([14, 1], vertical_alignment="bottom")
-        with form_col:
-            with st.form(form_key, clear_on_submit=False):
-                selected = st.multiselect("Choose all that apply", opts, key=f"multi_{topic_key}_{sid}")
-                typed = st.text_input(
-                    "Other or details",
-                    key=f"text_{topic_key}_{sid}",
-                    placeholder="Optional: type another medication or detail...",
-                )
-                submitted = st.form_submit_button("Continue", type="primary", use_container_width=True)
-            if submitted:
-                typed_clean = (typed or "").strip()
-                if typed_clean and (not selected or selected == ["Other"] or "Other" in selected):
-                    payload = selected or ["Other"]
-                    if "Other" not in payload and typed_clean:
-                        payload = [*payload, "Other"]
-                    handle_answer(topic_key, step, payload, source="structured", display_override=typed_clean, raw_answer=typed_clean)
-                    return
-                if selected:
-                    handle_answer(topic_key, step, selected, source="structured")
-                    return
-                if typed_clean and _process_multiselect_submission(topic_key, step, typed_clean, "typed", f"text_{topic_key}_{sid}_submitted"):
-                    return
-                st.warning("Please choose at least one option, or type an answer.")
-        with voice_col:
-            st.markdown('<div class="composer-voice-panel"><div class="voice-title">Voice</div>', unsafe_allow_html=True)
-            voice_text = voice_widget(f"{topic_key}_{sid}_multi", label="Mic")
-            st.markdown('</div>', unsafe_allow_html=True)
+        with st.form(form_key, clear_on_submit=False):
+            selected = st.multiselect("Choose all that apply", opts, key=f"multi_{topic_key}_{sid}")
+            typed = st.text_input(
+                "Other or details",
+                key=f"text_{topic_key}_{sid}",
+                placeholder="Optional: type another medication or detail...",
+            )
+            submitted = st.form_submit_button("Continue", type="primary", use_container_width=True)
+        st.markdown('<div class="inline-voice-anchor">', unsafe_allow_html=True)
+        voice_text = voice_widget(f"{topic_key}_{sid}_multi", label="🎙️")
+        st.markdown('</div>', unsafe_allow_html=True)
+        if submitted:
+            typed_clean = (typed or "").strip()
+            if typed_clean and (not selected or selected == ["Other"] or "Other" in selected):
+                payload = selected or ["Other"]
+                if "Other" not in payload and typed_clean:
+                    payload = [*payload, "Other"]
+                handle_answer(topic_key, step, payload, source="structured", display_override=typed_clean, raw_answer=typed_clean)
+                return
+            if selected:
+                handle_answer(topic_key, step, selected, source="structured")
+                return
+            if typed_clean and _process_multiselect_submission(topic_key, step, typed_clean, "typed", f"text_{topic_key}_{sid}_submitted"):
+                return
+            st.warning("Please choose at least one option, or type an answer.")
         if _process_multiselect_submission(topic_key, step, voice_text, "voice", f"voice_{topic_key}_{sid}_submitted"):
             return
         st.markdown('</div>', unsafe_allow_html=True)
@@ -5470,24 +5517,21 @@ def render_input(topic_key: str, step: dict):
         min_v = int(step.get("min_v", 0))
         max_v = int(step.get("max_v", 10))
         default_v = int(step.get("default_v", min_v))
-        form_col, voice_col = st.columns([14, 1], vertical_alignment="bottom")
-        with form_col:
-            with st.form(f"form_{topic_key}_{sid}_number", clear_on_submit=False):
-                value = st.slider(
-                    f"Choose a number from {min_v} to {max_v}",
-                    min_value=min_v,
-                    max_value=max_v,
-                    value=max(min(default_v, max_v), min_v),
-                    key=f"num_{topic_key}_{sid}",
-                )
-                submitted = st.form_submit_button("Continue", type="primary", use_container_width=True)
-            if submitted:
-                handle_answer(topic_key, step, value, source="structured")
-                return
-        with voice_col:
-            st.markdown('<div class="composer-voice-panel"><div class="voice-title">Voice</div>', unsafe_allow_html=True)
-            voice_text = voice_widget(f"{topic_key}_{sid}_num", label="Mic")
-            st.markdown('</div>', unsafe_allow_html=True)
+        with st.form(f"form_{topic_key}_{sid}_number", clear_on_submit=False):
+            value = st.slider(
+                f"Choose a number from {min_v} to {max_v}",
+                min_value=min_v,
+                max_value=max_v,
+                value=max(min(default_v, max_v), min_v),
+                key=f"num_{topic_key}_{sid}",
+            )
+            submitted = st.form_submit_button("Continue", type="primary", use_container_width=True)
+        st.markdown('<div class="inline-voice-anchor">', unsafe_allow_html=True)
+        voice_text = voice_widget(f"{topic_key}_{sid}_num", label="🎙️")
+        st.markdown('</div>', unsafe_allow_html=True)
+        if submitted:
+            handle_answer(topic_key, step, value, source="structured")
+            return
         if _process_number_submission(topic_key, step, voice_text or "", f"voice_{topic_key}_{sid}_submitted"):
             return
         st.markdown('</div>', unsafe_allow_html=True)
@@ -5508,28 +5552,25 @@ def render_input(topic_key: str, step: dict):
 
         st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
         suggestions = _quick_reply_suggestions(topic_key, state, step)
-        form_col, voice_col = st.columns([14, 1], vertical_alignment="bottom")
-        with form_col:
-            with st.form(f"form_{topic_key}_{sid}_free", clear_on_submit=False):
-                selected_suggestion = None
-                if suggestions:
-                    choices = [""] + suggestions + ["Other"]
-                    selected_suggestion = st.selectbox(
-                        "Common answers",
-                        choices,
-                        format_func=lambda x: "Choose a common answer..." if x == "" else x,
-                        key=f"suggested_{topic_key}_{sid}",
-                    )
-                free_text = st.text_input(
-                    "Your answer",
-                    placeholder=step.get("placeholder", "Please describe..."),
-                    key=widget_key,
+        with st.form(f"form_{topic_key}_{sid}_free", clear_on_submit=False):
+            selected_suggestion = None
+            if suggestions:
+                choices = [""] + suggestions + ["Other"]
+                selected_suggestion = st.selectbox(
+                    "Common answers",
+                    choices,
+                    format_func=lambda x: "Choose a common answer..." if x == "" else x,
+                    key=f"suggested_{topic_key}_{sid}",
                 )
-                submitted = st.form_submit_button("Continue", type="primary", use_container_width=True)
-        with voice_col:
-            st.markdown('<div class="composer-voice-panel"><div class="voice-title">Voice</div>', unsafe_allow_html=True)
-            voice_text = voice_widget(f"{topic_key}_{sid}", label="Mic")
-            st.markdown('</div>', unsafe_allow_html=True)
+            free_text = st.text_input(
+                "Your answer",
+                placeholder=step.get("placeholder", "Please describe..."),
+                key=widget_key,
+            )
+            submitted = st.form_submit_button("Continue", type="primary", use_container_width=True)
+        st.markdown('<div class="inline-voice-anchor">', unsafe_allow_html=True)
+        voice_text = voice_widget(f"{topic_key}_{sid}", label="🎙️")
+        st.markdown('</div>', unsafe_allow_html=True)
         if voice_text and voice_text != st.session_state.get(f"{widget_key}_voice_sync"):
             st.session_state[f"{widget_key}_voice_sync"] = voice_text
             st.session_state[submit_key] = voice_text
@@ -5697,8 +5738,6 @@ def render_topic_detail(topic_label: str, topic_key: str):
     # ── Header with progress bar ─────────────────────────────────
     answered, applicable = get_topic_progress(topic_key, state.get("data", {}), state.get("raw_answers"))
     _, _, completed_topics = _overall_progress()
-    if applicable:
-        st.progress(answered / applicable)
     st.caption(
         f"Current topic: {answered}/{applicable or 1} questions answered · "
         f"Overall: {completed_topics}/{len(TOPICS)} topics complete"
@@ -5754,19 +5793,16 @@ def render_topic_detail(topic_label: str, topic_key: str):
         st.markdown('</div><div class="composer-wrap">', unsafe_allow_html=True)
 
         st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
-        form_col, voice_col = st.columns([14, 1], vertical_alignment="bottom")
-        with form_col:
-            with st.form(f"form_pending_{topic_key}_{pending_suffix}", clear_on_submit=False):
-                pending_text = st.text_input(
-                    "Reply",
-                    key=pending_key,
-                    placeholder="Type or speak your answer here...",
-                )
-                pending_submitted = st.form_submit_button("Continue", type="primary", use_container_width=True)
-        with voice_col:
-            st.markdown('<div class="composer-voice-panel"><div class="voice-title">Voice</div>', unsafe_allow_html=True)
-            pending_voice = voice_widget(f"pending_{topic_key}_{pending_suffix}", label="Mic")
-            st.markdown('</div>', unsafe_allow_html=True)
+        with st.form(f"form_pending_{topic_key}_{pending_suffix}", clear_on_submit=False):
+            pending_text = st.text_input(
+                "Reply",
+                key=pending_key,
+                placeholder="Type or speak your answer here...",
+            )
+            pending_submitted = st.form_submit_button("Continue", type="primary", use_container_width=True)
+        st.markdown('<div class="inline-voice-anchor">', unsafe_allow_html=True)
+        pending_voice = voice_widget(f"pending_{topic_key}_{pending_suffix}", label="🎙️")
+        st.markdown('</div>', unsafe_allow_html=True)
         if pending_voice and pending_voice != st.session_state.get(f"{pending_key}_voice_sync"):
             st.session_state[f"{pending_key}_voice_sync"] = pending_voice
             st.session_state[pending_submit_key] = pending_voice
@@ -5826,7 +5862,6 @@ def render_sidebar():
             f'<div class="prog-label">{completed}/{total} topics complete</div>',
             unsafe_allow_html=True,
         )
-        st.progress(completed / total if total > 0 else 0)
         st.markdown('<div style="height:6px;"></div>', unsafe_allow_html=True)
 
         has_prev = st.session_state.get("has_prev_checkin", False)
