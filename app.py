@@ -43,8 +43,8 @@ def _load_topic_flows():
 from typing import Optional
 
 TOPICS = [
-    ("🩹 Pain & Medications", "pain"),
     ("🍽️  Nutrition & Fluids", "nutrition"),
+    ("🩹 Pain & Medications", "pain"),
     ("👄 Oral Symptoms", "oral"),
     ("🤢 GI Symptoms", "gi"),
     ("😴 Fatigue & Sleep", "fatigue"),
@@ -4888,6 +4888,24 @@ def _render_suggested_reply_buttons(
     return clicked
 
 
+def _render_numeric_choice_buttons(
+    values: list[int],
+    key_prefix: str,
+) -> Optional[int]:
+    clean_values = [int(v) for v in values]
+    if not clean_values:
+        return None
+    clicked = None
+    st.markdown('<div class="common-answer-buttons">', unsafe_allow_html=True)
+    cols = st.columns(len(clean_values))
+    for idx, value in enumerate(clean_values):
+        with cols[idx]:
+            if st.button(str(value), key=f"{key_prefix}_{idx}", use_container_width=True):
+                clicked = value
+    st.markdown('</div>', unsafe_allow_html=True)
+    return clicked
+
+
 def _mark_submission_once(submitted_key: str, candidate: str) -> bool:
     if not candidate or st.session_state.get(submitted_key) == candidate:
         return False
@@ -5146,6 +5164,7 @@ def _clear_step_inputs(topic_key: str, step: dict):
             f"text_{topic_key}_{sid}",
             f"text_{topic_key}_{sid}_submitted",
             f"num_{topic_key}_{sid}",
+            f"num_text_{topic_key}_{sid}",
             f"suggested_{topic_key}_{sid}",
             f"suggested_{topic_key}_{sid}_submitted",
             f"_vt_{topic_key}_{sid}_num",
@@ -5739,6 +5758,17 @@ def render_input(topic_key: str, step: dict):
         max_v = int(step.get("max_v", 10))
         default_v = int(step.get("default_v", min_v))
         is_weight_step = topic_key == "nutrition" and sid == "weight"
+        direct_button_values = list(range(min_v, max_v + 1)) if (max_v - min_v) <= 10 and not is_weight_step else []
+
+        if direct_button_values:
+            clicked_value = _render_numeric_choice_buttons(
+                direct_button_values,
+                key_prefix=f"num_btn_{topic_key}_{sid}",
+            )
+            if clicked_value is not None:
+                handle_answer(topic_key, step, clicked_value, source="structured")
+                return
+
         with st.form(f"form_{topic_key}_{sid}_number", clear_on_submit=False):
             if is_weight_step:
                 unit_key = f"unit_{topic_key}_{sid}"
@@ -5752,25 +5782,34 @@ def render_input(topic_key: str, step: dict):
                 )
             else:
                 unit = "lbs"
-            slider_col, mic_col = st.columns([20, 1], vertical_alignment="center")
-            with slider_col:
-                slider_min = min_v
-                slider_max = max_v
-                slider_default = max(min(default_v, slider_max), slider_min)
-                slider_label = f"Choose a number from {min_v} to {max_v}"
+            if is_weight_step:
+                quick_values = [100, 120, 140, 160, 180, 200, 220] if unit == "lbs" else [45, 55, 65, 75, 85, 95, 105]
+                clicked_weight = _render_numeric_choice_buttons(
+                    quick_values,
+                    key_prefix=f"weight_btn_{topic_key}_{sid}_{unit}",
+                )
+                if clicked_weight is not None:
+                    final_value = clicked_weight if unit == "lbs" else round(clicked_weight * 2.20462, 1)
+                    handle_answer(topic_key, step, final_value, source="structured", display_override=f"{clicked_weight} {unit}")
+                    return
+
+            input_col, mic_col = st.columns([20, 1], vertical_alignment="center")
+            with input_col:
+                input_min = min_v
+                input_max = max_v
+                input_default = max(min(default_v, input_max), input_min)
+                input_label = f"Enter a number from {min_v} to {max_v}"
                 if is_weight_step and unit == "kg":
-                    slider_min = max(20, round(min_v / 2.20462))
-                    slider_max = round(max_v / 2.20462)
-                    slider_default = max(min(round(default_v / 2.20462), slider_max), slider_min)
-                    slider_label = f"Choose your weight in kilograms from {slider_min} to {slider_max}"
+                    input_min = max(20, round(min_v / 2.20462))
+                    input_max = round(max_v / 2.20462)
+                    input_default = max(min(round(default_v / 2.20462), input_max), input_min)
+                    input_label = f"Enter your weight in kilograms from {input_min} to {input_max}"
                 elif is_weight_step:
-                    slider_label = f"Choose your weight in pounds from {slider_min} to {slider_max}"
-                value = st.slider(
-                    slider_label,
-                    min_value=slider_min,
-                    max_value=slider_max,
-                    value=slider_default,
-                    key=f"num_{topic_key}_{sid}",
+                    input_label = f"Enter your weight in pounds from {input_min} to {input_max}"
+                value_text = st.text_input(
+                    input_label,
+                    key=f"num_text_{topic_key}_{sid}",
+                    value=str(input_default),
                 )
             with mic_col:
                 st.markdown('<div class="inline-voice-row">', unsafe_allow_html=True)
@@ -5778,11 +5817,25 @@ def render_input(topic_key: str, step: dict):
                 st.markdown('</div>', unsafe_allow_html=True)
             submitted = st.form_submit_button("Continue", type="primary", use_container_width=True)
         if submitted:
-            final_value = value
-            if is_weight_step and unit == "kg":
-                final_value = round(value * 2.20462, 1)
-            handle_answer(topic_key, step, final_value, source="structured", display_override=f"{value} {unit}")
-            return
+            typed_value = (value_text or "").strip()
+            try:
+                numeric_value = float(typed_value)
+            except (TypeError, ValueError):
+                st.warning("Please enter a valid number.")
+            else:
+                final_value = numeric_value
+                display_value = typed_value
+                if is_weight_step and unit == "kg":
+                    final_value = round(numeric_value * 2.20462, 1)
+                    display_value = f"{typed_value} kg"
+                elif is_weight_step:
+                    display_value = f"{typed_value} lbs"
+                if float(final_value) < min_v or float(final_value) > max_v:
+                    st.warning(f"Please enter a value between {min_v} and {max_v}.")
+                else:
+                    int_or_float = int(final_value) if float(final_value).is_integer() else round(float(final_value), 1)
+                    handle_answer(topic_key, step, int_or_float, source="structured", display_override=display_value)
+                    return
         if _process_number_submission(topic_key, step, voice_text or "", f"voice_{topic_key}_{sid}_submitted"):
             return
         st.markdown('</div>', unsafe_allow_html=True)
@@ -6453,3 +6506,4 @@ elif stage == "report":
     screen_report()
 else:
     screen_login()
+
