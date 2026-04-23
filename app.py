@@ -824,15 +824,35 @@ div[data-baseweb="select"] > div {
 }
 
 .chat-history {
-    padding: 14px 14px 8px 14px;
+    padding: 14px 14px 2px 14px;
     min-height: 0;
     background:
         linear-gradient(180deg, rgba(250,252,254,0.88) 0%, rgba(244,248,252,0.92) 100%);
 }
 
 .composer-wrap {
-    padding: 0 12px 12px 12px;
+    padding: 4px 12px 12px 12px;
     background: transparent;
+}
+
+.topic-toolbar + div[data-testid="stButton"] {
+    position: sticky;
+    top: 10px;
+    z-index: 25;
+    display: flex;
+    justify-content: flex-end;
+    margin: 0 0 8px 0;
+}
+
+.topic-toolbar + div[data-testid="stButton"] > button {
+    width: auto !important;
+    min-width: 230px !important;
+    border-radius: 999px !important;
+    padding: 0.55rem 1rem !important;
+    border: 1px solid #f2c4c4 !important;
+    background: #fff6f6 !important;
+    color: #a33b3b !important;
+    box-shadow: 0 8px 16px rgba(163, 59, 59, 0.08) !important;
 }
 
 .chat-row {
@@ -1433,6 +1453,11 @@ div[data-baseweb="select"] > div {
     padding: 12px;
 }
 
+.composer-inline-voice {
+    display: flex;
+    align-items: stretch;
+}
+
 
 .composer-row {
     display: flex;
@@ -1518,7 +1543,7 @@ div[data-baseweb="select"] > div {
     background: transparent;
     border: none;
     border-radius: 16px;
-    min-height: 46px;
+    min-height: 52px;
     width: 100%;
     min-width: 100%;
     max-width: 100%;
@@ -1526,7 +1551,7 @@ div[data-baseweb="select"] > div {
     align-items: center;
     justify-content: center;
     padding: 0;
-    margin: 10px 0 0 0;
+    margin: 0;
     box-shadow: none !important;
 }
 
@@ -1543,7 +1568,7 @@ div[data-baseweb="select"] > div {
 .composer-shell [data-testid="stAudioInput"] button {
     border-radius: 16px !important;
     width: 100% !important;
-    height: 48px !important;
+    height: 52px !important;
     min-width: 100% !important;
     padding: 0 !important;
     margin: 0 !important;
@@ -5234,32 +5259,31 @@ def render_input(topic_key: str, step: dict):
     state = st.session_state.topic_states[topic_key]
     topic_history = _recent_topic_history(state)
 
-    if st.button("I’m getting tired / need to stop soon", key=f"fatigue_{topic_key}_{sid}", use_container_width=True):
-        _mark_patient_fatigue(topic_key)
-        st.rerun()
-
     # ── Options ─────────────────────────────────────────────────
     if stype == "options":
         st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
         opts = step.get("opts", [])
         form_key = f"form_{topic_key}_{sid}_options"
-        with st.form(form_key, clear_on_submit=False):
-            selected = st.radio("Choose one", opts, key=f"radio_{topic_key}_{sid}", horizontal=(len(opts) <= 3))
-            typed = st.text_input(
-                "Add details or type a different answer",
-                key=f"text_{topic_key}_{sid}",
-                placeholder="Optional details...",
-            )
-            submitted = st.form_submit_button("Continue", type="primary", use_container_width=True)
-        if submitted:
-            typed_clean = (typed or "").strip()
-            if typed_clean:
-                if _process_option_submission(topic_key, step, typed_clean, "typed", f"text_{topic_key}_{sid}_submitted", topic_history):
+        form_col, voice_col = st.columns([7, 1])
+        with form_col:
+            with st.form(form_key, clear_on_submit=False):
+                selected = st.radio("Choose one", opts, key=f"radio_{topic_key}_{sid}", horizontal=(len(opts) <= 3))
+                typed = st.text_input(
+                    "Add details or type a different answer",
+                    key=f"text_{topic_key}_{sid}",
+                    placeholder="Optional details...",
+                )
+                submitted = st.form_submit_button("Continue", type="primary", use_container_width=True)
+            if submitted:
+                typed_clean = (typed or "").strip()
+                if typed_clean:
+                    if _process_option_submission(topic_key, step, typed_clean, "typed", f"text_{topic_key}_{sid}_submitted", topic_history):
+                        return
+                else:
+                    handle_answer(topic_key, step, selected, source="structured")
                     return
-            else:
-                handle_answer(topic_key, step, selected, source="structured")
-                return
-        voice_text = voice_widget(f"{topic_key}_{sid}_opt", label="Mic")
+        with voice_col:
+            voice_text = voice_widget(f"{topic_key}_{sid}_opt", label="Mic")
         if _process_option_submission(topic_key, step, voice_text, "voice", f"voice_{topic_key}_{sid}_submitted", topic_history):
             return
         st.markdown('</div>', unsafe_allow_html=True)
@@ -5270,29 +5294,32 @@ def render_input(topic_key: str, step: dict):
         st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
         opts = step.get("opts", [])
         form_key = f"form_{topic_key}_{sid}_multi"
-        with st.form(form_key, clear_on_submit=False):
-            selected = st.multiselect("Choose all that apply", opts, key=f"multi_{topic_key}_{sid}")
-            typed = st.text_input(
-                "Other or details",
-                key=f"text_{topic_key}_{sid}",
-                placeholder="Optional: type another medication or detail...",
-            )
-            submitted = st.form_submit_button("Continue", type="primary", use_container_width=True)
-        if submitted:
-            typed_clean = (typed or "").strip()
-            if typed_clean and (not selected or selected == ["Other"] or "Other" in selected):
-                payload = selected or ["Other"]
-                if "Other" not in payload and typed_clean:
-                    payload = [*payload, "Other"]
-                handle_answer(topic_key, step, payload, source="structured", display_override=typed_clean, raw_answer=typed_clean)
-                return
-            if selected:
-                handle_answer(topic_key, step, selected, source="structured")
-                return
-            if typed_clean and _process_multiselect_submission(topic_key, step, typed_clean, "typed", f"text_{topic_key}_{sid}_submitted"):
-                return
-            st.warning("Please choose at least one option, or type an answer.")
-        voice_text = voice_widget(f"{topic_key}_{sid}_multi", label="Mic")
+        form_col, voice_col = st.columns([7, 1])
+        with form_col:
+            with st.form(form_key, clear_on_submit=False):
+                selected = st.multiselect("Choose all that apply", opts, key=f"multi_{topic_key}_{sid}")
+                typed = st.text_input(
+                    "Other or details",
+                    key=f"text_{topic_key}_{sid}",
+                    placeholder="Optional: type another medication or detail...",
+                )
+                submitted = st.form_submit_button("Continue", type="primary", use_container_width=True)
+            if submitted:
+                typed_clean = (typed or "").strip()
+                if typed_clean and (not selected or selected == ["Other"] or "Other" in selected):
+                    payload = selected or ["Other"]
+                    if "Other" not in payload and typed_clean:
+                        payload = [*payload, "Other"]
+                    handle_answer(topic_key, step, payload, source="structured", display_override=typed_clean, raw_answer=typed_clean)
+                    return
+                if selected:
+                    handle_answer(topic_key, step, selected, source="structured")
+                    return
+                if typed_clean and _process_multiselect_submission(topic_key, step, typed_clean, "typed", f"text_{topic_key}_{sid}_submitted"):
+                    return
+                st.warning("Please choose at least one option, or type an answer.")
+        with voice_col:
+            voice_text = voice_widget(f"{topic_key}_{sid}_multi", label="Mic")
         if _process_multiselect_submission(topic_key, step, voice_text, "voice", f"voice_{topic_key}_{sid}_submitted"):
             return
         st.markdown('</div>', unsafe_allow_html=True)
@@ -5303,19 +5330,22 @@ def render_input(topic_key: str, step: dict):
         min_v = int(step.get("min_v", 0))
         max_v = int(step.get("max_v", 10))
         default_v = int(step.get("default_v", min_v))
-        with st.form(f"form_{topic_key}_{sid}_number", clear_on_submit=False):
-            value = st.slider(
-                f"Choose a number from {min_v} to {max_v}",
-                min_value=min_v,
-                max_value=max_v,
-                value=max(min(default_v, max_v), min_v),
-                key=f"num_{topic_key}_{sid}",
-            )
-            submitted = st.form_submit_button("Continue", type="primary", use_container_width=True)
-        if submitted:
-            handle_answer(topic_key, step, value, source="structured")
-            return
-        voice_text = voice_widget(f"{topic_key}_{sid}_num", label="Mic")
+        form_col, voice_col = st.columns([7, 1])
+        with form_col:
+            with st.form(f"form_{topic_key}_{sid}_number", clear_on_submit=False):
+                value = st.slider(
+                    f"Choose a number from {min_v} to {max_v}",
+                    min_value=min_v,
+                    max_value=max_v,
+                    value=max(min(default_v, max_v), min_v),
+                    key=f"num_{topic_key}_{sid}",
+                )
+                submitted = st.form_submit_button("Continue", type="primary", use_container_width=True)
+            if submitted:
+                handle_answer(topic_key, step, value, source="structured")
+                return
+        with voice_col:
+            voice_text = voice_widget(f"{topic_key}_{sid}_num", label="Mic")
         if _process_number_submission(topic_key, step, voice_text or "", f"voice_{topic_key}_{sid}_submitted"):
             return
         st.markdown('</div>', unsafe_allow_html=True)
@@ -5336,23 +5366,26 @@ def render_input(topic_key: str, step: dict):
 
         st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
         suggestions = _quick_reply_suggestions(topic_key, state, step)
-        with st.form(f"form_{topic_key}_{sid}_free", clear_on_submit=False):
-            selected_suggestion = None
-            if suggestions:
-                choices = [""] + suggestions + ["Other"]
-                selected_suggestion = st.selectbox(
-                    "Common answers",
-                    choices,
-                    format_func=lambda x: "Choose a common answer..." if x == "" else x,
-                    key=f"suggested_{topic_key}_{sid}",
+        form_col, voice_col = st.columns([7, 1])
+        with form_col:
+            with st.form(f"form_{topic_key}_{sid}_free", clear_on_submit=False):
+                selected_suggestion = None
+                if suggestions:
+                    choices = [""] + suggestions + ["Other"]
+                    selected_suggestion = st.selectbox(
+                        "Common answers",
+                        choices,
+                        format_func=lambda x: "Choose a common answer..." if x == "" else x,
+                        key=f"suggested_{topic_key}_{sid}",
+                    )
+                free_text = st.text_input(
+                    "Your answer",
+                    placeholder=step.get("placeholder", "Please describe..."),
+                    key=widget_key,
                 )
-            free_text = st.text_input(
-                "Your answer",
-                placeholder=step.get("placeholder", "Please describe..."),
-                key=widget_key,
-            )
-            submitted = st.form_submit_button("Continue", type="primary", use_container_width=True)
-        voice_text = voice_widget(f"{topic_key}_{sid}", label="Mic")
+                submitted = st.form_submit_button("Continue", type="primary", use_container_width=True)
+        with voice_col:
+            voice_text = voice_widget(f"{topic_key}_{sid}", label="Mic")
         if voice_text and voice_text != st.session_state.get(f"{widget_key}_voice_sync"):
             st.session_state[f"{widget_key}_voice_sync"] = voice_text
             st.session_state[submit_key] = voice_text
@@ -5512,6 +5545,11 @@ def render_topic_detail(topic_label: str, topic_key: str):
         if first_step:
             _ensure_step_prompted(topic_key, state, first_step)
 
+    st.markdown('<div class="topic-toolbar"></div>', unsafe_allow_html=True)
+    if st.button("I’m getting tired / need to stop soon", key=f"fatigue_topic_{topic_key}", use_container_width=False):
+        _mark_patient_fatigue(topic_key)
+        st.rerun()
+
     # ── Header with progress bar ─────────────────────────────────
     answered, applicable = get_topic_progress(topic_key, state.get("data", {}), state.get("raw_answers"))
     _, _, completed_topics = _overall_progress()
@@ -5570,14 +5608,16 @@ def render_topic_detail(topic_label: str, topic_key: str):
         st.markdown('</div><div class="composer-wrap">', unsafe_allow_html=True)
 
         st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
-        with st.form(f"form_pending_{topic_key}_{pending_suffix}", clear_on_submit=False):
-            pending_text = st.text_input(
-                "Reply",
-                key=pending_key,
-                placeholder="Type or speak your answer here...",
-            )
-            pending_submitted = st.form_submit_button("Continue", type="primary", use_container_width=True)
-        with st.container():
+        form_col, voice_col = st.columns([7, 1])
+        with form_col:
+            with st.form(f"form_pending_{topic_key}_{pending_suffix}", clear_on_submit=False):
+                pending_text = st.text_input(
+                    "Reply",
+                    key=pending_key,
+                    placeholder="Type or speak your answer here...",
+                )
+                pending_submitted = st.form_submit_button("Continue", type="primary", use_container_width=True)
+        with voice_col:
             pending_voice = voice_widget(f"pending_{topic_key}_{pending_suffix}", label="Mic")
         if pending_voice and pending_voice != st.session_state.get(f"{pending_key}_voice_sync"):
             st.session_state[f"{pending_key}_voice_sync"] = pending_voice
