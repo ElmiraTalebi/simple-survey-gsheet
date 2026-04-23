@@ -1843,13 +1843,40 @@ def _step_prompt_text(step: dict, topic_key: Optional[str] = None, state: Option
     return question_text
 
 
-def _append_assistant_message(state: dict, text: str):
+def _clear_current_prompt_flags(state: dict):
+    for msg in state.get("chat", []):
+        if msg.get("role") == "assistant":
+            msg["is_current_prompt"] = False
+
+
+def _append_assistant_message(
+    state: dict,
+    text: str,
+    *,
+    prompt_step: Optional[dict] = None,
+    prompt_text: str = "",
+):
     text = (text or "").strip()
     if not text:
         return
     if state["chat"] and state["chat"][-1]["role"] == "assistant" and state["chat"][-1]["content"].strip() == text:
+        if prompt_step or prompt_text:
+            _clear_current_prompt_flags(state)
+            state["chat"][-1]["is_current_prompt"] = True
+            if prompt_step:
+                state["chat"][-1]["prompt_step_id"] = prompt_step.get("id")
+            if prompt_text:
+                state["chat"][-1]["prompt_text"] = prompt_text.strip()
         return
-    state["chat"].append({"role": "assistant", "content": text})
+    message = {"role": "assistant", "content": text}
+    if prompt_step or prompt_text:
+        _clear_current_prompt_flags(state)
+        message["is_current_prompt"] = True
+        if prompt_step:
+            message["prompt_step_id"] = prompt_step.get("id")
+        if prompt_text:
+            message["prompt_text"] = prompt_text.strip()
+    state["chat"].append(message)
 
 
 def _remember_prompted_step(state: dict, step: Optional[dict], prompt_text: str = ""):
@@ -1866,8 +1893,9 @@ def _ensure_step_prompted(topic_key: str, state: dict, step: Optional[dict]):
     if last_id == step.get("id") and (
         last_text == prompt_text or _is_semantically_redundant_question(last_text, prompt_text)
     ):
+        _append_assistant_message(state, last_text or prompt_text, prompt_step=step, prompt_text=prompt_text)
         return
-    _append_assistant_message(state, prompt_text)
+    _append_assistant_message(state, prompt_text, prompt_step=step, prompt_text=prompt_text)
     _remember_prompted_step(state, step, prompt_text)
 
 
@@ -4622,11 +4650,12 @@ def _append_next_question(
         prompt_consumed = True
     if next_text and not prompt_consumed:
         combined = "\n\n".join(part for part in [message, next_text] if part)
-        _append_assistant_message(state, combined)
+        _append_assistant_message(state, combined, prompt_step=next_step, prompt_text=next_text)
         _remember_prompted_step(state, next_step, next_text)
     elif message:
         _append_assistant_message(state, message)
     elif not next_step:
+        _clear_current_prompt_flags(state)
         _remember_prompted_step(state, None, "")
 
 
@@ -5038,7 +5067,7 @@ def _store_followup_prompt(
         "target_step_id": target_step.get("id") if target_step else None,
     }
     combined_prompt = "\n\n".join([part for part in [assistant_message.strip(), question.strip()] if part])
-    _append_assistant_message(state, combined_prompt)
+    _append_assistant_message(state, combined_prompt, prompt_step=step, prompt_text=combined_prompt)
     _remember_prompted_step(state, step, combined_prompt)
 
 
@@ -5125,6 +5154,7 @@ def handle_pending_followup(topic_key: str, answer: str, source: str = "typed"):
     if not answer_key:
         state["waiting_for_followup"] = False
         state.pop("pending_followup", None)
+        _clear_current_prompt_flags(state)
         st.rerun()
         return
 
@@ -5133,6 +5163,7 @@ def handle_pending_followup(topic_key: str, answer: str, source: str = "typed"):
         source_step = STEP_BY_ID.get(source_step_id)
         state["waiting_for_followup"] = False
         state.pop("pending_followup", None)
+        _clear_current_prompt_flags(state)
         if not source_step:
             st.rerun()
             return
@@ -5295,6 +5326,7 @@ def handle_pending_followup(topic_key: str, answer: str, source: str = "typed"):
     st.session_state.pop(f"{pending_key}_voice_sync", None)
     state["waiting_for_followup"] = False
     state.pop("pending_followup", None)
+    _clear_current_prompt_flags(state)
 
     last_topic_data = st.session_state.last_checkin.get(topic_key, {})
     closing = _default_chatty_reply(
@@ -5350,6 +5382,7 @@ def handle_answer(
     if "generated_quick_replies" not in state:
         state["generated_quick_replies"] = {}
     if state.get("last_prompted_step_id") == step.get("id"):
+        _clear_current_prompt_flags(state)
         _remember_prompted_step(state, None, "")
     _clear_step_inputs(topic_key, step)
 
@@ -5950,14 +5983,9 @@ def render_topic_detail(topic_label: str, topic_key: str):
 
     # ── Chat history ─────────────────────────────────────────────
     if state["chat"]:
-        current_prompt_text = (state.get("last_prompted_text") or "").strip()
         with st.container(border=False):
             for msg in state["chat"]:
-                highlight = (
-                    msg.get("role") == "assistant"
-                    and current_prompt_text
-                    and (msg.get("content") or "").strip() == current_prompt_text
-                )
+                highlight = bool(msg.get("role") == "assistant" and msg.get("is_current_prompt"))
                 render_chat_bubble(msg["role"], msg["content"], highlight=highlight)
     st.markdown('</div></div>', unsafe_allow_html=True)
 
