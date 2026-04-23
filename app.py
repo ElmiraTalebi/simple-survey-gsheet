@@ -1471,9 +1471,9 @@ div[data-baseweb="select"] > div {
 }
 
 .composer-shell [data-testid="column"]:last-child {
-    max-width: 122px;
-    min-width: 122px;
-    flex: 0 0 122px;
+    max-width: 98px;
+    min-width: 98px;
+    flex: 0 0 98px;
 }
 
 .composer-shell [data-testid="column"]:last-child > div {
@@ -1482,35 +1482,27 @@ div[data-baseweb="select"] > div {
 
 .composer-voice-panel {
     height: 100%;
-    min-height: 224px;
+    min-height: 164px;
     border: 1px solid #d9e4ed;
     border-radius: 18px;
     background:
         linear-gradient(180deg, rgba(255,255,255,0.98) 0%, rgba(244,248,252,0.98) 100%);
     box-shadow: 0 12px 24px rgba(23, 50, 74, 0.06);
-    padding: 10px;
+    padding: 8px;
     display: flex;
     flex-direction: column;
     justify-content: center;
     align-items: center;
-    gap: 10px;
+    gap: 6px;
 }
 
 .composer-voice-panel .voice-title {
-    font-size: 10px;
+    font-size: 9px;
     font-weight: 800;
     letter-spacing: 0.08em;
     text-transform: uppercase;
     color: #7b8ea3;
     text-align: center;
-}
-
-.composer-voice-panel .voice-hint {
-    font-size: 11px;
-    line-height: 1.45;
-    color: #6f8297;
-    text-align: center;
-    max-width: 84px;
 }
 
 
@@ -1597,24 +1589,27 @@ div[data-baseweb="select"] > div {
 .composer-shell [data-testid="stAudioInput"] {
     background: linear-gradient(180deg, #fdfefe 0%, #f5f9fd 100%);
     border: 1px solid #d7e4ee;
-    border-radius: 18px;
-    min-height: 88px;
+    border-radius: 999px;
+    min-height: 54px;
+    max-width: 54px;
     width: 100%;
     min-width: 100%;
-    max-width: 100%;
+    margin-left: auto;
+    margin-right: auto;
     display: flex;
     align-items: center;
     justify-content: center;
     padding: 0;
-    margin: 0;
+    margin-top: 0;
+    margin-bottom: 0;
     box-shadow: 0 8px 18px rgba(23, 50, 74, 0.06) !important;
     overflow: hidden;
 }
 
 .composer-shell [data-testid="stAudioInput"] > div {
-    width: 100%;
-    min-width: 100%;
-    height: 88px;
+    width: 54px;
+    min-width: 54px;
+    height: 54px;
     display: flex;
     justify-content: center;
     align-items: center;
@@ -1624,11 +1619,11 @@ div[data-baseweb="select"] > div {
 }
 
 .composer-shell [data-testid="stAudioInput"] button {
-    border-radius: 16px !important;
-    width: 100% !important;
-    height: 88px !important;
-    min-height: 88px !important;
-    min-width: 100% !important;
+    border-radius: 999px !important;
+    width: 54px !important;
+    height: 54px !important;
+    min-height: 54px !important;
+    min-width: 54px !important;
     padding: 0 !important;
     margin: 0 !important;
     border: none !important;
@@ -1671,8 +1666,8 @@ div[data-baseweb="select"] > div {
 }
 
 .composer-shell [data-testid="stAudioInput"] button svg {
-    width: 22px !important;
-    height: 22px !important;
+    width: 18px !important;
+    height: 18px !important;
     color: #0f6cbd !important;
 }
 
@@ -2147,6 +2142,7 @@ def _record_agent_trace(topic_key: str, step: dict, pipeline: dict):
         "topic": topic_key,
         "question_id": step.get("id"),
         "question": step.get("text"),
+        "mode": "pipeline",
         "agent_1_answer_interpreter": {
             "matched_option": pipeline.get("matched_option"),
         },
@@ -2176,6 +2172,33 @@ def _record_agent_trace(topic_key: str, step: dict, pipeline: dict):
     st.session_state["last_agent_trace"] = trace
 
 
+def _record_fastpath_trace(
+    topic_key: str,
+    step: dict,
+    answer: Any,
+    source: str,
+    note: str,
+):
+    trace = {
+        "topic": topic_key,
+        "question_id": step.get("id"),
+        "question": step.get("text"),
+        "mode": "fast_path",
+        "source": source,
+        "answer": answer,
+        "agent_1_answer_interpreter": "Skipped",
+        "agent_2_urgency": "Skipped",
+        "agent_3_engagement": "Skipped",
+        "agent_4_doctor_relevance": "Skipped",
+        "agent_5_next_move": "Skipped",
+        "orchestrator": {
+            "decision": note,
+        },
+    }
+    st.session_state.setdefault("agent_traces", []).append(trace)
+    st.session_state["last_agent_trace"] = trace
+
+
 def _mark_patient_fatigue(topic_key: Optional[str] = None):
     st.session_state["patient_fatigue"] = True
     st.session_state["fatigue_requested_at"] = datetime.now().isoformat(timespec="seconds")
@@ -2192,11 +2215,41 @@ def _render_demo_agent_panel():
     if not st.session_state.get("demo_mode"):
         return
     trace = st.session_state.get("last_agent_trace")
-    with st.expander("Demo mode: latest agent decisions", expanded=False):
-        if not trace:
-            st.caption("No agent decisions have been recorded yet.")
-        else:
-            st.json(trace)
+    st.markdown("**Demo Mode: Live Agent Decisions**")
+    if not trace:
+        st.info("No agent decisions recorded yet for this topic step.")
+        return
+
+    mode = trace.get("mode", "pipeline")
+    if mode == "fast_path":
+        st.markdown(
+            f"""
+            <div style="border:1px solid #d7e4ee;border-radius:16px;padding:12px 14px;margin:6px 0 12px 0;background:#f8fbff;">
+              <div style="font-size:11px;font-weight:800;letter-spacing:0.08em;text-transform:uppercase;color:#6b7d92;margin-bottom:8px;">Fast Path</div>
+              <div style="font-size:13px;color:#17324a;line-height:1.5;"><strong>Question:</strong> {_html.escape(str(trace.get("question") or ""))}</div>
+              <div style="font-size:13px;color:#17324a;line-height:1.5;"><strong>Answer:</strong> {_html.escape(str(trace.get("answer") or ""))}</div>
+              <div style="font-size:13px;color:#17324a;line-height:1.5;"><strong>Decision:</strong> {_html.escape(str((trace.get("orchestrator") or {}).get("decision") or ""))}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        return
+
+    st.markdown(
+        f"""
+        <div style="border:1px solid #d7e4ee;border-radius:16px;padding:12px 14px;margin:6px 0 12px 0;background:#f8fbff;">
+          <div style="font-size:11px;font-weight:800;letter-spacing:0.08em;text-transform:uppercase;color:#6b7d92;margin-bottom:8px;">Pipeline</div>
+          <div style="font-size:13px;color:#17324a;line-height:1.55;"><strong>Question:</strong> {_html.escape(str(trace.get("question") or ""))}</div>
+          <div style="font-size:13px;color:#17324a;line-height:1.55;"><strong>Agent 1:</strong> {_html.escape(str((trace.get("agent_1_answer_interpreter") or {}).get("matched_option") or "No structured match"))}</div>
+          <div style="font-size:13px;color:#17324a;line-height:1.55;"><strong>Agent 2:</strong> urgency tier {_html.escape(str((trace.get("agent_2_urgency") or {}).get("urgency_tier") or 0))}</div>
+          <div style="font-size:13px;color:#17324a;line-height:1.55;"><strong>Agent 3:</strong> wants_to_stop={_html.escape(str((trace.get("agent_3_engagement") or {}).get("wants_to_stop") or False))}, reduce_follow_up={_html.escape(str((trace.get("agent_3_engagement") or {}).get("reduce_follow_up") or False))}</div>
+          <div style="font-size:13px;color:#17324a;line-height:1.55;"><strong>Agent 4:</strong> priority {_html.escape(str((trace.get("agent_4_doctor_relevance") or {}).get("clinical_priority") or "medium"))}</div>
+          <div style="font-size:13px;color:#17324a;line-height:1.55;"><strong>Agent 5:</strong> follow_up_triggered={_html.escape(str((trace.get("agent_5_next_move") or {}).get("follow_up_triggered") or False))}</div>
+          <div style="font-size:13px;color:#17324a;line-height:1.55;"><strong>Orchestrator:</strong> {_html.escape(str((trace.get("orchestrator") or {}).get("assistant_message") or "Moved to next step"))}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 
@@ -5147,6 +5200,13 @@ def handle_answer(
         _is_exact_structured_option_reply(answer, verbatim, step, source)
         and not ENABLE_FULL_PIPELINE_FOR_EXACT_STRUCTURED_OPTIONS
     ):
+        _record_fastpath_trace(
+            topic_key,
+            step,
+            answer,
+            source,
+            "Exact structured option matched. Agents skipped and the app moved to the next regular step.",
+        )
         if topic_is_complete(topic_key, state["data"], state.get("raw_answers")):
             state["status"] = "completed"
             state["chat"].append({
@@ -5166,6 +5226,13 @@ def handle_answer(
     # still go through the agents so the app can skip irrelevant follow-ups.
     # ══════════════════════════════════════════════════════════════
     if source == "structured" and not isinstance(answer, str):
+        _record_fastpath_trace(
+            topic_key,
+            step,
+            answer,
+            source,
+            "Structured numeric or multi-select answer accepted. Agents skipped and the app moved forward.",
+        )
         if topic_is_complete(topic_key, state["data"], state.get("raw_answers")):
             state["status"] = "completed"
             state["chat"].append({
@@ -5283,6 +5350,13 @@ def handle_answer(
 
         else:
             # No OpenAI — use fallback reply
+            _record_fastpath_trace(
+                topic_key,
+                step,
+                answer,
+                source,
+                "OpenAI unavailable. Used fallback handling without live agent calls.",
+            )
             assistant_message = _default_chatty_reply(
                 topic_key, answer, step, last_topic_data
             )
@@ -5347,7 +5421,7 @@ def render_input(topic_key: str, step: dict):
         with voice_col:
             st.markdown('<div class="composer-voice-panel"><div class="voice-title">Voice</div>', unsafe_allow_html=True)
             voice_text = voice_widget(f"{topic_key}_{sid}_opt", label="Mic")
-            st.markdown('<div class="voice-hint">Tap to answer by voice</div></div>', unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
         if _process_option_submission(topic_key, step, voice_text, "voice", f"voice_{topic_key}_{sid}_submitted", topic_history):
             return
         st.markdown('</div>', unsafe_allow_html=True)
@@ -5385,7 +5459,7 @@ def render_input(topic_key: str, step: dict):
         with voice_col:
             st.markdown('<div class="composer-voice-panel"><div class="voice-title">Voice</div>', unsafe_allow_html=True)
             voice_text = voice_widget(f"{topic_key}_{sid}_multi", label="Mic")
-            st.markdown('<div class="voice-hint">Tap to answer by voice</div></div>', unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
         if _process_multiselect_submission(topic_key, step, voice_text, "voice", f"voice_{topic_key}_{sid}_submitted"):
             return
         st.markdown('</div>', unsafe_allow_html=True)
@@ -5413,7 +5487,7 @@ def render_input(topic_key: str, step: dict):
         with voice_col:
             st.markdown('<div class="composer-voice-panel"><div class="voice-title">Voice</div>', unsafe_allow_html=True)
             voice_text = voice_widget(f"{topic_key}_{sid}_num", label="Mic")
-            st.markdown('<div class="voice-hint">Tap to answer by voice</div></div>', unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
         if _process_number_submission(topic_key, step, voice_text or "", f"voice_{topic_key}_{sid}_submitted"):
             return
         st.markdown('</div>', unsafe_allow_html=True)
@@ -5455,7 +5529,7 @@ def render_input(topic_key: str, step: dict):
         with voice_col:
             st.markdown('<div class="composer-voice-panel"><div class="voice-title">Voice</div>', unsafe_allow_html=True)
             voice_text = voice_widget(f"{topic_key}_{sid}", label="Mic")
-            st.markdown('<div class="voice-hint">Tap to answer by voice</div></div>', unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
         if voice_text and voice_text != st.session_state.get(f"{widget_key}_voice_sync"):
             st.session_state[f"{widget_key}_voice_sync"] = voice_text
             st.session_state[submit_key] = voice_text
@@ -5650,6 +5724,8 @@ def render_topic_detail(topic_label: str, topic_key: str):
             for msg in state["chat"]:
                 render_chat_bubble(msg["role"], msg["content"])
 
+    _render_demo_agent_panel()
+
     # ── Completed ────────────────────────────────────────────────
     if state["status"] == "completed":
         st.markdown(
@@ -5690,7 +5766,7 @@ def render_topic_detail(topic_label: str, topic_key: str):
         with voice_col:
             st.markdown('<div class="composer-voice-panel"><div class="voice-title">Voice</div>', unsafe_allow_html=True)
             pending_voice = voice_widget(f"pending_{topic_key}_{pending_suffix}", label="Mic")
-            st.markdown('<div class="voice-hint">Tap to answer by voice</div></div>', unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
         if pending_voice and pending_voice != st.session_state.get(f"{pending_key}_voice_sync"):
             st.session_state[f"{pending_key}_voice_sync"] = pending_voice
             st.session_state[pending_submit_key] = pending_voice
@@ -5969,10 +6045,10 @@ def screen_main():
     render_sidebar()
 
     selected = _sync_guided_topic_selection()
-    _render_demo_agent_panel()
 
     if not selected:
         st.markdown('<div class="card"><div style="font-size:12px;font-weight:800;color:#6b7b92;text-transform:uppercase;letter-spacing:0.08em;">Check-in complete</div><div style="font-size:28px;font-weight:800;letter-spacing:-0.03em;margin-top:6px;">You have finished the guided topics</div><div style="font-size:14px;color:#5f6f84;line-height:1.7;margin-top:8px;">You can submit the check-in from the sidebar, or add anything else below for your care team.</div></div>', unsafe_allow_html=True)
+        _render_demo_agent_panel()
         render_freeform_chat()
         return
 
