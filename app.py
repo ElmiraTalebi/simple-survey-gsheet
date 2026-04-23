@@ -835,6 +835,10 @@ div[data-baseweb="select"] > div {
     background: transparent;
 }
 
+.topic-response-region {
+    margin-top: -8px;
+}
+
 .topic-toolbar + div[data-testid="stButton"] {
     position: sticky;
     top: 10px;
@@ -6096,6 +6100,7 @@ def render_topic_detail(topic_label: str, topic_key: str):
 
     # ── Completed ────────────────────────────────────────────────
     with main_col:
+        st.markdown('<div class="topic-response-region">', unsafe_allow_html=True)
         if state["status"] == "completed":
             st.markdown(
                 '<div class="completion-badge">✅ This topic is complete</div>',
@@ -6109,6 +6114,7 @@ def render_topic_detail(topic_label: str, topic_key: str):
                 })
                 state["data"].pop("_correction_note", None)
                 st.rerun()
+            st.markdown('</div>', unsafe_allow_html=True)
             return
 
         # ── Current question ─────────────────────────────────────────
@@ -6166,11 +6172,13 @@ def render_topic_detail(topic_label: str, topic_key: str):
                     handle_pending_followup(topic_key, candidate, source="followup")
 
             st.markdown('</div>', unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
             return
         next_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
         if next_step:
             _ensure_step_prompted(topic_key, state, next_step)
             render_input(topic_key, next_step)
+        st.markdown('</div>', unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════════════════════════════
