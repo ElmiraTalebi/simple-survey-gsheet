@@ -824,14 +824,15 @@ div[data-baseweb="select"] > div {
 }
 
 .chat-history {
-    padding: 14px 14px 2px 14px;
+    padding: 14px 14px 0 14px;
     min-height: 0;
     background:
         linear-gradient(180deg, rgba(250,252,254,0.88) 0%, rgba(244,248,252,0.92) 100%);
 }
 
 .composer-wrap {
-    padding: 4px 12px 12px 12px;
+    padding: 0 12px 12px 12px;
+    margin-top: -2px;
     background: transparent;
 }
 
@@ -5947,8 +5948,6 @@ def render_topic_detail(topic_label: str, topic_key: str):
             pending_submit_key = f"{pending_key}_submitted"
             if pending_key not in st.session_state:
                 st.session_state[pending_key] = ""
-            st.markdown('<div class="composer-wrap">', unsafe_allow_html=True)
-
             st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
             with st.form(f"form_pending_{topic_key}_{pending_suffix}", clear_on_submit=False):
                 text_col, mic_col = st.columns([20, 1], vertical_alignment="bottom")
@@ -5974,14 +5973,11 @@ def render_topic_detail(topic_label: str, topic_key: str):
                 handle_pending_followup(topic_key, pending_text, source="followup")
 
             st.markdown('</div>', unsafe_allow_html=True)
-            st.markdown('</div>', unsafe_allow_html=True)
             return
         next_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
         if next_step:
             _ensure_step_prompted(topic_key, state, next_step)
-            st.markdown('<div class="composer-wrap">', unsafe_allow_html=True)
             render_input(topic_key, next_step)
-            st.markdown('</div>', unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════════════════════════════
