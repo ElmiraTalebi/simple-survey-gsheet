@@ -5830,6 +5830,7 @@ def render_input(topic_key: str, step: dict):
         default_v = int(step.get("default_v", min_v))
         is_weight_step = topic_key == "nutrition" and sid == "weight"
         direct_button_values = list(range(min_v, max_v + 1)) if (max_v - min_v) <= 10 and not is_weight_step else []
+        unit = "lbs"
 
         if direct_button_values:
             clicked_value = _render_numeric_choice_buttons(
@@ -5840,30 +5841,33 @@ def render_input(topic_key: str, step: dict):
                 handle_answer(topic_key, step, clicked_value, source="structured")
                 return
 
-        with st.form(f"form_{topic_key}_{sid}_number", clear_on_submit=False):
-            if is_weight_step:
-                unit_key = f"unit_{topic_key}_{sid}"
-                if unit_key not in st.session_state:
-                    st.session_state[unit_key] = "lbs"
-                unit = st.radio(
-                    "Weight unit",
-                    ["lbs", "kg"],
-                    key=unit_key,
-                    horizontal=True,
+        if is_weight_step:
+            unit_key = f"unit_{topic_key}_{sid}"
+            if unit_key not in st.session_state:
+                st.session_state[unit_key] = "lbs"
+            unit = st.radio(
+                "Weight unit",
+                ["lbs", "kg"],
+                key=unit_key,
+                horizontal=True,
+            )
+            quick_values = [100, 120, 140, 160, 180, 200, 220] if unit == "lbs" else [45, 55, 65, 75, 85, 95, 105]
+            clicked_weight = _render_numeric_choice_buttons(
+                quick_values,
+                key_prefix=f"weight_btn_{topic_key}_{sid}_{unit}",
+            )
+            if clicked_weight is not None:
+                final_value = clicked_weight if unit == "lbs" else round(clicked_weight * 2.20462, 1)
+                handle_answer(
+                    topic_key,
+                    step,
+                    final_value,
+                    source="structured",
+                    display_override=f"{clicked_weight} {unit}",
                 )
-            else:
-                unit = "lbs"
-            if is_weight_step:
-                quick_values = [100, 120, 140, 160, 180, 200, 220] if unit == "lbs" else [45, 55, 65, 75, 85, 95, 105]
-                clicked_weight = _render_numeric_choice_buttons(
-                    quick_values,
-                    key_prefix=f"weight_btn_{topic_key}_{sid}_{unit}",
-                )
-                if clicked_weight is not None:
-                    final_value = clicked_weight if unit == "lbs" else round(clicked_weight * 2.20462, 1)
-                    handle_answer(topic_key, step, final_value, source="structured", display_override=f"{clicked_weight} {unit}")
-                    return
+                return
 
+        with st.form(f"form_{topic_key}_{sid}_number", clear_on_submit=False):
             input_col, mic_col = st.columns([20, 1], vertical_alignment="center")
             with input_col:
                 input_min = min_v
