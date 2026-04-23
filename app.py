@@ -839,6 +839,242 @@ div[data-baseweb="select"] > div {
     margin-top: -8px;
 }
 
+.topic-progress-card {
+    border: 1px solid #d8e4ee;
+    border-radius: 18px;
+    padding: 12px 14px;
+    background: linear-gradient(180deg, rgba(255,255,255,0.96) 0%, rgba(247,250,253,0.96) 100%);
+    box-shadow: 0 8px 18px rgba(23, 50, 74, 0.05);
+    margin: 6px 0 10px 0;
+}
+
+.topic-progress-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 8px;
+}
+
+.topic-progress-title {
+    font-size: 12px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #6b7d92;
+}
+
+.topic-progress-count {
+    font-size: 13px;
+    font-weight: 800;
+    color: #153652;
+}
+
+.topic-progress-track {
+    width: 100%;
+    height: 8px;
+    border-radius: 999px;
+    background: #e8eff6;
+    overflow: hidden;
+}
+
+.topic-progress-fill {
+    height: 100%;
+    border-radius: 999px;
+    background: linear-gradient(90deg, #ff6b6b 0%, #ff8d74 100%);
+}
+
+.topic-progress-note {
+    margin-top: 8px;
+    font-size: 12px;
+    line-height: 1.55;
+    color: #5f7386;
+}
+
+.topic-fatigue-note {
+    margin-top: 8px;
+    padding: 8px 10px;
+    border-radius: 12px;
+    border: 1px solid #f2d7c9;
+    background: #fff7f2;
+    color: #8c5130;
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+.report-priority-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    margin: 16px 0 18px 0;
+}
+
+.report-priority-card {
+    border-radius: 18px;
+    padding: 14px;
+    border: 1px solid #d8e4ee;
+    background: #ffffff;
+    box-shadow: 0 8px 18px rgba(23, 50, 74, 0.05);
+}
+
+.report-priority-card.red {
+    background: linear-gradient(180deg, #fff6f6 0%, #fff0f0 100%);
+    border-color: #efb0b0;
+}
+
+.report-priority-card.yellow {
+    background: linear-gradient(180deg, #fffaf0 0%, #fff6e5 100%);
+    border-color: #edd28d;
+}
+
+.report-priority-card.green {
+    background: linear-gradient(180deg, #f5fff6 0%, #edf9ef 100%);
+    border-color: #aad3b0;
+}
+
+.report-priority-card.blue {
+    background: linear-gradient(180deg, #f5faff 0%, #eef5ff 100%);
+    border-color: #bfd3f0;
+}
+
+.report-priority-label {
+    font-size: 11px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #6b7d92;
+    margin-bottom: 6px;
+}
+
+.report-priority-count {
+    font-size: 28px;
+    font-weight: 800;
+    color: #10233d;
+    letter-spacing: -0.04em;
+    margin-bottom: 6px;
+}
+
+.report-priority-text {
+    font-size: 12px;
+    line-height: 1.55;
+    color: #496177;
+}
+
+.report-section-title {
+    font-size: 12px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #6b7d92;
+    margin: 18px 0 10px 0;
+}
+
+.report-comparison-table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    overflow: hidden;
+    border: 1px solid #d8e4ee;
+    border-radius: 18px;
+    background: #ffffff;
+    box-shadow: 0 8px 18px rgba(23, 50, 74, 0.05);
+}
+
+.report-comparison-table th,
+.report-comparison-table td {
+    padding: 12px 14px;
+    text-align: left;
+    border-bottom: 1px solid #e8eef4;
+    font-size: 13px;
+    color: #17324a;
+}
+
+.report-comparison-table th {
+    font-size: 11px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #6b7d92;
+    background: #f8fbfe;
+}
+
+.report-structured-topic {
+    border: 1px solid #d8e4ee;
+    border-radius: 20px;
+    background: #ffffff;
+    box-shadow: 0 8px 18px rgba(23, 50, 74, 0.05);
+    padding: 14px 16px;
+    margin-bottom: 12px;
+}
+
+.report-structured-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 10px;
+}
+
+.report-structured-name {
+    font-size: 15px;
+    font-weight: 800;
+    color: #153652;
+}
+
+.report-trend-pill {
+    border-radius: 999px;
+    padding: 4px 10px;
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    background: #edf3f9;
+    color: #567086;
+}
+
+.report-structured-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+}
+
+.report-structured-item {
+    border: 1px solid #e4ebf2;
+    border-radius: 14px;
+    padding: 10px 12px;
+    background: #fbfdff;
+}
+
+.report-structured-key {
+    font-size: 10px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #7d90a3;
+    margin-bottom: 4px;
+}
+
+.report-structured-value {
+    font-size: 13px;
+    line-height: 1.45;
+    color: #18344d;
+}
+
+.report-missing-list {
+    border: 1px solid #edd28d;
+    border-radius: 18px;
+    background: linear-gradient(180deg, #fffaf0 0%, #fff7e8 100%);
+    padding: 12px 14px;
+    margin: 14px 0 18px 0;
+}
+
+@media (max-width: 1100px) {
+    .report-priority-grid,
+    .report-structured-grid {
+        grid-template-columns: 1fr 1fr;
+    }
+}
+
 .topic-toolbar + div[data-testid="stButton"] {
     position: sticky;
     top: 10px;
@@ -4444,6 +4680,81 @@ def _natural_summary(topic_key: str, data: dict) -> str:
     return f"{answered} details were recorded last visit." if answered else ""
 
 
+def _topic_progress_card_html(topic_key: str, state: dict) -> str:
+    answered, applicable = get_topic_progress(topic_key, state.get("data", {}), state.get("raw_answers"))
+    remaining = max(applicable - answered, 0)
+    percent = 0 if applicable <= 0 else int(round((answered / max(applicable, 1)) * 100))
+    note = (
+        f"You are {answered} questions into this topic, with {remaining} important "
+        f"{'question' if remaining == 1 else 'questions'} left."
+    )
+    fatigue_html = ""
+    if st.session_state.get("patient_fatigue") or state.get("_patient_fatigue"):
+        fatigue_html = (
+            '<div class="topic-fatigue-note">'
+            'The tired / stop-soon signal is active. The system will keep things shorter, '
+            'focus on the most important remaining questions, and allow a partial save.'
+            '</div>'
+        )
+    return (
+        '<div class="topic-progress-card">'
+        '<div class="topic-progress-top">'
+        '<div class="topic-progress-title">Topic progress</div>'
+        f'<div class="topic-progress-count">{answered}/{max(applicable, 1)}</div>'
+        '</div>'
+        '<div class="topic-progress-track">'
+        f'<div class="topic-progress-fill" style="width:{percent}%;"></div>'
+        '</div>'
+        f'<div class="topic-progress-note">{_html.escape(note)}</div>'
+        f'{fatigue_html}'
+        '</div>'
+    )
+
+
+def _answered_step_entries(topic_key: str, state: dict) -> list[tuple[dict, str]]:
+    entries = []
+    for step in FLOWS.get(topic_key, []):
+        step_id = step.get("id")
+        if not step_id or step_id not in state.get("data", {}):
+            continue
+        if str(step_id).startswith("_"):
+            continue
+        value = state["data"].get(step_id)
+        if value in (None, "", [], {}):
+            continue
+        value_text = ", ".join(str(v) for v in value) if isinstance(value, list) else str(value)
+        entries.append((step, value_text))
+    topic_note = str(state.get("data", {}).get("_topic_note") or "").strip()
+    if topic_note:
+        entries.append(({"id": "_topic_note", "text": "Extra information for this topic"}, topic_note))
+    return entries
+
+
+def _rewind_topic_to_step(topic_key: str, step_id: str):
+    state = st.session_state.topic_states[topic_key]
+    flow = FLOWS.get(topic_key, [])
+    seen = False
+    for step in flow:
+        current_id = step.get("id")
+        if current_id == step_id:
+            seen = True
+        if not seen:
+            continue
+        state["data"].pop(current_id, None)
+        state["raw_answers"].pop(current_id, None)
+        state["followup_counts"].pop(current_id, None)
+        state.pop(f"{current_id}_doctor_note", None)
+    if step_id == "_topic_note":
+        state["data"].pop("_topic_note", None)
+        state["raw_answers"].pop("_topic_note", None)
+    state["status"] = "in_progress"
+    state["waiting_for_followup"] = False
+    state.pop("pending_followup", None)
+    _clear_current_prompt_flags(state)
+    _remember_prompted_step(state, None, "")
+    _append_assistant_message(state, "Let's update that answer.")
+
+
 def _report_topic_fallback(topic_key: str, topic_label: str, last_topic_data: dict, current_topic_data: dict) -> dict:
     last_summary = _natural_summary(topic_key, last_topic_data) if last_topic_data else "No prior details recorded."
     current_summary = _natural_summary(topic_key, current_topic_data) if current_topic_data else "Not answered this visit."
@@ -4588,6 +4899,147 @@ def _render_report_topic_detail(insight: dict, all_data: dict):
             with col2:
                 st.markdown("**Current visit details**")
                 st.markdown(now_html or '<div style="color:#7a8ea4;">No current details recorded.</div>', unsafe_allow_html=True)
+
+
+def _report_display_value(value: Any) -> str:
+    if value in (None, "", [], {}):
+        return "Unknown"
+    if isinstance(value, list):
+        return ", ".join(str(v) for v in value)
+    return str(value)
+
+
+def _topic_missing_items(topic_key: str, current_topic_data: dict, raw_answers: Optional[dict] = None) -> list[str]:
+    missing = []
+    next_step = get_next_step(topic_key, current_topic_data, raw_answers)
+    if next_step:
+        missing.append(next_step.get("text", "More information needed"))
+    return missing
+
+
+def _report_priority_groups(topic_insights: list[dict], all_data: dict) -> dict:
+    groups = {"new": [], "worse": [], "missing": [], "better": []}
+    for insight in topic_insights:
+        topic_name = insight.get("topic_label", "").split(" ", 1)[1] if " " in insight.get("topic_label", "") else insight.get("topic_label", "")
+        status = insight.get("status", "stable")
+        if status == "new_issue":
+            groups["new"].append(topic_name)
+        elif status == "worsened":
+            groups["worse"].append(topic_name)
+        elif status == "improved":
+            groups["better"].append(topic_name)
+
+        topic_key = insight.get("topic_key")
+        if not topic_key:
+            continue
+        current_topic_data = all_data.get(topic_key, {}) or {}
+        topic_state = st.session_state.topic_states.get(topic_key, {})
+        raw_answers = topic_state.get("raw_answers", {})
+        missing_items = _topic_missing_items(topic_key, current_topic_data, raw_answers)
+        for item in missing_items:
+            groups["missing"].append(f"{topic_name}: {item}")
+    return groups
+
+
+def _render_report_priority_board(topic_insights: list[dict], all_data: dict):
+    groups = _report_priority_groups(topic_insights, all_data)
+    cards = [
+        ("🔴 New problems", len(groups["new"]), "; ".join(groups["new"][:3]) or "No new problems highlighted.", "red"),
+        ("🔴 Worsening", len(groups["worse"]), "; ".join(groups["worse"][:3]) or "No worsening symptoms highlighted.", "red"),
+        ("🟡 Missing information", len(groups["missing"]), "; ".join(groups["missing"][:3]) or "No key gaps remain.", "yellow"),
+        ("🟢 Improvements", len(groups["better"]), "; ".join(groups["better"][:3]) or "No improvements highlighted.", "green"),
+    ]
+    parts = ['<div class="report-section-title">What needs attention first</div>', '<div class="report-priority-grid">']
+    for label, count, text, css_class in cards:
+        parts.append(
+            f'<div class="report-priority-card {css_class}">'
+            f'<div class="report-priority-label">{_html.escape(label)}</div>'
+            f'<div class="report-priority-count">{count}</div>'
+            f'<div class="report-priority-text">{_html.escape(text)}</div>'
+            '</div>'
+        )
+    parts.append('</div>')
+    st.markdown("".join(parts), unsafe_allow_html=True)
+
+
+def _render_report_missing_info(topic_insights: list[dict], all_data: dict):
+    groups = _report_priority_groups(topic_insights, all_data)
+    missing = groups["missing"]
+    if not missing:
+        return
+    items = "".join(f"<li>{_html.escape(item)}</li>" for item in missing[:10])
+    st.markdown(
+        '<div class="report-section-title">Missing information</div>'
+        f'<div class="report-missing-list"><ul style="margin:0;padding-left:18px;">{items}</ul></div>',
+        unsafe_allow_html=True,
+    )
+
+
+def _render_report_comparison_table(topic_insights: list[dict]):
+    rows = []
+    for insight in topic_insights:
+        topic_name = insight.get("topic_label", "").split(" ", 1)[1] if " " in insight.get("topic_label", "") else insight.get("topic_label", "")
+        trend = _report_status_text(insight.get("status", "stable"))
+        rows.append(
+            "<tr>"
+            f"<td>{_html.escape(topic_name)}</td>"
+            f"<td>{_html.escape(str(insight.get('last_summary') or 'No prior details recorded.'))}</td>"
+            f"<td>{_html.escape(str(insight.get('current_summary') or 'Not answered this visit.'))}</td>"
+            f"<td>{_html.escape(trend)}</td>"
+            "</tr>"
+        )
+    st.markdown(
+        '<div class="report-section-title">Last visit vs current visit</div>'
+        '<table class="report-comparison-table">'
+        '<thead><tr><th>Topic</th><th>Last</th><th>Now</th><th>Trend</th></tr></thead>'
+        f'<tbody>{"".join(rows)}</tbody></table>',
+        unsafe_allow_html=True,
+    )
+
+
+def _render_report_structured_sections(topic_insights: list[dict], all_data: dict):
+    st.markdown('<div class="report-section-title">Structured topic summary</div>', unsafe_allow_html=True)
+    last_ck = st.session_state.get("last_checkin", {})
+    for insight in topic_insights:
+        topic_key = insight.get("topic_key")
+        if not topic_key:
+            continue
+        topic_name = insight.get("topic_label", "").split(" ", 1)[1] if " " in insight.get("topic_label", "") else insight.get("topic_label", "")
+        current_topic_data = all_data.get(topic_key, {}) or {}
+        last_topic_data = last_ck.get(topic_key, {}) or {}
+        fields = _SUMMARY_FIELDS.get(topic_key, [])
+        items = []
+        for field_id, label in fields:
+            if field_id not in current_topic_data and field_id not in last_topic_data:
+                continue
+            now_value = _report_display_value(current_topic_data.get(field_id))
+            last_value = _report_display_value(last_topic_data.get(field_id))
+            items.append(
+                '<div class="report-structured-item">'
+                f'<div class="report-structured-key">{_html.escape(label)}</div>'
+                f'<div class="report-structured-value"><strong>Now:</strong> {_html.escape(now_value)}<br><strong>Last:</strong> {_html.escape(last_value)}</div>'
+                '</div>'
+            )
+        topic_note = str(current_topic_data.get("_topic_note") or "").strip()
+        if topic_note:
+            items.append(
+                '<div class="report-structured-item">'
+                '<div class="report-structured-key">Extra information</div>'
+                f'<div class="report-structured-value">{_html.escape(topic_note)}</div>'
+                '</div>'
+            )
+        if not items:
+            continue
+        st.markdown(
+            '<div class="report-structured-topic">'
+            '<div class="report-structured-header">'
+            f'<div class="report-structured-name">{_html.escape(topic_name)}</div>'
+            f'<div class="report-trend-pill">{_html.escape(_report_status_text(insight.get("status", "stable")))}</div>'
+            '</div>'
+            f'<div class="report-structured-grid">{"".join(items)}</div>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
 
 # ══════════════════════════════════════════════════════════════════
 # FREE-FORM CHAT LLM
@@ -6070,6 +6522,7 @@ def render_topic_detail(topic_label: str, topic_key: str):
         f"Current topic: {answered}/{applicable or 1} questions answered · "
         f"Overall: {completed_topics}/{len(TOPICS)} topics complete"
     )
+    st.markdown(_topic_progress_card_html(topic_key, state), unsafe_allow_html=True)
     header_html = (
         '<div class="chat-shell">'
         '  <div class="chat-shell-header">'
@@ -6100,6 +6553,47 @@ def render_topic_detail(topic_label: str, topic_key: str):
 
     # ── Completed ────────────────────────────────────────────────
     with main_col:
+        answered_entries = _answered_step_entries(topic_key, state)
+        with st.expander("Your answers so far", expanded=False):
+            if answered_entries:
+                for step_obj, value_text in answered_entries:
+                    st.markdown(f"**{step_obj.get('text', 'Answer')}**")
+                    st.markdown(value_text)
+                revisable = [
+                    (step_obj["id"], step_obj.get("text", step_obj["id"]))
+                    for step_obj, _ in answered_entries
+                ]
+                revise_choice = st.radio(
+                    "Revise an earlier answer",
+                    revisable,
+                    key=f"revise_choice_{topic_key}",
+                    format_func=lambda item: item[1],
+                    horizontal=False,
+                ) if revisable else None
+                if revise_choice and st.button("Revise selected answer", key=f"revise_btn_{topic_key}"):
+                    _rewind_topic_to_step(topic_key, revise_choice[0])
+                    st.rerun()
+            else:
+                st.caption("You have not answered anything in this topic yet.")
+
+            note_key = f"topic_note_{topic_key}"
+            if note_key not in st.session_state:
+                st.session_state[note_key] = str(state.get("data", {}).get("_topic_note") or "")
+            extra_note = st.text_area(
+                "Add extra information for this topic",
+                key=note_key,
+                placeholder="Anything else your care team should know about this topic?",
+            )
+            if st.button("Save extra information", key=f"save_note_{topic_key}"):
+                cleaned_note = (extra_note or "").strip()
+                if cleaned_note:
+                    state["data"]["_topic_note"] = cleaned_note
+                    state["raw_answers"]["_topic_note"] = cleaned_note
+                else:
+                    state["data"].pop("_topic_note", None)
+                    state["raw_answers"].pop("_topic_note", None)
+                st.rerun()
+
         st.markdown('<div class="topic-response-region">', unsafe_allow_html=True)
         if state["status"] == "completed":
             st.markdown(
@@ -6470,16 +6964,12 @@ def screen_report():
         unsafe_allow_html=True,
     )
     _render_report_summary_banner(topic_insights)
+    _render_report_priority_board(topic_insights, all_data)
+    _render_report_missing_info(topic_insights, all_data)
+    _render_report_comparison_table(topic_insights)
+    _render_report_structured_sections(topic_insights, all_data)
 
-    for row_start in range(0, len(topic_insights), 4):
-        row_items = topic_insights[row_start:row_start + 4]
-        cols = st.columns(len(row_items))
-        for col, insight in zip(cols, row_items):
-            with col:
-                _render_report_topic_card(insight)
-                _render_report_topic_detail(insight, all_data)
-
-    with st.expander("Full clinical narrative report", expanded=False):
+    with st.expander("Optional full clinical narrative report", expanded=False):
         st.markdown('<div class="report-box">', unsafe_allow_html=True)
         st.markdown(st.session_state.report)
         st.markdown('</div>', unsafe_allow_html=True)
