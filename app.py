@@ -2388,6 +2388,19 @@ def _finalize_demo_trace(decision: str, next_question: Optional[str] = None):
         st.session_state["agent_traces"] = traces
 
 
+def _current_prompt_text_for_topic(topic_key: Optional[str]) -> str:
+    if not topic_key:
+        return ""
+    state = st.session_state.get("topic_states", {}).get(topic_key, {})
+    for msg in reversed(state.get("chat", [])):
+        if msg.get("role") == "assistant" and msg.get("is_current_prompt"):
+            content = str(msg.get("prompt_text") or msg.get("content") or "").strip()
+            if content:
+                parts = [part.strip() for part in content.split("\n\n") if part.strip()]
+                return parts[-1] if parts else content
+    return str(state.get("last_prompted_text") or "").strip()
+
+
 def _mark_patient_fatigue(topic_key: Optional[str] = None):
     st.session_state["patient_fatigue"] = True
     st.session_state["fatigue_requested_at"] = datetime.now().isoformat(timespec="seconds")
@@ -2400,10 +2413,13 @@ def _mark_patient_fatigue(topic_key: Optional[str] = None):
         )
 
 
-def _render_demo_agent_panel():
+def _render_demo_agent_panel(topic_key: Optional[str] = None):
     if not st.session_state.get("demo_mode"):
         return
     trace = st.session_state.get("last_agent_trace")
+    current_prompt = _current_prompt_text_for_topic(
+        topic_key or st.session_state.get("selected_topic")
+    )
     st.markdown(
         '<div class="demo-reasoning-card">'
         '<div class="demo-title">Demo Mode</div>'
@@ -2413,6 +2429,8 @@ def _render_demo_agent_panel():
     )
     if not trace:
         st.caption("The system evaluates each answer across multiple clinical dimensions before deciding the next step.")
+        if current_prompt:
+            st.markdown(f"**Current question:** {current_prompt}")
         st.info("No reasoning has been recorded yet for this step.")
         return
 
@@ -2451,9 +2469,13 @@ def _render_demo_agent_panel():
         decision = f"Ask one follow-up: {next_move.get('follow_up_question')}"
     elif next_question:
         decision = f"Move to next question: {next_question}"
+    if current_prompt:
+        decision = f"Now asking: {current_prompt}"
 
     st.caption("The system evaluates each answer across multiple clinical dimensions before deciding the next step.")
     with st.expander("View reasoning", expanded=True):
+        if current_prompt:
+            st.markdown(f"**Current question:** {current_prompt}")
         st.markdown(f"**Patient said:** `{trace.get('patient_answer')}`")
         st.markdown(f"**Understanding:** System identified this as `{interpreted_as}`.")
         st.markdown(f"**Urgency check:** {urgency_text}")
@@ -6151,7 +6173,7 @@ def render_topic_detail(topic_label: str, topic_key: str):
     main_col, demo_col = st.columns([3.3, 1.15], gap="large")
     if st.session_state.get("demo_mode"):
         with demo_col:
-            _render_demo_agent_panel()
+            _render_demo_agent_panel(topic_key)
 
     # ── Completed ────────────────────────────────────────────────
     with main_col:
