@@ -1471,13 +1471,46 @@ div[data-baseweb="select"] > div {
 }
 
 .composer-shell [data-testid="column"]:last-child {
-    max-width: 76px;
-    min-width: 76px;
-    flex: 0 0 76px;
+    max-width: 122px;
+    min-width: 122px;
+    flex: 0 0 122px;
 }
 
 .composer-shell [data-testid="column"]:last-child > div {
     height: 100%;
+}
+
+.composer-voice-panel {
+    height: 100%;
+    min-height: 224px;
+    border: 1px solid #d9e4ed;
+    border-radius: 18px;
+    background:
+        linear-gradient(180deg, rgba(255,255,255,0.98) 0%, rgba(244,248,252,0.98) 100%);
+    box-shadow: 0 12px 24px rgba(23, 50, 74, 0.06);
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    gap: 10px;
+}
+
+.composer-voice-panel .voice-title {
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #7b8ea3;
+    text-align: center;
+}
+
+.composer-voice-panel .voice-hint {
+    font-size: 11px;
+    line-height: 1.45;
+    color: #6f8297;
+    text-align: center;
+    max-width: 84px;
 }
 
 
@@ -1565,7 +1598,7 @@ div[data-baseweb="select"] > div {
     background: linear-gradient(180deg, #fdfefe 0%, #f5f9fd 100%);
     border: 1px solid #d7e4ee;
     border-radius: 18px;
-    min-height: 100%;
+    min-height: 88px;
     width: 100%;
     min-width: 100%;
     max-width: 100%;
@@ -1581,7 +1614,7 @@ div[data-baseweb="select"] > div {
 .composer-shell [data-testid="stAudioInput"] > div {
     width: 100%;
     min-width: 100%;
-    height: 100%;
+    height: 88px;
     display: flex;
     justify-content: center;
     align-items: center;
@@ -1593,8 +1626,8 @@ div[data-baseweb="select"] > div {
 .composer-shell [data-testid="stAudioInput"] button {
     border-radius: 16px !important;
     width: 100% !important;
-    height: 100% !important;
-    min-height: 52px !important;
+    height: 88px !important;
+    min-height: 88px !important;
     min-width: 100% !important;
     padding: 0 !important;
     margin: 0 !important;
@@ -1638,8 +1671,8 @@ div[data-baseweb="select"] > div {
 }
 
 .composer-shell [data-testid="stAudioInput"] button svg {
-    width: 17px !important;
-    height: 17px !important;
+    width: 22px !important;
+    height: 22px !important;
     color: #0f6cbd !important;
 }
 
@@ -5312,7 +5345,9 @@ def render_input(topic_key: str, step: dict):
                     handle_answer(topic_key, step, selected, source="structured")
                     return
         with voice_col:
+            st.markdown('<div class="composer-voice-panel"><div class="voice-title">Voice</div>', unsafe_allow_html=True)
             voice_text = voice_widget(f"{topic_key}_{sid}_opt", label="Mic")
+            st.markdown('<div class="voice-hint">Tap to answer by voice</div></div>', unsafe_allow_html=True)
         if _process_option_submission(topic_key, step, voice_text, "voice", f"voice_{topic_key}_{sid}_submitted", topic_history):
             return
         st.markdown('</div>', unsafe_allow_html=True)
@@ -5348,7 +5383,9 @@ def render_input(topic_key: str, step: dict):
                     return
                 st.warning("Please choose at least one option, or type an answer.")
         with voice_col:
+            st.markdown('<div class="composer-voice-panel"><div class="voice-title">Voice</div>', unsafe_allow_html=True)
             voice_text = voice_widget(f"{topic_key}_{sid}_multi", label="Mic")
+            st.markdown('<div class="voice-hint">Tap to answer by voice</div></div>', unsafe_allow_html=True)
         if _process_multiselect_submission(topic_key, step, voice_text, "voice", f"voice_{topic_key}_{sid}_submitted"):
             return
         st.markdown('</div>', unsafe_allow_html=True)
@@ -5374,7 +5411,9 @@ def render_input(topic_key: str, step: dict):
                 handle_answer(topic_key, step, value, source="structured")
                 return
         with voice_col:
+            st.markdown('<div class="composer-voice-panel"><div class="voice-title">Voice</div>', unsafe_allow_html=True)
             voice_text = voice_widget(f"{topic_key}_{sid}_num", label="Mic")
+            st.markdown('<div class="voice-hint">Tap to answer by voice</div></div>', unsafe_allow_html=True)
         if _process_number_submission(topic_key, step, voice_text or "", f"voice_{topic_key}_{sid}_submitted"):
             return
         st.markdown('</div>', unsafe_allow_html=True)
@@ -5414,7 +5453,9 @@ def render_input(topic_key: str, step: dict):
                 )
                 submitted = st.form_submit_button("Continue", type="primary", use_container_width=True)
         with voice_col:
+            st.markdown('<div class="composer-voice-panel"><div class="voice-title">Voice</div>', unsafe_allow_html=True)
             voice_text = voice_widget(f"{topic_key}_{sid}", label="Mic")
+            st.markdown('<div class="voice-hint">Tap to answer by voice</div></div>', unsafe_allow_html=True)
         if voice_text and voice_text != st.session_state.get(f"{widget_key}_voice_sync"):
             st.session_state[f"{widget_key}_voice_sync"] = voice_text
             st.session_state[submit_key] = voice_text
@@ -5647,7 +5688,9 @@ def render_topic_detail(topic_label: str, topic_key: str):
                 )
                 pending_submitted = st.form_submit_button("Continue", type="primary", use_container_width=True)
         with voice_col:
+            st.markdown('<div class="composer-voice-panel"><div class="voice-title">Voice</div>', unsafe_allow_html=True)
             pending_voice = voice_widget(f"pending_{topic_key}_{pending_suffix}", label="Mic")
+            st.markdown('<div class="voice-hint">Tap to answer by voice</div></div>', unsafe_allow_html=True)
         if pending_voice and pending_voice != st.session_state.get(f"{pending_key}_voice_sync"):
             st.session_state[f"{pending_key}_voice_sync"] = pending_voice
             st.session_state[pending_submit_key] = pending_voice
