@@ -1972,7 +1972,7 @@ _openai_error: Optional[str] = None
 # Performance defaults: keep the common path fast.
 ENABLE_DYNAMIC_PROMPT_REWRITE = False
 ENABLE_LLM_SEMANTIC_REDUNDANCY = True
-ENABLE_FULL_PIPELINE_FOR_EXACT_STRUCTURED_OPTIONS = False
+ENABLE_FULL_PIPELINE_FOR_EXACT_STRUCTURED_OPTIONS = True
 
 if OPENAI_API_KEY:
     try:
@@ -4818,7 +4818,19 @@ def _resolve_next_step(topic_key: str, state: dict) -> Optional[dict]:
     return get_next_step(topic_key, state["data"], state.get("raw_answers"))
 
 
-def _suggestions_for_prompt_text(prompt_text: str) -> list[str]:
+def _suggestions_for_prompt_text(prompt_text: str, step: Optional[dict] = None) -> list[str]:
+    if step and step.get("opts"):
+        opts = []
+        for opt in step.get("opts", []):
+            text = str(opt or "").strip()
+            if not text:
+                continue
+            if text.lower() in {"other", "something else"}:
+                continue
+            opts.append(text)
+        if opts:
+            return opts[:5]
+
     text = _norm_text(prompt_text or "")
     if not text:
         return []
@@ -4852,7 +4864,7 @@ def _quick_reply_suggestions(topic_key: str, state: dict, step: dict) -> list[st
                 cleaned.append(text)
     if cleaned:
         return cleaned
-    return _suggestions_for_prompt_text(step.get("text", ""))
+    return _suggestions_for_prompt_text(step.get("text", ""), step=step)
 
 
 def _render_suggested_reply_buttons(
@@ -5061,6 +5073,7 @@ def _store_followup_prompt(
     target_step: Optional[dict] = None,
 ):
     state["waiting_for_followup"] = True
+    prompt_step = target_step or step
     state["pending_followup"] = {
         "source_step_id": step["id"],
         "question": question,
@@ -5071,8 +5084,8 @@ def _store_followup_prompt(
         "target_step_id": target_step.get("id") if target_step else None,
     }
     combined_prompt = "\n\n".join([part for part in [assistant_message.strip(), question.strip()] if part])
-    _append_assistant_message(state, combined_prompt, prompt_step=step, prompt_text=combined_prompt)
-    _remember_prompted_step(state, step, combined_prompt)
+    _append_assistant_message(state, combined_prompt, prompt_step=prompt_step, prompt_text=combined_prompt)
+    _remember_prompted_step(state, prompt_step, combined_prompt)
 
 
 def _request_retry_for_step(topic_key: str, step: dict, raw_input: str, source: str = "typed"):
@@ -5126,6 +5139,8 @@ def _clear_step_inputs(topic_key: str, step: dict):
             f"_vt_{topic_key}_{sid}_multi",
             f"_vh_{topic_key}_{sid}_multi",
         ])
+        for idx, _ in enumerate(step.get("opts", [])):
+            keys_to_clear.append(f"multi_{topic_key}_{sid}_{idx}")
     elif stype == "number":
         keys_to_clear.extend([
             f"text_{topic_key}_{sid}",
@@ -5680,7 +5695,13 @@ def render_input(topic_key: str, step: dict):
         opts = step.get("opts", [])
         form_key = f"form_{topic_key}_{sid}_multi"
         with st.form(form_key, clear_on_submit=False):
-            selected = st.multiselect("Choose all that apply", opts, key=f"multi_{topic_key}_{sid}")
+            st.markdown("**Choose all that apply**")
+            selected = []
+            checkbox_cols = st.columns(2)
+            for idx, opt in enumerate(opts):
+                with checkbox_cols[idx % 2]:
+                    if st.checkbox(opt, key=f"multi_{topic_key}_{sid}_{idx}"):
+                        selected.append(opt)
             text_col, mic_col = st.columns([20, 1], vertical_alignment="bottom")
             with text_col:
                 typed = st.text_input(
@@ -6026,7 +6047,15 @@ def render_topic_detail(topic_label: str, topic_key: str):
             pending_suffix = pending.get("answer_key", "pending")
             pending_key = f"pending_followup_{topic_key}_{pending_suffix}"
             pending_submit_key = f"{pending_key}_submitted"
-            pending_suggestions = _suggestions_for_prompt_text(pending.get("question", ""))
+            pending_target_step = None
+            if pending.get("target_step_id"):
+                pending_target_step = STEP_BY_ID.get(pending.get("target_step_id"))
+            elif pending.get("source_step_id"):
+                pending_target_step = STEP_BY_ID.get(pending.get("source_step_id"))
+            pending_suggestions = _suggestions_for_prompt_text(
+                pending.get("question", ""),
+                step=pending_target_step,
+            )
             if pending_key not in st.session_state:
                 st.session_state[pending_key] = ""
             st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
