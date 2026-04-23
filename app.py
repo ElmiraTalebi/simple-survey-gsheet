@@ -824,15 +824,14 @@ div[data-baseweb="select"] > div {
 }
 
 .chat-history {
-    padding: 14px 14px 0 14px;
+    padding: 14px 14px 2px 14px;
     min-height: 0;
     background:
         linear-gradient(180deg, rgba(250,252,254,0.88) 0%, rgba(244,248,252,0.92) 100%);
 }
 
 .composer-wrap {
-    padding: 0 12px 12px 12px;
-    margin-top: -2px;
+    padding: 4px 12px 12px 12px;
     background: transparent;
 }
 
@@ -935,6 +934,20 @@ div[data-baseweb="select"] > div {
 .chat-row.assistant .chat-bubble {
     color: #17324a;
     border-top-left-radius: 6px;
+}
+
+.chat-row.assistant.current-question .chat-bubble {
+    background: linear-gradient(180deg, #fffdf7 0%, #fff7de 100%);
+    border: 1px solid #f2d98a;
+    box-shadow: 0 10px 22px rgba(191, 149, 0, 0.10);
+}
+
+.chat-row.assistant.current-question .chat-role::after {
+    content: "  CURRENT QUESTION";
+    color: #9b7a0a;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    margin-left: 4px;
 }
 
 .chat-row.user .chat-bubble {
@@ -1893,9 +1906,11 @@ def _question_already_asked(state: dict, question_text: str) -> bool:
     return False
 
 
-def render_chat_bubble(role: str, content: str):
+def render_chat_bubble(role: str, content: str, highlight: bool = False):
     safe = _html.escape(content or "").replace("\n", "<br>")
     role_cls = "user" if role == "user" else "assistant"
+    if highlight and role != "user":
+        role_cls = f"{role_cls} current-question"
     role_label = "You" if role == "user" else "Care Assistant"
     avatar_label = "Y" if role == "user" else "I"
     timestamp = datetime.now().strftime("%H:%M")
@@ -5913,9 +5928,15 @@ def render_topic_detail(topic_label: str, topic_key: str):
 
     # ── Chat history ─────────────────────────────────────────────
     if state["chat"]:
+        current_prompt_text = (state.get("last_prompted_text") or "").strip()
         with st.container(border=False):
             for msg in state["chat"]:
-                render_chat_bubble(msg["role"], msg["content"])
+                highlight = (
+                    msg.get("role") == "assistant"
+                    and current_prompt_text
+                    and (msg.get("content") or "").strip() == current_prompt_text
+                )
+                render_chat_bubble(msg["role"], msg["content"], highlight=highlight)
     st.markdown('</div></div>', unsafe_allow_html=True)
 
     main_col, demo_col = st.columns([3.3, 1.15], gap="large")
