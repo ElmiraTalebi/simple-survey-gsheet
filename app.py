@@ -4789,6 +4789,25 @@ def _resolve_next_step(topic_key: str, state: dict) -> Optional[dict]:
     return get_next_step(topic_key, state["data"], state.get("raw_answers"))
 
 
+def _suggestions_for_prompt_text(prompt_text: str) -> list[str]:
+    text = _norm_text(prompt_text or "")
+    if not text:
+        return []
+    if any(word in text for word in ("when", "start", "started", "how long", "since")):
+        return ["Today", "Yesterday", "A few days ago", "More than a week ago", "Not sure"]
+    if "dose" in text or "how often" in text:
+        return ["As prescribed", "Once a day", "Twice a day", "Three times a day", "Not sure"]
+    if "where exactly" in text or "where is the pain" in text or "which body part" in text:
+        return ["Throat", "Tongue", "Jaw", "Neck", "Mouth/cheek"]
+    if "what are you able to eat" in text or "what can you eat" in text:
+        return ["Soft foods", "Liquids", "Small meals", "Not sure"]
+    if "who is supporting you" in text or "who supports you" in text:
+        return ["Family", "Friends", "Caregiver", "No one nearby"]
+    if "what kind of support" in text:
+        return ["Emotional support", "Transportation help", "Help at home", "More information"]
+    return []
+
+
 def _quick_reply_suggestions(topic_key: str, state: dict, step: dict) -> list[str]:
     if step.get("opts"):
         return []
@@ -4804,15 +4823,7 @@ def _quick_reply_suggestions(topic_key: str, state: dict, step: dict) -> list[st
                 cleaned.append(text)
     if cleaned:
         return cleaned
-
-    text = _norm_text(step.get("text", ""))
-    if any(word in text for word in ("when", "start", "started", "how long", "since")):
-        return ["Today", "Yesterday", "A few days ago", "More than a week ago", "Not sure"]
-    if "dose" in text or "how often" in text:
-        return ["As prescribed", "Once a day", "Twice a day", "Three times a day", "Not sure"]
-    if "what are you able to eat" in text:
-        return ["Soft foods", "Liquids", "Small meals", "Not sure"]
-    return []
+    return _suggestions_for_prompt_text(step.get("text", ""))
 
 
 def _mark_submission_once(submitted_key: str, candidate: str) -> bool:
@@ -5968,10 +5979,22 @@ def render_topic_detail(topic_label: str, topic_key: str):
             pending_suffix = pending.get("answer_key", "pending")
             pending_key = f"pending_followup_{topic_key}_{pending_suffix}"
             pending_submit_key = f"{pending_key}_submitted"
+            pending_suggestions = _suggestions_for_prompt_text(pending.get("question", ""))
             if pending_key not in st.session_state:
                 st.session_state[pending_key] = ""
             st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
             with st.form(f"form_pending_{topic_key}_{pending_suffix}", clear_on_submit=False):
+                selected_suggestion = None
+                if pending_suggestions:
+                    choices = ["Type my own answer"] + pending_suggestions
+                    st.markdown('<div class="common-answer-buttons">', unsafe_allow_html=True)
+                    selected_suggestion = st.radio(
+                        "Suggested replies",
+                        choices,
+                        key=f"pending_suggested_{topic_key}_{pending_suffix}",
+                        horizontal=(len(choices) <= 4),
+                    )
+                    st.markdown('</div>', unsafe_allow_html=True)
                 text_col, mic_col = st.columns([20, 1], vertical_alignment="bottom")
                 with text_col:
                     pending_text = st.text_input(
@@ -5990,9 +6013,13 @@ def render_topic_detail(topic_label: str, topic_key: str):
                 handle_pending_followup(topic_key, pending_voice, source="voice")
                 return
 
-            if pending_submitted and pending_text and st.session_state.get(pending_submit_key) != pending_text:
-                st.session_state[pending_submit_key] = pending_text
-                handle_pending_followup(topic_key, pending_text, source="followup")
+            if pending_submitted:
+                candidate = (pending_text or "").strip()
+                if not candidate and selected_suggestion and selected_suggestion != "Type my own answer":
+                    candidate = selected_suggestion
+                if candidate and st.session_state.get(pending_submit_key) != candidate:
+                    st.session_state[pending_submit_key] = candidate
+                    handle_pending_followup(topic_key, candidate, source="followup")
 
             st.markdown('</div>', unsafe_allow_html=True)
             return
