@@ -1458,14 +1458,14 @@ div[data-baseweb="select"] > div {
     background: rgba(255,255,255,0.92);
     border: 1px solid #d9e4ed;
     border-radius: 22px;
-    padding: 10px 12px 12px 12px;
+    padding: 6px 12px 10px 12px;
     box-shadow: 0 18px 36px rgba(23, 50, 74, 0.08);
     backdrop-filter: blur(10px);
     position: relative;
 }
 
 .composer-shell.compact {
-    padding: 10px 12px 12px 12px;
+    padding: 6px 12px 10px 12px;
 }
 
 .composer-inline-voice {
@@ -1573,12 +1573,29 @@ div[data-baseweb="select"] > div {
     margin-bottom: 0 !important;
 }
 
+.composer-shell [data-testid="stTextInput"] > label,
+.composer-shell [data-testid="stTextInput"] label {
+    margin-bottom: 2px !important;
+    padding-bottom: 0 !important;
+}
+
+.composer-shell [data-testid="stTextInput"] label p {
+    margin: 0 !important;
+    line-height: 1.2 !important;
+}
+
 .composer-shell [data-testid="stTextInput"] input {
     min-height: 52px !important;
     height: 52px !important;
     background: #f9fcff !important;
     border: 1px solid #d6e4ef !important;
     padding-left: 16px !important;
+}
+
+.composer-shell form > div:first-child,
+.composer-shell [data-testid="stForm"] > div:first-child {
+    margin-top: 0 !important;
+    padding-top: 0 !important;
 }
 
 .composer-shell [data-testid="stSelectbox"] {
@@ -6506,4 +6523,3 @@ elif stage == "report":
     screen_report()
 else:
     screen_login()
-
