@@ -4858,18 +4858,22 @@ def _quick_reply_suggestions(topic_key: str, state: dict, step: dict) -> list[st
 def _render_suggested_reply_buttons(
     suggestions: list[str],
     key_prefix: str,
-    target_input_key: str,
-) -> None:
+    target_input_key: Optional[str] = None,
+) -> Optional[str]:
     suggestions = [str(s or "").strip() for s in suggestions if str(s or "").strip()]
     if not suggestions:
-        return
+        return None
+    clicked = None
     st.markdown('<div class="common-answer-buttons">', unsafe_allow_html=True)
     cols = st.columns(len(suggestions))
     for idx, suggestion in enumerate(suggestions):
         with cols[idx]:
             if st.button(suggestion, key=f"{key_prefix}_{idx}", use_container_width=True):
-                st.session_state[target_input_key] = suggestion
+                if target_input_key:
+                    st.session_state[target_input_key] = suggestion
+                clicked = suggestion
     st.markdown('</div>', unsafe_allow_html=True)
+    return clicked
 
 
 def _mark_submission_once(submitted_key: str, candidate: str) -> bool:
@@ -5778,12 +5782,17 @@ def render_input(topic_key: str, step: dict):
 
         st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
         suggestions = _quick_reply_suggestions(topic_key, state, step)
+        clicked_suggestion = None
         if suggestions:
-            _render_suggested_reply_buttons(
+            clicked_suggestion = _render_suggested_reply_buttons(
                 suggestions,
                 key_prefix=f"suggested_btn_{topic_key}_{sid}",
                 target_input_key=widget_key,
             )
+        if clicked_suggestion:
+            st.session_state[submit_key] = clicked_suggestion
+            handle_answer(topic_key, step, clicked_suggestion, source="free_text")
+            return
         with st.form(f"form_{topic_key}_{sid}_free", clear_on_submit=False):
             text_col, mic_col = st.columns([20, 1], vertical_alignment="bottom")
             with text_col:
@@ -6021,12 +6030,17 @@ def render_topic_detail(topic_label: str, topic_key: str):
             if pending_key not in st.session_state:
                 st.session_state[pending_key] = ""
             st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
+            clicked_suggestion = None
             if pending_suggestions:
-                _render_suggested_reply_buttons(
+                clicked_suggestion = _render_suggested_reply_buttons(
                     pending_suggestions,
                     key_prefix=f"pending_suggested_btn_{topic_key}_{pending_suffix}",
                     target_input_key=pending_key,
                 )
+            if clicked_suggestion:
+                st.session_state[pending_submit_key] = clicked_suggestion
+                handle_pending_followup(topic_key, clicked_suggestion, source="followup")
+                return
             with st.form(f"form_pending_{topic_key}_{pending_suffix}", clear_on_submit=False):
                 text_col, mic_col = st.columns([20, 1], vertical_alignment="bottom")
                 with text_col:
