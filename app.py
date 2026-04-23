@@ -43,8 +43,8 @@ def _load_topic_flows():
 from typing import Optional
 
 TOPICS = [
-    ("🩹 Pain & Medications", "pain"),
     ("🍽️  Nutrition & Fluids", "nutrition"),
+    ("🩹 Pain & Medications", "pain"),
     ("👄 Oral Symptoms", "oral"),
     ("🤢 GI Symptoms", "gi"),
     ("😴 Fatigue & Sleep", "fatigue"),
@@ -121,7 +121,7 @@ FLOW_NUTRITION = [
     _q("pain_med_timing", "Are you timing your pain medication before meals to make eating easier?", opts=["Yes, it helps", "I try, but it's not enough", "No, I didn't know to do this", "No, I don't take pain medication"], when=lambda d: d.get("eating_ability") == "Struggling — only liquids or very little"),
     _q("tube_issues", "Is the tube feeding going well — no blockages, leaks, or discomfort around the site?", opts=["Working fine", "Some issues — leaking or blockage", "Discomfort/soreness around the tube"], when=lambda d: d.get("eating_ability") == "Not eating — using a feeding tube only"),
     _q("tube_oral_sips", "Are you still able to take any sips of water or liquids by mouth at all?", opts=["Yes, small amounts", "Very occasionally for comfort", "No, nothing by mouth"], when=lambda d: d.get("eating_ability") == "Not eating — using a feeding tube only"),
-    _q("weight", "What has your weight been recently? (Enter in pounds)", type="number", min_v=50, max_v=500, default_v=150),
+    _q("weight", "What has your weight been recently?", type="number", min_v=50, max_v=500, default_v=150),
     _q("weight_impact", "Your weight is lower than last time. Has that been affecting how you feel or your energy?", opts=["Yes, I've noticed a difference", "Not really"]),
     _q("swallowing_difficulty", "Are you having any difficulty swallowing — liquids, food, or pills?", opts=["Yes", "No"]),
     _q("swallowing_type", "Is it painful to swallow, or just mechanically difficult?", opts=["Painful to swallow", "Mechanically difficult"], when=lambda d: d.get("swallowing_difficulty") == "Yes"),
@@ -835,6 +835,10 @@ div[data-baseweb="select"] > div {
     background: transparent;
 }
 
+.topic-response-region {
+    margin-top: -8px;
+}
+
 .topic-toolbar + div[data-testid="stButton"] {
     position: sticky;
     top: 10px;
@@ -934,6 +938,20 @@ div[data-baseweb="select"] > div {
 .chat-row.assistant .chat-bubble {
     color: #17324a;
     border-top-left-radius: 6px;
+}
+
+.chat-row.assistant.current-question .chat-bubble {
+    background: linear-gradient(180deg, #fffdf7 0%, #fff7de 100%);
+    border: 1px solid #f2d98a;
+    box-shadow: 0 10px 22px rgba(191, 149, 0, 0.10);
+}
+
+.chat-row.assistant.current-question .chat-role::after {
+    content: "  CURRENT QUESTION";
+    color: #9b7a0a;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    margin-left: 4px;
 }
 
 .chat-row.user .chat-bubble {
@@ -1073,7 +1091,7 @@ div[data-baseweb="select"] > div {
     overflow: hidden;
     border: 1px solid #d7e1eb;
     background: #ffffff;
-    min-height: 164px;
+    min-height: 148px;
     box-shadow: 0 8px 18px rgba(23, 50, 74, 0.05);
     margin-bottom: 10px;
 }
@@ -1107,7 +1125,7 @@ div[data-baseweb="select"] > div {
 }
 
 .report-topic-body {
-    padding: 12px;
+    padding: 10px 12px;
 }
 
 .report-topic-name {
@@ -1406,12 +1424,12 @@ div[data-baseweb="select"] > div {
 }
 
 .active-question {
-    background: transparent;
-    border: none;
-    border-radius: 0;
-    padding: 0;
+    background: rgba(247, 251, 254, 0.92);
+    border: 1px solid #d9e4ed;
+    border-radius: 18px;
+    padding: 10px 12px;
     margin: 0 0 10px 0;
-    box-shadow: none;
+    box-shadow: 0 8px 18px rgba(23, 50, 74, 0.04);
 }
 
 .active-question .label {
@@ -1444,14 +1462,14 @@ div[data-baseweb="select"] > div {
     background: rgba(255,255,255,0.92);
     border: 1px solid #d9e4ed;
     border-radius: 22px;
-    padding: 10px 12px 12px 12px;
+    padding: 6px 12px 10px 12px;
     box-shadow: 0 18px 36px rgba(23, 50, 74, 0.08);
     backdrop-filter: blur(10px);
     position: relative;
 }
 
 .composer-shell.compact {
-    padding: 10px 12px 12px 12px;
+    padding: 6px 12px 10px 12px;
 }
 
 .composer-inline-voice {
@@ -1526,6 +1544,16 @@ div[data-baseweb="select"] > div {
     color: #10375a !important;
 }
 
+.common-answer-buttons {
+    margin: 0 0 10px 0;
+}
+
+.common-answer-buttons [data-testid="stRadio"] label {
+    font-size: 12px !important;
+    font-weight: 700 !important;
+    color: #607589 !important;
+}
+
 .suggested-replies-note {
     margin: 8px 0 10px 2px;
     font-size: 11px;
@@ -1549,12 +1577,29 @@ div[data-baseweb="select"] > div {
     margin-bottom: 0 !important;
 }
 
+.composer-shell [data-testid="stTextInput"] > label,
+.composer-shell [data-testid="stTextInput"] label {
+    margin-bottom: 2px !important;
+    padding-bottom: 0 !important;
+}
+
+.composer-shell [data-testid="stTextInput"] label p {
+    margin: 0 !important;
+    line-height: 1.2 !important;
+}
+
 .composer-shell [data-testid="stTextInput"] input {
     min-height: 52px !important;
     height: 52px !important;
     background: #f9fcff !important;
     border: 1px solid #d6e4ef !important;
     padding-left: 16px !important;
+}
+
+.composer-shell form > div:first-child,
+.composer-shell [data-testid="stForm"] > div:first-child {
+    margin-top: 0 !important;
+    padding-top: 0 !important;
 }
 
 .composer-shell [data-testid="stSelectbox"] {
@@ -1650,22 +1695,13 @@ div[data-baseweb="select"] > div {
     display: none !important;
 }
 
-.inline-voice-anchor {
+.inline-voice-row {
     display: flex;
     justify-content: flex-end;
-    margin-top: -98px;
-    margin-right: 10px;
-    margin-bottom: 56px;
-    position: relative;
-    z-index: 5;
-    pointer-events: none;
+    align-items: center;
 }
 
-.inline-voice-anchor > div {
-    pointer-events: auto;
-}
-
-.inline-voice-anchor [data-testid="stAudioInput"] {
+.inline-voice-row [data-testid="stAudioInput"] {
     width: 38px !important;
     min-width: 38px !important;
     max-width: 38px !important;
@@ -1682,7 +1718,7 @@ div[data-baseweb="select"] > div {
     color: transparent !important;
 }
 
-.inline-voice-anchor [data-testid="stAudioInput"] > div {
+.inline-voice-row [data-testid="stAudioInput"] > div {
     width: 38px !important;
     min-width: 38px !important;
     max-width: 38px !important;
@@ -1693,7 +1729,7 @@ div[data-baseweb="select"] > div {
     overflow: hidden !important;
 }
 
-.inline-voice-anchor [data-testid="stAudioInput"] button {
+.inline-voice-row [data-testid="stAudioInput"] button {
     width: 38px !important;
     min-width: 38px !important;
     max-width: 38px !important;
@@ -1708,11 +1744,11 @@ div[data-baseweb="select"] > div {
     position: relative !important;
 }
 
-.inline-voice-anchor [data-testid="stAudioInput"] button svg {
+.inline-voice-row [data-testid="stAudioInput"] button svg {
     display: none !important;
 }
 
-.inline-voice-anchor [data-testid="stAudioInput"] button::after {
+.inline-voice-row [data-testid="stAudioInput"] button::after {
     content: "🎙️";
     font-size: 14px;
     line-height: 38px;
@@ -1721,10 +1757,47 @@ div[data-baseweb="select"] > div {
     text-align: center;
 }
 
-.inline-voice-anchor [data-testid="stAudioInput"] audio,
-.inline-voice-anchor [data-testid="stAudioInput"] small,
-.inline-voice-anchor [data-testid="stAudioInput"] span,
-.inline-voice-anchor [data-testid="stAudioInput"] p {
+.inline-voice-row [data-testid="stAudioInput"] audio,
+.demo-reasoning-card {
+    background: rgba(255,255,255,0.92);
+    border: 1px solid #d9e4ed;
+    border-radius: 22px;
+    padding: 14px 14px 10px 14px;
+    box-shadow: 0 18px 36px rgba(23, 50, 74, 0.08);
+    backdrop-filter: blur(10px);
+    position: sticky;
+    top: 72px;
+}
+
+.demo-reasoning-card .demo-title {
+    font-size: 12px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #6b7d92;
+    margin-bottom: 6px;
+}
+
+.demo-reasoning-card .demo-subtitle {
+    font-family: 'Manrope', sans-serif;
+    font-size: 18px;
+    line-height: 1.25;
+    font-weight: 800;
+    color: #153652;
+    letter-spacing: -0.03em;
+    margin-bottom: 10px;
+}
+
+@media (max-width: 1100px) {
+    .demo-reasoning-card {
+        position: static;
+        top: auto;
+        margin-top: 10px;
+    }
+}
+.inline-voice-row [data-testid="stAudioInput"] small,
+.inline-voice-row [data-testid="stAudioInput"] span,
+.inline-voice-row [data-testid="stAudioInput"] p {
     display: none !important;
 }
 
@@ -1791,13 +1864,40 @@ def _step_prompt_text(step: dict, topic_key: Optional[str] = None, state: Option
     return question_text
 
 
-def _append_assistant_message(state: dict, text: str):
+def _clear_current_prompt_flags(state: dict):
+    for msg in state.get("chat", []):
+        if msg.get("role") == "assistant":
+            msg["is_current_prompt"] = False
+
+
+def _append_assistant_message(
+    state: dict,
+    text: str,
+    *,
+    prompt_step: Optional[dict] = None,
+    prompt_text: str = "",
+):
     text = (text or "").strip()
     if not text:
         return
     if state["chat"] and state["chat"][-1]["role"] == "assistant" and state["chat"][-1]["content"].strip() == text:
+        if prompt_step or prompt_text:
+            _clear_current_prompt_flags(state)
+            state["chat"][-1]["is_current_prompt"] = True
+            if prompt_step:
+                state["chat"][-1]["prompt_step_id"] = prompt_step.get("id")
+            if prompt_text:
+                state["chat"][-1]["prompt_text"] = prompt_text.strip()
         return
-    state["chat"].append({"role": "assistant", "content": text})
+    message = {"role": "assistant", "content": text}
+    if prompt_step or prompt_text:
+        _clear_current_prompt_flags(state)
+        message["is_current_prompt"] = True
+        if prompt_step:
+            message["prompt_step_id"] = prompt_step.get("id")
+        if prompt_text:
+            message["prompt_text"] = prompt_text.strip()
+    state["chat"].append(message)
 
 
 def _remember_prompted_step(state: dict, step: Optional[dict], prompt_text: str = ""):
@@ -1814,8 +1914,9 @@ def _ensure_step_prompted(topic_key: str, state: dict, step: Optional[dict]):
     if last_id == step.get("id") and (
         last_text == prompt_text or _is_semantically_redundant_question(last_text, prompt_text)
     ):
+        _append_assistant_message(state, last_text or prompt_text, prompt_step=step, prompt_text=prompt_text)
         return
-    _append_assistant_message(state, prompt_text)
+    _append_assistant_message(state, prompt_text, prompt_step=step, prompt_text=prompt_text)
     _remember_prompted_step(state, step, prompt_text)
 
 
@@ -1854,9 +1955,11 @@ def _question_already_asked(state: dict, question_text: str) -> bool:
     return False
 
 
-def render_chat_bubble(role: str, content: str):
+def render_chat_bubble(role: str, content: str, highlight: bool = False):
     safe = _html.escape(content or "").replace("\n", "<br>")
     role_cls = "user" if role == "user" else "assistant"
+    if highlight and role != "user":
+        role_cls = f"{role_cls} current-question"
     role_label = "You" if role == "user" else "Care Assistant"
     avatar_label = "Y" if role == "user" else "I"
     timestamp = datetime.now().strftime("%H:%M")
@@ -1890,7 +1993,7 @@ _openai_error: Optional[str] = None
 # Performance defaults: keep the common path fast.
 ENABLE_DYNAMIC_PROMPT_REWRITE = False
 ENABLE_LLM_SEMANTIC_REDUNDANCY = True
-ENABLE_FULL_PIPELINE_FOR_EXACT_STRUCTURED_OPTIONS = False
+ENABLE_FULL_PIPELINE_FOR_EXACT_STRUCTURED_OPTIONS = True
 
 if OPENAI_API_KEY:
     try:
@@ -2196,6 +2299,7 @@ def _record_agent_trace(topic_key: str, step: dict, pipeline: dict):
         "question_id": step.get("id"),
         "question": step.get("text"),
         "mode": "pipeline",
+        "patient_answer": pipeline.get("patient_answer"),
         "agent_1_answer_interpreter": {
             "matched_option": pipeline.get("matched_option"),
         },
@@ -2210,6 +2314,7 @@ def _record_agent_trace(topic_key: str, step: dict, pipeline: dict):
         "agent_4_doctor_relevance": {
             "doctor_note": pipeline.get("doctor_note"),
             "clinical_priority": pipeline.get("clinical_priority"),
+            "follow_up_goal": pipeline.get("follow_up_goal"),
             "next_step_action": pipeline.get("next_step_action"),
         },
         "agent_5_next_move": {
@@ -2219,6 +2324,8 @@ def _record_agent_trace(topic_key: str, step: dict, pipeline: dict):
         "orchestrator": {
             "assistant_message": pipeline.get("assistant_message"),
             "special_signals": pipeline.get("special_signals", {}),
+            "final_decision": None,
+            "next_question": None,
         },
     }
     st.session_state.setdefault("agent_traces", []).append(trace)
@@ -2238,18 +2345,60 @@ def _record_fastpath_trace(
         "question": step.get("text"),
         "mode": "fast_path",
         "source": source,
-        "answer": answer,
-        "agent_1_answer_interpreter": "Skipped",
-        "agent_2_urgency": "Skipped",
-        "agent_3_engagement": "Skipped",
-        "agent_4_doctor_relevance": "Skipped",
-        "agent_5_next_move": "Skipped",
+        "patient_answer": answer,
+        "agent_1_answer_interpreter": {
+            "matched_option": answer,
+        },
+        "agent_2_urgency": {
+            "urgency_tier": 0,
+        },
+        "agent_3_engagement": {
+            "wants_to_stop": False,
+            "reduce_follow_up": False,
+        },
+        "agent_4_doctor_relevance": {
+            "clinical_priority": "low",
+            "follow_up_goal": None,
+        },
+        "agent_5_next_move": {
+            "follow_up_triggered": False,
+            "follow_up_question": None,
+        },
         "orchestrator": {
-            "decision": note,
+            "assistant_message": None,
+            "final_decision": note,
+            "next_question": None,
         },
     }
     st.session_state.setdefault("agent_traces", []).append(trace)
     st.session_state["last_agent_trace"] = trace
+
+
+def _finalize_demo_trace(decision: str, next_question: Optional[str] = None):
+    trace = st.session_state.get("last_agent_trace")
+    if not trace:
+        return
+    orch = trace.setdefault("orchestrator", {})
+    orch["final_decision"] = decision
+    orch["next_question"] = next_question
+    st.session_state["last_agent_trace"] = trace
+    traces = st.session_state.get("agent_traces", [])
+    if traces:
+        traces[-1] = trace
+        st.session_state["agent_traces"] = traces
+
+
+def _current_prompt_text_for_topic(topic_key: Optional[str]) -> str:
+    if not topic_key:
+        return ""
+    state = st.session_state.get("topic_states", {}).get(topic_key, {})
+    for msg in reversed(state.get("chat", [])):
+        if msg.get("role") == "assistant" and msg.get("is_current_prompt"):
+            content = str(msg.get("prompt_text") or msg.get("content") or "").strip()
+            if content:
+                parts = [part.strip() for part in content.split("\n\n") if part.strip()]
+                return parts[-1] if parts else content
+    return str(state.get("last_prompted_text") or "").strip()
 
 
 def _mark_patient_fatigue(topic_key: Optional[str] = None):
@@ -2264,45 +2413,75 @@ def _mark_patient_fatigue(topic_key: Optional[str] = None):
         )
 
 
-def _render_demo_agent_panel():
+def _render_demo_agent_panel(topic_key: Optional[str] = None):
     if not st.session_state.get("demo_mode"):
         return
     trace = st.session_state.get("last_agent_trace")
-    st.markdown("**Demo Mode: Live Agent Decisions**")
-    if not trace:
-        st.info("No agent decisions recorded yet for this topic step.")
-        return
-
-    mode = trace.get("mode", "pipeline")
-    if mode == "fast_path":
-        st.markdown(
-            f"""
-            <div style="border:1px solid #d7e4ee;border-radius:16px;padding:12px 14px;margin:6px 0 12px 0;background:#f8fbff;">
-              <div style="font-size:11px;font-weight:800;letter-spacing:0.08em;text-transform:uppercase;color:#6b7d92;margin-bottom:8px;">Fast Path</div>
-              <div style="font-size:13px;color:#17324a;line-height:1.5;"><strong>Question:</strong> {_html.escape(str(trace.get("question") or ""))}</div>
-              <div style="font-size:13px;color:#17324a;line-height:1.5;"><strong>Answer:</strong> {_html.escape(str(trace.get("answer") or ""))}</div>
-              <div style="font-size:13px;color:#17324a;line-height:1.5;"><strong>Decision:</strong> {_html.escape(str((trace.get("orchestrator") or {}).get("decision") or ""))}</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        return
-
+    current_prompt = _current_prompt_text_for_topic(
+        topic_key or st.session_state.get("selected_topic")
+    )
     st.markdown(
-        f"""
-        <div style="border:1px solid #d7e4ee;border-radius:16px;padding:12px 14px;margin:6px 0 12px 0;background:#f8fbff;">
-          <div style="font-size:11px;font-weight:800;letter-spacing:0.08em;text-transform:uppercase;color:#6b7d92;margin-bottom:8px;">Pipeline</div>
-          <div style="font-size:13px;color:#17324a;line-height:1.55;"><strong>Question:</strong> {_html.escape(str(trace.get("question") or ""))}</div>
-          <div style="font-size:13px;color:#17324a;line-height:1.55;"><strong>Agent 1:</strong> {_html.escape(str((trace.get("agent_1_answer_interpreter") or {}).get("matched_option") or "No structured match"))}</div>
-          <div style="font-size:13px;color:#17324a;line-height:1.55;"><strong>Agent 2:</strong> urgency tier {_html.escape(str((trace.get("agent_2_urgency") or {}).get("urgency_tier") or 0))}</div>
-          <div style="font-size:13px;color:#17324a;line-height:1.55;"><strong>Agent 3:</strong> wants_to_stop={_html.escape(str((trace.get("agent_3_engagement") or {}).get("wants_to_stop") or False))}, reduce_follow_up={_html.escape(str((trace.get("agent_3_engagement") or {}).get("reduce_follow_up") or False))}</div>
-          <div style="font-size:13px;color:#17324a;line-height:1.55;"><strong>Agent 4:</strong> priority {_html.escape(str((trace.get("agent_4_doctor_relevance") or {}).get("clinical_priority") or "medium"))}</div>
-          <div style="font-size:13px;color:#17324a;line-height:1.55;"><strong>Agent 5:</strong> follow_up_triggered={_html.escape(str((trace.get("agent_5_next_move") or {}).get("follow_up_triggered") or False))}</div>
-          <div style="font-size:13px;color:#17324a;line-height:1.55;"><strong>Orchestrator:</strong> {_html.escape(str((trace.get("orchestrator") or {}).get("assistant_message") or "Moved to next step"))}</div>
-        </div>
-        """,
+        '<div class="demo-reasoning-card">'
+        '<div class="demo-title">Demo Mode</div>'
+        '<div class="demo-subtitle">How the system made this decision</div>'
+        '</div>',
         unsafe_allow_html=True,
     )
+    if not trace:
+        st.caption("The system evaluates each answer across multiple clinical dimensions before deciding the next step.")
+        if current_prompt:
+            st.markdown(f"**Current question:** {current_prompt}")
+        st.info("No reasoning has been recorded yet for this step.")
+        return
+
+    interp = trace.get("agent_1_answer_interpreter") or {}
+    urgency = trace.get("agent_2_urgency") or {}
+    engagement = trace.get("agent_3_engagement") or {}
+    doctor = trace.get("agent_4_doctor_relevance") or {}
+    next_move = trace.get("agent_5_next_move") or {}
+    orchestrator = trace.get("orchestrator") or {}
+
+    interpreted_as = interp.get("matched_option") or trace.get("patient_answer") or "a valid answer"
+    urgency_tier = urgency.get("urgency_tier", 0)
+    if urgency_tier >= 3:
+        urgency_text = "Emergency concern detected."
+    elif urgency_tier == 2:
+        urgency_text = "Needs same-day care team attention."
+    else:
+        urgency_text = "No urgent symptoms detected."
+
+    if engagement.get("wants_to_stop"):
+        engagement_text = "Patient seems to want to stop or pause."
+    elif engagement.get("reduce_follow_up"):
+        engagement_text = "System is keeping follow-up lighter."
+    else:
+        engagement_text = "Engagement is normal."
+
+    missing = doctor.get("follow_up_goal")
+    if missing:
+        doctor_text = f"System still needs: {missing}"
+    else:
+        doctor_text = "No major detail is missing for this step."
+
+    decision = orchestrator.get("final_decision") or "System is moving to the next step."
+    next_question = orchestrator.get("next_question")
+    if next_move.get("follow_up_triggered") and next_move.get("follow_up_question"):
+        decision = f"Ask one follow-up: {next_move.get('follow_up_question')}"
+    elif next_question:
+        decision = f"Move to next question: {next_question}"
+    if current_prompt:
+        decision = f"Now asking: {current_prompt}"
+
+    st.caption("The system evaluates each answer across multiple clinical dimensions before deciding the next step.")
+    with st.expander("View reasoning", expanded=True):
+        if current_prompt:
+            st.markdown(f"**Current question:** {current_prompt}")
+        st.markdown(f"**Patient said:** `{trace.get('patient_answer')}`")
+        st.markdown(f"**Understanding:** System identified this as `{interpreted_as}`.")
+        st.markdown(f"**Urgency check:** {urgency_text}")
+        st.markdown(f"**Patient state:** {engagement_text}")
+        st.markdown(f"**Doctor relevance:** {doctor_text}")
+        st.markdown(f"**Final decision:** {decision}")
 
 
 
@@ -3753,6 +3932,7 @@ def run_agent_pipeline(
         st.session_state["urgency_state"] = urg_state
 
     return {
+        "patient_answer": current_raw_answer,
         "matched_option": matched,
         "follow_up": do_follow_up,
         "follow_up_question": follow_up_question,
@@ -3764,6 +3944,7 @@ def run_agent_pipeline(
         "wants_to_stop": wants_to_stop,
         "doctor_note": dr_out.get("doctor_note"),
         "clinical_priority": priority,
+        "follow_up_goal": followup_goal,
         "change_significance": dr_out.get("change_significance", "no_baseline"),
         "change_clinical_note": dr_out.get("clinical_note", ""),
         "next_step_action": dr_out.get("next_step_action"),
@@ -4098,6 +4279,7 @@ def _init_state():
                 "last_prompted_step_id": None,
                 "last_prompted_text": "",
                 "generated_prompts": {},
+                "generated_quick_replies": {},
             }
             for _, key in TOPICS
         },
@@ -4128,6 +4310,81 @@ def _init_state():
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
+
+
+def _fresh_topic_states() -> dict:
+    return {
+        key: {
+            "status": "not_started",
+            "data": {},
+            "chat": [],
+            "followup_counts": {},
+            "raw_answers": {},
+            "last_prompted_step_id": None,
+            "last_prompted_text": "",
+            "generated_prompts": {},
+            "generated_quick_replies": {},
+        }
+        for _, key in TOPICS
+    }
+
+
+def _clear_transient_widget_state():
+    transient_prefixes = (
+        "radio_",
+        "text_",
+        "dropdown_",
+        "voice_",
+        "multi_",
+        "num_",
+        "num_text_",
+        "suggested_",
+        "unit_",
+        "ft_",
+        "pending_followup_",
+        "_vt_",
+        "_vh_",
+        "_vrec_",
+    )
+    transient_exact = {
+        "freeform_chat_input",
+    }
+    for key in list(st.session_state.keys()):
+        if key in transient_exact or key.startswith(transient_prefixes):
+            st.session_state.pop(key, None)
+
+
+def _reset_checkin_session_state(preserve_demo_mode: bool = True):
+    demo_mode = bool(st.session_state.get("demo_mode", False)) if preserve_demo_mode else False
+    _clear_transient_widget_state()
+    st.session_state.topic_states = _fresh_topic_states()
+    st.session_state.selected_topic = TOPIC_KEYS[0] if TOPIC_KEYS else None
+    st.session_state.report = ""
+    st.session_state.report_saved = False
+    st.session_state.freeform_chat = []
+    st.session_state.structured_responses = []
+    st.session_state.agent_traces = []
+    st.session_state.last_agent_trace = None
+    st.session_state.patient_fatigue = False
+    st.session_state.fatigue_requested_at = None
+    st.session_state.urgency_state = {
+        "current_tier": 0,
+        "all_signals": [],
+        "escalation_shown": False,
+        "emergency_shown": False,
+        "patient_message": None,
+    }
+    st.session_state.sentiment_state = {
+        "all_signals": [],
+        "engagement_trajectory": "insufficient_data",
+        "emotional_state": "neutral",
+    }
+    st.session_state.demo_mode = demo_mode
+
+
+def _invalidate_report_cache():
+    st.session_state.report = ""
+    st.session_state.report_saved = False
 
 
 _init_state()
@@ -4512,11 +4769,12 @@ def _append_next_question(
         prompt_consumed = True
     if next_text and not prompt_consumed:
         combined = "\n\n".join(part for part in [message, next_text] if part)
-        _append_assistant_message(state, combined)
+        _append_assistant_message(state, combined, prompt_step=next_step, prompt_text=next_text)
         _remember_prompted_step(state, next_step, next_text)
     elif message:
         _append_assistant_message(state, message)
     elif not next_step:
+        _clear_current_prompt_flags(state)
         _remember_prompted_step(state, None, "")
 
 
@@ -4679,6 +4937,37 @@ def _resolve_next_step(topic_key: str, state: dict) -> Optional[dict]:
     return get_next_step(topic_key, state["data"], state.get("raw_answers"))
 
 
+def _suggestions_for_prompt_text(prompt_text: str, step: Optional[dict] = None) -> list[str]:
+    if step and step.get("opts"):
+        opts = []
+        for opt in step.get("opts", []):
+            text = str(opt or "").strip()
+            if not text:
+                continue
+            if text.lower() in {"other", "something else"}:
+                continue
+            opts.append(text)
+        if opts:
+            return opts[:5]
+
+    text = _norm_text(prompt_text or "")
+    if not text:
+        return []
+    if any(word in text for word in ("when", "start", "started", "how long", "since")):
+        return ["Today", "Yesterday", "A few days ago", "More than a week ago", "Not sure"]
+    if "dose" in text or "how often" in text:
+        return ["As prescribed", "Once a day", "Twice a day", "Three times a day", "Not sure"]
+    if "where exactly" in text or "where is the pain" in text or "which body part" in text:
+        return ["Throat", "Tongue", "Jaw", "Neck", "Mouth/cheek"]
+    if "what are you able to eat" in text or "what can you eat" in text:
+        return ["Soft foods", "Liquids", "Small meals", "Not sure"]
+    if "who is supporting you" in text or "who supports you" in text:
+        return ["Family", "Friends", "Caregiver", "No one nearby"]
+    if "what kind of support" in text:
+        return ["Emotional support", "Transportation help", "Help at home", "More information"]
+    return []
+
+
 def _quick_reply_suggestions(topic_key: str, state: dict, step: dict) -> list[str]:
     if step.get("opts"):
         return []
@@ -4694,15 +4983,46 @@ def _quick_reply_suggestions(topic_key: str, state: dict, step: dict) -> list[st
                 cleaned.append(text)
     if cleaned:
         return cleaned
+    return _suggestions_for_prompt_text(step.get("text", ""), step=step)
 
-    text = _norm_text(step.get("text", ""))
-    if any(word in text for word in ("when", "start", "started", "how long", "since")):
-        return ["Today", "Yesterday", "A few days ago", "More than a week ago", "Not sure"]
-    if "dose" in text or "how often" in text:
-        return ["As prescribed", "Once a day", "Twice a day", "Three times a day", "Not sure"]
-    if "what are you able to eat" in text:
-        return ["Soft foods", "Liquids", "Small meals", "Not sure"]
-    return []
+
+def _render_suggested_reply_buttons(
+    suggestions: list[str],
+    key_prefix: str,
+    target_input_key: Optional[str] = None,
+) -> Optional[str]:
+    suggestions = [str(s or "").strip() for s in suggestions if str(s or "").strip()]
+    if not suggestions:
+        return None
+    clicked = None
+    st.markdown('<div class="common-answer-buttons">', unsafe_allow_html=True)
+    cols = st.columns(len(suggestions))
+    for idx, suggestion in enumerate(suggestions):
+        with cols[idx]:
+            if st.button(suggestion, key=f"{key_prefix}_{idx}", use_container_width=True):
+                if target_input_key:
+                    st.session_state[target_input_key] = suggestion
+                clicked = suggestion
+    st.markdown('</div>', unsafe_allow_html=True)
+    return clicked
+
+
+def _render_numeric_choice_buttons(
+    values: list[int],
+    key_prefix: str,
+) -> Optional[int]:
+    clean_values = [int(v) for v in values]
+    if not clean_values:
+        return None
+    clicked = None
+    st.markdown('<div class="common-answer-buttons">', unsafe_allow_html=True)
+    cols = st.columns(len(clean_values))
+    for idx, value in enumerate(clean_values):
+        with cols[idx]:
+            if st.button(str(value), key=f"{key_prefix}_{idx}", use_container_width=True):
+                clicked = value
+    st.markdown('</div>', unsafe_allow_html=True)
+    return clicked
 
 
 def _mark_submission_once(submitted_key: str, candidate: str) -> bool:
@@ -4890,6 +5210,7 @@ def _store_followup_prompt(
     target_step: Optional[dict] = None,
 ):
     state["waiting_for_followup"] = True
+    prompt_step = target_step or step
     state["pending_followup"] = {
         "source_step_id": step["id"],
         "question": question,
@@ -4900,7 +5221,8 @@ def _store_followup_prompt(
         "target_step_id": target_step.get("id") if target_step else None,
     }
     combined_prompt = "\n\n".join([part for part in [assistant_message.strip(), question.strip()] if part])
-    _append_assistant_message(state, combined_prompt)
+    _append_assistant_message(state, combined_prompt, prompt_step=prompt_step, prompt_text=combined_prompt)
+    _remember_prompted_step(state, prompt_step, combined_prompt)
 
 
 def _request_retry_for_step(topic_key: str, step: dict, raw_input: str, source: str = "typed"):
@@ -4954,11 +5276,14 @@ def _clear_step_inputs(topic_key: str, step: dict):
             f"_vt_{topic_key}_{sid}_multi",
             f"_vh_{topic_key}_{sid}_multi",
         ])
+        for idx, _ in enumerate(step.get("opts", [])):
+            keys_to_clear.append(f"multi_{topic_key}_{sid}_{idx}")
     elif stype == "number":
         keys_to_clear.extend([
             f"text_{topic_key}_{sid}",
             f"text_{topic_key}_{sid}_submitted",
             f"num_{topic_key}_{sid}",
+            f"num_text_{topic_key}_{sid}",
             f"suggested_{topic_key}_{sid}",
             f"suggested_{topic_key}_{sid}_submitted",
             f"_vt_{topic_key}_{sid}_num",
@@ -4979,13 +5304,30 @@ def _clear_step_inputs(topic_key: str, step: dict):
         st.session_state.pop(key, None)
 
 
+def _clear_pending_followup_inputs(topic_key: str, pending_suffix: str):
+    keys_to_clear = [
+        f"pending_followup_{topic_key}_{pending_suffix}",
+        f"pending_followup_{topic_key}_{pending_suffix}_submitted",
+        f"pending_followup_{topic_key}_{pending_suffix}_voice_sync",
+        f"_vt_pending_{topic_key}_{pending_suffix}",
+        f"_vh_pending_{topic_key}_{pending_suffix}",
+        f"_vrec_pending_{topic_key}_{pending_suffix}",
+    ]
+    for key in keys_to_clear:
+        st.session_state.pop(key, None)
+
+
 def handle_pending_followup(topic_key: str, answer: str, source: str = "typed"):
     state = st.session_state.topic_states[topic_key]
+    _invalidate_report_cache()
     pending = state.get("pending_followup") or {}
     answer_key = pending.get("answer_key")
+    pending_suffix = pending.get("answer_key", "pending")
     if not answer_key:
         state["waiting_for_followup"] = False
         state.pop("pending_followup", None)
+        _clear_current_prompt_flags(state)
+        _clear_pending_followup_inputs(topic_key, pending_suffix)
         st.rerun()
         return
 
@@ -4994,6 +5336,7 @@ def handle_pending_followup(topic_key: str, answer: str, source: str = "typed"):
         source_step = STEP_BY_ID.get(source_step_id)
         state["waiting_for_followup"] = False
         state.pop("pending_followup", None)
+        _clear_current_prompt_flags(state)
         if not source_step:
             st.rerun()
             return
@@ -5150,12 +5493,10 @@ def handle_pending_followup(topic_key: str, answer: str, source: str = "typed"):
         str(answer),
     )
     pending_key = f"pending_followup_{topic_key}_{pending.get('answer_key', 'pending')}"
-    st.session_state.pop(pending_key, None)
-    submitted_pending_key = f"{pending_key}_submitted"
-    st.session_state.pop(submitted_pending_key, None)
-    st.session_state.pop(f"{pending_key}_voice_sync", None)
+    _clear_pending_followup_inputs(topic_key, pending_suffix)
     state["waiting_for_followup"] = False
     state.pop("pending_followup", None)
+    _clear_current_prompt_flags(state)
 
     last_topic_data = st.session_state.last_checkin.get(topic_key, {})
     closing = _default_chatty_reply(
@@ -5196,6 +5537,7 @@ def handle_answer(
     For free-text, voice, and typed answers we run the full multi-agent pipeline.
     """
     state = st.session_state.topic_states[topic_key]
+    _invalidate_report_cache()
 
     # ── Ensure followup_counts dict exists (backward compat) ──────
     if "followup_counts" not in state:
@@ -5211,6 +5553,7 @@ def handle_answer(
     if "generated_quick_replies" not in state:
         state["generated_quick_replies"] = {}
     if state.get("last_prompted_step_id") == step.get("id"):
+        _clear_current_prompt_flags(state)
         _remember_prompted_step(state, None, "")
     _clear_step_inputs(topic_key, step)
 
@@ -5261,6 +5604,7 @@ def handle_answer(
             "Exact structured option matched. Agents skipped and the app moved to the next regular step.",
         )
         if topic_is_complete(topic_key, state["data"], state.get("raw_answers")):
+            _finalize_demo_trace("Topic complete.")
             state["status"] = "completed"
             state["chat"].append({
                 "role": "assistant",
@@ -5268,6 +5612,10 @@ def handle_answer(
             })
             st.rerun()
             return
+        _finalize_demo_trace(
+            "Move to the next regular question.",
+            _step_prompt_text(next_step, topic_key=topic_key, state=state) if next_step else None,
+        )
         _append_next_question(topic_key, state, next_step)
         st.rerun()
         return
@@ -5287,6 +5635,7 @@ def handle_answer(
             "Structured numeric or multi-select answer accepted. Agents skipped and the app moved forward.",
         )
         if topic_is_complete(topic_key, state["data"], state.get("raw_answers")):
+            _finalize_demo_trace("Topic complete.")
             state["status"] = "completed"
             state["chat"].append({
                 "role": "assistant",
@@ -5294,6 +5643,10 @@ def handle_answer(
             })
             st.rerun()
             return
+        _finalize_demo_trace(
+            "Move to the next regular question.",
+            _step_prompt_text(next_step, topic_key=topic_key, state=state) if next_step else None,
+        )
         _append_next_question(topic_key, state, next_step)
         st.rerun()
         return
@@ -5323,6 +5676,7 @@ def handle_answer(
 
             # ── Emergency: terminate session ──────────────────────
             if pipeline.get("urgency_tier", 0) == 3:
+                _finalize_demo_trace("Stop the session and show emergency guidance.")
                 emergency_msg = pipeline.get("urgency_message") or (
                     "We are concerned about what you've shared. Please call 911 or "
                     "go to your nearest emergency room immediately. "
@@ -5347,6 +5701,7 @@ def handle_answer(
 
             # ── Patient wants to stop ─────────────────────────────
             if pipeline.get("wants_to_stop"):
+                _finalize_demo_trace("Pause here because the patient appears to want to stop.")
                 closing = "Of course — we'll pause here. The answers you've shared have been saved for your care team."
                 if ack:
                     closing = f"{ack}\n\n{closing}"
@@ -5357,6 +5712,7 @@ def handle_answer(
 
             # ── Tier 2: avoid detached follow-ups in the same turn ─
             if tier2_msg:
+                _finalize_demo_trace("Pause this topic so the care team can follow up directly.")
                 state["chat"].append({
                     "role": "assistant",
                     "content": "We'll pause this topic here for now so your care team can follow up directly.",
@@ -5383,6 +5739,7 @@ def handle_answer(
                         topic_key, state, step, fq, ack,
                         target_step=next_step,
                     )
+                    _finalize_demo_trace("Ask one follow-up question.", fq)
                     st.rerun()
                     return
 
@@ -5422,6 +5779,7 @@ def handle_answer(
 
     # ── Topic complete check ──────────────────────────────────────
     if topic_is_complete(topic_key, state["data"], state.get("raw_answers")):
+        _finalize_demo_trace("Topic complete.")
         state["status"] = "completed"
         final_message = "✅ Thank you — I have everything I need for this topic."
         if assistant_message:
@@ -5430,6 +5788,10 @@ def handle_answer(
         st.rerun()
         return
 
+    _finalize_demo_trace(
+        "Move to the next regular question.",
+        _step_prompt_text(next_step, topic_key=topic_key, state=state) if next_step else None,
+    )
     _append_next_question(topic_key, state, next_step, assistant_message)
     st.rerun()
     return
@@ -5447,7 +5809,6 @@ def render_input(topic_key: str, step: dict):
 
     state = st.session_state.topic_states[topic_key]
     topic_history = _recent_topic_history(state)
-
     # ── Options ─────────────────────────────────────────────────
     if stype == "options":
         st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
@@ -5455,18 +5816,22 @@ def render_input(topic_key: str, step: dict):
         form_key = f"form_{topic_key}_{sid}_options"
         with st.form(form_key, clear_on_submit=False):
             selected = st.radio("Choose one", opts, key=f"radio_{topic_key}_{sid}", horizontal=(len(opts) <= 3))
-            typed = st.text_input(
-                "Add details or type a different answer",
-                key=f"text_{topic_key}_{sid}",
-                placeholder="Optional details...",
-            )
+            text_col, mic_col = st.columns([20, 1], vertical_alignment="bottom")
+            with text_col:
+                typed = st.text_input(
+                    "Add details or type a different answer",
+                    key=f"text_{topic_key}_{sid}",
+                    placeholder="Optional details...",
+                )
+            with mic_col:
+                st.markdown('<div class="inline-voice-row">', unsafe_allow_html=True)
+                voice_text = voice_widget(f"{topic_key}_{sid}_opt", label="🎙️")
+                st.markdown('</div>', unsafe_allow_html=True)
             submitted = st.form_submit_button("Continue", type="primary", use_container_width=True)
-        st.markdown('<div class="inline-voice-anchor">', unsafe_allow_html=True)
-        voice_text = voice_widget(f"{topic_key}_{sid}_opt", label="🎙️")
-        st.markdown('</div>', unsafe_allow_html=True)
         if submitted:
             typed_clean = (typed or "").strip()
             if typed_clean:
+                st.session_state.pop(f"text_{topic_key}_{sid}_submitted", None)
                 if _process_option_submission(topic_key, step, typed_clean, "typed", f"text_{topic_key}_{sid}_submitted", topic_history):
                     return
             else:
@@ -5483,27 +5848,51 @@ def render_input(topic_key: str, step: dict):
         opts = step.get("opts", [])
         form_key = f"form_{topic_key}_{sid}_multi"
         with st.form(form_key, clear_on_submit=False):
-            selected = st.multiselect("Choose all that apply", opts, key=f"multi_{topic_key}_{sid}")
-            typed = st.text_input(
-                "Other or details",
-                key=f"text_{topic_key}_{sid}",
-                placeholder="Optional: type another medication or detail...",
-            )
+            st.markdown("**Choose all that apply**")
+            selected = []
+            checkbox_cols = st.columns(2)
+            for idx, opt in enumerate(opts):
+                with checkbox_cols[idx % 2]:
+                    if st.checkbox(opt, key=f"multi_{topic_key}_{sid}_{idx}"):
+                        selected.append(opt)
+            text_col, mic_col = st.columns([20, 1], vertical_alignment="bottom")
+            with text_col:
+                typed = st.text_input(
+                    "Other or details",
+                    key=f"text_{topic_key}_{sid}",
+                    placeholder="Optional: type another medication or detail...",
+                )
+            with mic_col:
+                st.markdown('<div class="inline-voice-row">', unsafe_allow_html=True)
+                voice_text = voice_widget(f"{topic_key}_{sid}_multi", label="🎙️")
+                st.markdown('</div>', unsafe_allow_html=True)
             submitted = st.form_submit_button("Continue", type="primary", use_container_width=True)
-        st.markdown('<div class="inline-voice-anchor">', unsafe_allow_html=True)
-        voice_text = voice_widget(f"{topic_key}_{sid}_multi", label="🎙️")
-        st.markdown('</div>', unsafe_allow_html=True)
         if submitted:
             typed_clean = (typed or "").strip()
-            if typed_clean and (not selected or selected == ["Other"] or "Other" in selected):
-                payload = selected or ["Other"]
-                if "Other" not in payload and typed_clean:
-                    payload = [*payload, "Other"]
-                handle_answer(topic_key, step, payload, source="structured", display_override=typed_clean, raw_answer=typed_clean)
+            if typed_clean:
+                payload = list(selected)
+                if "No pain medication" in payload and typed_clean:
+                    payload = [item for item in payload if item != "No pain medication"]
+                if "None of these" in payload and typed_clean:
+                    payload = [item for item in payload if item != "None of these"]
+                if "Other" not in payload:
+                    payload.append("Other")
+                display_parts = [item for item in payload if item != "Other"] + [typed_clean]
+                display_value = ", ".join(display_parts)
+                handle_answer(
+                    topic_key,
+                    step,
+                    payload,
+                    source="structured",
+                    display_override=display_value,
+                    raw_answer=typed_clean,
+                )
                 return
             if selected:
                 handle_answer(topic_key, step, selected, source="structured")
                 return
+            if typed_clean:
+                st.session_state.pop(f"text_{topic_key}_{sid}_submitted", None)
             if typed_clean and _process_multiselect_submission(topic_key, step, typed_clean, "typed", f"text_{topic_key}_{sid}_submitted"):
                 return
             st.warning("Please choose at least one option, or type an answer.")
@@ -5517,21 +5906,90 @@ def render_input(topic_key: str, step: dict):
         min_v = int(step.get("min_v", 0))
         max_v = int(step.get("max_v", 10))
         default_v = int(step.get("default_v", min_v))
-        with st.form(f"form_{topic_key}_{sid}_number", clear_on_submit=False):
-            value = st.slider(
-                f"Choose a number from {min_v} to {max_v}",
-                min_value=min_v,
-                max_value=max_v,
-                value=max(min(default_v, max_v), min_v),
-                key=f"num_{topic_key}_{sid}",
+        is_weight_step = topic_key == "nutrition" and sid == "weight"
+        direct_button_values = list(range(min_v, max_v + 1)) if (max_v - min_v) <= 10 and not is_weight_step else []
+        unit = "lbs"
+
+        if direct_button_values:
+            clicked_value = _render_numeric_choice_buttons(
+                direct_button_values,
+                key_prefix=f"num_btn_{topic_key}_{sid}",
             )
+            if clicked_value is not None:
+                handle_answer(topic_key, step, clicked_value, source="structured")
+                return
+
+        if is_weight_step:
+            unit_key = f"unit_{topic_key}_{sid}"
+            if unit_key not in st.session_state:
+                st.session_state[unit_key] = "lbs"
+            unit = st.radio(
+                "Weight unit",
+                ["lbs", "kg"],
+                key=unit_key,
+                horizontal=True,
+            )
+            quick_values = [100, 120, 140, 160, 180, 200, 220] if unit == "lbs" else [45, 55, 65, 75, 85, 95, 105]
+            clicked_weight = _render_numeric_choice_buttons(
+                quick_values,
+                key_prefix=f"weight_btn_{topic_key}_{sid}_{unit}",
+            )
+            if clicked_weight is not None:
+                final_value = clicked_weight if unit == "lbs" else round(clicked_weight * 2.20462, 1)
+                handle_answer(
+                    topic_key,
+                    step,
+                    final_value,
+                    source="structured",
+                    display_override=f"{clicked_weight} {unit}",
+                )
+                return
+
+        with st.form(f"form_{topic_key}_{sid}_number", clear_on_submit=False):
+            input_col, mic_col = st.columns([20, 1], vertical_alignment="center")
+            with input_col:
+                input_min = min_v
+                input_max = max_v
+                input_default = max(min(default_v, input_max), input_min)
+                input_label = f"Enter a number from {min_v} to {max_v}"
+                if is_weight_step and unit == "kg":
+                    input_min = max(20, round(min_v / 2.20462))
+                    input_max = round(max_v / 2.20462)
+                    input_default = max(min(round(default_v / 2.20462), input_max), input_min)
+                    input_label = f"Enter your weight in kilograms from {input_min} to {input_max}"
+                elif is_weight_step:
+                    input_label = f"Enter your weight in pounds from {input_min} to {input_max}"
+                value_text = st.text_input(
+                    input_label,
+                    key=f"num_text_{topic_key}_{sid}",
+                    value=str(input_default),
+                )
+            with mic_col:
+                st.markdown('<div class="inline-voice-row">', unsafe_allow_html=True)
+                voice_text = voice_widget(f"{topic_key}_{sid}_num", label="🎙️")
+                st.markdown('</div>', unsafe_allow_html=True)
             submitted = st.form_submit_button("Continue", type="primary", use_container_width=True)
-        st.markdown('<div class="inline-voice-anchor">', unsafe_allow_html=True)
-        voice_text = voice_widget(f"{topic_key}_{sid}_num", label="🎙️")
-        st.markdown('</div>', unsafe_allow_html=True)
         if submitted:
-            handle_answer(topic_key, step, value, source="structured")
-            return
+            typed_value = (value_text or "").strip()
+            st.session_state.pop(f"text_{topic_key}_{sid}_submitted", None)
+            try:
+                numeric_value = float(typed_value)
+            except (TypeError, ValueError):
+                st.warning("Please enter a valid number.")
+            else:
+                final_value = numeric_value
+                display_value = typed_value
+                if is_weight_step and unit == "kg":
+                    final_value = round(numeric_value * 2.20462, 1)
+                    display_value = f"{typed_value} kg"
+                elif is_weight_step:
+                    display_value = f"{typed_value} lbs"
+                if float(final_value) < min_v or float(final_value) > max_v:
+                    st.warning(f"Please enter a value between {min_v} and {max_v}.")
+                else:
+                    int_or_float = int(final_value) if float(final_value).is_integer() else round(float(final_value), 1)
+                    handle_answer(topic_key, step, int_or_float, source="structured", display_override=display_value)
+                    return
         if _process_number_submission(topic_key, step, voice_text or "", f"voice_{topic_key}_{sid}_submitted"):
             return
         st.markdown('</div>', unsafe_allow_html=True)
@@ -5552,25 +6010,30 @@ def render_input(topic_key: str, step: dict):
 
         st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
         suggestions = _quick_reply_suggestions(topic_key, state, step)
-        with st.form(f"form_{topic_key}_{sid}_free", clear_on_submit=False):
-            selected_suggestion = None
-            if suggestions:
-                choices = [""] + suggestions + ["Other"]
-                selected_suggestion = st.selectbox(
-                    "Common answers",
-                    choices,
-                    format_func=lambda x: "Choose a common answer..." if x == "" else x,
-                    key=f"suggested_{topic_key}_{sid}",
-                )
-            free_text = st.text_input(
-                "Your answer",
-                placeholder=step.get("placeholder", "Please describe..."),
-                key=widget_key,
+        clicked_suggestion = None
+        if suggestions:
+            clicked_suggestion = _render_suggested_reply_buttons(
+                suggestions,
+                key_prefix=f"suggested_btn_{topic_key}_{sid}",
+                target_input_key=widget_key,
             )
+        if clicked_suggestion:
+            st.session_state[submit_key] = clicked_suggestion
+            handle_answer(topic_key, step, clicked_suggestion, source="free_text")
+            return
+        with st.form(f"form_{topic_key}_{sid}_free", clear_on_submit=False):
+            text_col, mic_col = st.columns([20, 1], vertical_alignment="bottom")
+            with text_col:
+                free_text = st.text_input(
+                    "Your answer",
+                    placeholder=step.get("placeholder", "Please describe..."),
+                    key=widget_key,
+                )
+            with mic_col:
+                st.markdown('<div class="inline-voice-row">', unsafe_allow_html=True)
+                voice_text = voice_widget(f"{topic_key}_{sid}", label="🎙️")
+                st.markdown('</div>', unsafe_allow_html=True)
             submitted = st.form_submit_button("Continue", type="primary", use_container_width=True)
-        st.markdown('<div class="inline-voice-anchor">', unsafe_allow_html=True)
-        voice_text = voice_widget(f"{topic_key}_{sid}", label="🎙️")
-        st.markdown('</div>', unsafe_allow_html=True)
         if voice_text and voice_text != st.session_state.get(f"{widget_key}_voice_sync"):
             st.session_state[f"{widget_key}_voice_sync"] = voice_text
             st.session_state[submit_key] = voice_text
@@ -5579,11 +6042,9 @@ def render_input(topic_key: str, step: dict):
 
         if submitted:
             candidate = (free_text or "").strip()
-            if not candidate and selected_suggestion and selected_suggestion != "Other":
-                candidate = selected_suggestion
             if not candidate:
                 st.warning("Please type an answer or choose a common answer.")
-            elif st.session_state.get(submit_key) != candidate:
+            else:
                 st.session_state[submit_key] = candidate
                 handle_answer(topic_key, step, candidate, source="free_text")
 
@@ -5651,6 +6112,7 @@ def render_freeform_chat():
              if m["role"] == "user"), None
         )
         if user_input.strip() != last_user:
+            _invalidate_report_cache()
             st.session_state.freeform_chat.append(
                 {"role": "user", "content": user_input.strip()}
             )
@@ -5761,67 +6223,96 @@ def render_topic_detail(topic_label: str, topic_key: str):
     if state["chat"]:
         with st.container(border=False):
             for msg in state["chat"]:
-                render_chat_bubble(msg["role"], msg["content"])
+                highlight = bool(msg.get("role") == "assistant" and msg.get("is_current_prompt"))
+                render_chat_bubble(msg["role"], msg["content"], highlight=highlight)
+    st.markdown('</div></div>', unsafe_allow_html=True)
 
-    _render_demo_agent_panel()
+    main_col, demo_col = st.columns([3.3, 1.15], gap="large")
+    if st.session_state.get("demo_mode"):
+        with demo_col:
+            _render_demo_agent_panel(topic_key)
 
     # ── Completed ────────────────────────────────────────────────
-    if state["status"] == "completed":
-        st.markdown(
-            '<div class="completion-badge">✅ This topic is complete</div>',
-            unsafe_allow_html=True,
-        )
-        if st.button("✏️ Add a note or correction", key=f"reopen_{topic_key}"):
-            state["status"] = "in_progress"
-            state["chat"].append({
-                "role": "assistant",
-                "content": "Of course — please share any correction or additional detail.",
-            })
-            state["data"].pop("_correction_note", None)
-            st.rerun()
-        st.markdown('</div><div class="composer-wrap"></div></div>', unsafe_allow_html=True)
-        return
-
-    # ── Current question ─────────────────────────────────────────
-    if state.get("waiting_for_followup"):
-        pending = state.get("pending_followup") or {}
-        pending_suffix = pending.get("answer_key", "pending")
-        pending_key = f"pending_followup_{topic_key}_{pending_suffix}"
-        pending_submit_key = f"{pending_key}_submitted"
-        if pending_key not in st.session_state:
-            st.session_state[pending_key] = ""
-        st.markdown('</div><div class="composer-wrap">', unsafe_allow_html=True)
-
-        st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
-        with st.form(f"form_pending_{topic_key}_{pending_suffix}", clear_on_submit=False):
-            pending_text = st.text_input(
-                "Reply",
-                key=pending_key,
-                placeholder="Type or speak your answer here...",
+    with main_col:
+        st.markdown('<div class="topic-response-region">', unsafe_allow_html=True)
+        if state["status"] == "completed":
+            st.markdown(
+                '<div class="completion-badge">✅ This topic is complete</div>',
+                unsafe_allow_html=True,
             )
-            pending_submitted = st.form_submit_button("Continue", type="primary", use_container_width=True)
-        st.markdown('<div class="inline-voice-anchor">', unsafe_allow_html=True)
-        pending_voice = voice_widget(f"pending_{topic_key}_{pending_suffix}", label="🎙️")
-        st.markdown('</div>', unsafe_allow_html=True)
-        if pending_voice and pending_voice != st.session_state.get(f"{pending_key}_voice_sync"):
-            st.session_state[f"{pending_key}_voice_sync"] = pending_voice
-            st.session_state[pending_submit_key] = pending_voice
-            handle_pending_followup(topic_key, pending_voice, source="voice")
+            if st.button("✏️ Add a note or correction", key=f"reopen_{topic_key}"):
+                state["status"] = "in_progress"
+                state["chat"].append({
+                    "role": "assistant",
+                    "content": "Of course — please share any correction or additional detail.",
+                })
+                state["data"].pop("_correction_note", None)
+                st.rerun()
+            st.markdown('</div>', unsafe_allow_html=True)
             return
 
-        if pending_submitted and pending_text and st.session_state.get(pending_submit_key) != pending_text:
-            st.session_state[pending_submit_key] = pending_text
-            handle_pending_followup(topic_key, pending_text, source="followup")
+        # ── Current question ─────────────────────────────────────────
+        if state.get("waiting_for_followup"):
+            pending = state.get("pending_followup") or {}
+            pending_suffix = pending.get("answer_key", "pending")
+            pending_key = f"pending_followup_{topic_key}_{pending_suffix}"
+            pending_submit_key = f"{pending_key}_submitted"
+            pending_target_step = None
+            if pending.get("target_step_id"):
+                pending_target_step = STEP_BY_ID.get(pending.get("target_step_id"))
+            elif pending.get("source_step_id"):
+                pending_target_step = STEP_BY_ID.get(pending.get("source_step_id"))
+            pending_suggestions = _suggestions_for_prompt_text(
+                pending.get("question", ""),
+                step=pending_target_step,
+            )
+            if pending_key not in st.session_state:
+                st.session_state[pending_key] = ""
+            st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
+            clicked_suggestion = None
+            if pending_suggestions:
+                clicked_suggestion = _render_suggested_reply_buttons(
+                    pending_suggestions,
+                    key_prefix=f"pending_suggested_btn_{topic_key}_{pending_suffix}",
+                    target_input_key=pending_key,
+                )
+            if clicked_suggestion:
+                st.session_state[pending_submit_key] = clicked_suggestion
+                handle_pending_followup(topic_key, clicked_suggestion, source="followup")
+                return
+            with st.form(f"form_pending_{topic_key}_{pending_suffix}", clear_on_submit=False):
+                text_col, mic_col = st.columns([20, 1], vertical_alignment="bottom")
+                with text_col:
+                    pending_text = st.text_input(
+                        "Reply",
+                        key=pending_key,
+                        placeholder="Type or speak your answer here...",
+                    )
+                with mic_col:
+                    st.markdown('<div class="inline-voice-row">', unsafe_allow_html=True)
+                    pending_voice = voice_widget(f"pending_{topic_key}_{pending_suffix}", label="🎙️")
+                    st.markdown('</div>', unsafe_allow_html=True)
+                pending_submitted = st.form_submit_button("Continue", type="primary", use_container_width=True)
+            if pending_voice and pending_voice != st.session_state.get(f"{pending_key}_voice_sync"):
+                st.session_state[f"{pending_key}_voice_sync"] = pending_voice
+                st.session_state[pending_submit_key] = pending_voice
+                handle_pending_followup(topic_key, pending_voice, source="voice")
+                return
 
+            if pending_submitted:
+                candidate = (pending_text or "").strip()
+                if candidate:
+                    st.session_state[pending_submit_key] = candidate
+                    handle_pending_followup(topic_key, candidate, source="followup")
+
+            st.markdown('</div>', unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
+            return
+        next_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
+        if next_step:
+            _ensure_step_prompted(topic_key, state, next_step)
+            render_input(topic_key, next_step)
         st.markdown('</div>', unsafe_allow_html=True)
-        st.markdown('</div></div>', unsafe_allow_html=True)
-        return
-    next_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
-    if next_step:
-        _ensure_step_prompted(topic_key, state, next_step)
-        st.markdown('</div><div class="composer-wrap">', unsafe_allow_html=True)
-        render_input(topic_key, next_step)
-        st.markdown('</div></div>', unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -5906,7 +6397,7 @@ def render_sidebar():
             unsafe_allow_html=True,
         )
         st.session_state["demo_mode"] = st.checkbox(
-            "Demo mode: show agent decisions",
+            "Show AI reasoning (Demo mode)",
             value=bool(st.session_state.get("demo_mode", False)),
             key="demo_mode_checkbox",
         )
@@ -5940,8 +6431,8 @@ def render_sidebar():
                     report = generate_report(st.session_state.patient_name, all_data)
                 st.session_state.report = report
                 with st.spinner("Saving…"):
-                    save_to_sheet(st.session_state.patient_name, all_data, report)
-                st.session_state.report_saved = True
+                    saved_ok = save_to_sheet(st.session_state.patient_name, all_data, report)
+                st.session_state.report_saved = bool(saved_ok)
                 st.session_state.app_stage = "report"
                 st.rerun()
 
@@ -5975,6 +6466,7 @@ def screen_login():
         name = st.text_input("Please enter your name:", placeholder="First and last name…")
         if st.button("Begin Check-In →", type="primary", use_container_width=True):
             if name.strip():
+                _reset_checkin_session_state()
                 st.session_state.patient_name = name.strip()
 
                 # ── Load previous check-in from Sheets ──────────
@@ -5988,7 +6480,6 @@ def screen_login():
                     st.session_state.last_checkin     = {}
                     st.session_state.has_prev_checkin = False
 
-                st.session_state.selected_topic = TOPIC_KEYS[0] if TOPIC_KEYS else None
                 st.session_state.app_stage      = "overview"
                 st.rerun()
             else:
@@ -6142,13 +6633,14 @@ def screen_report():
         if st.button(btn_label, type="primary", disabled=saved):
             with st.spinner("Saving…"):
                 _init_sheets()
-                save_to_sheet(
+                saved_ok = save_to_sheet(
                     st.session_state.patient_name,
                     all_data,
                     st.session_state.report,
                 )
-            st.session_state.report_saved = True
-            st.success("Saved successfully!")
+            st.session_state.report_saved = bool(saved_ok)
+            if saved_ok:
+                st.success("Saved successfully!")
             st.rerun()
 
     with col3:
