@@ -1443,19 +1443,41 @@ div[data-baseweb="select"] > div {
 .composer-shell {
     background: rgba(255,255,255,0.92);
     border: 1px solid #d9e4ed;
-    border-radius: 26px;
-    padding: 12px;
+    border-radius: 22px;
+    padding: 10px 12px 12px 12px;
     box-shadow: 0 18px 36px rgba(23, 50, 74, 0.08);
     backdrop-filter: blur(10px);
+    position: relative;
 }
 
 .composer-shell.compact {
-    padding: 12px;
+    padding: 10px 12px 12px 12px;
 }
 
 .composer-inline-voice {
     display: flex;
     align-items: stretch;
+}
+
+.composer-shell [data-testid="stHorizontalBlock"] {
+    gap: 0.55rem !important;
+    align-items: stretch !important;
+}
+
+.composer-shell [data-testid="column"] {
+    display: flex;
+    flex-direction: column;
+    justify-content: stretch;
+}
+
+.composer-shell [data-testid="column"]:last-child {
+    max-width: 76px;
+    min-width: 76px;
+    flex: 0 0 76px;
+}
+
+.composer-shell [data-testid="column"]:last-child > div {
+    height: 100%;
 }
 
 
@@ -1540,10 +1562,10 @@ div[data-baseweb="select"] > div {
 }
 
 .composer-shell [data-testid="stAudioInput"] {
-    background: transparent;
-    border: none;
-    border-radius: 16px;
-    min-height: 52px;
+    background: linear-gradient(180deg, #fdfefe 0%, #f5f9fd 100%);
+    border: 1px solid #d7e4ee;
+    border-radius: 18px;
+    min-height: 100%;
     width: 100%;
     min-width: 100%;
     max-width: 100%;
@@ -1552,29 +1574,33 @@ div[data-baseweb="select"] > div {
     justify-content: center;
     padding: 0;
     margin: 0;
-    box-shadow: none !important;
+    box-shadow: 0 8px 18px rgba(23, 50, 74, 0.06) !important;
+    overflow: hidden;
 }
 
 .composer-shell [data-testid="stAudioInput"] > div {
     width: 100%;
     min-width: 100%;
+    height: 100%;
     display: flex;
     justify-content: center;
     align-items: center;
     padding: 0 !important;
     margin: 0 !important;
+    overflow: hidden;
 }
 
 .composer-shell [data-testid="stAudioInput"] button {
     border-radius: 16px !important;
     width: 100% !important;
-    height: 52px !important;
+    height: 100% !important;
+    min-height: 52px !important;
     min-width: 100% !important;
     padding: 0 !important;
     margin: 0 !important;
-    border: 1px solid #d7e4ee !important;
-    background: linear-gradient(180deg, #ffffff 0%, #f5f9fd 100%) !important;
-    box-shadow: 0 8px 18px rgba(23, 50, 74, 0.08) !important;
+    border: none !important;
+    background: transparent !important;
+    box-shadow: none !important;
 }
 
 @media (max-width: 768px) {
@@ -1607,15 +1633,18 @@ div[data-baseweb="select"] > div {
 }
 
 .composer-shell [data-testid="stAudioInput"] button:hover {
-    border-color: #bed4e7 !important;
-    background: #ffffff !important;
-    box-shadow: 0 10px 20px rgba(15, 108, 189, 0.10) !important;
+    background: rgba(255,255,255,0.65) !important;
+    box-shadow: none !important;
 }
 
 .composer-shell [data-testid="stAudioInput"] button svg {
     width: 17px !important;
     height: 17px !important;
     color: #0f6cbd !important;
+}
+
+.composer-shell [data-testid="stAudioInput"] audio {
+    display: none !important;
 }
 
 
@@ -5264,7 +5293,7 @@ def render_input(topic_key: str, step: dict):
         st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
         opts = step.get("opts", [])
         form_key = f"form_{topic_key}_{sid}_options"
-        form_col, voice_col = st.columns([7, 1])
+        form_col, voice_col = st.columns([14, 1], vertical_alignment="bottom")
         with form_col:
             with st.form(form_key, clear_on_submit=False):
                 selected = st.radio("Choose one", opts, key=f"radio_{topic_key}_{sid}", horizontal=(len(opts) <= 3))
@@ -5294,7 +5323,7 @@ def render_input(topic_key: str, step: dict):
         st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
         opts = step.get("opts", [])
         form_key = f"form_{topic_key}_{sid}_multi"
-        form_col, voice_col = st.columns([7, 1])
+        form_col, voice_col = st.columns([14, 1], vertical_alignment="bottom")
         with form_col:
             with st.form(form_key, clear_on_submit=False):
                 selected = st.multiselect("Choose all that apply", opts, key=f"multi_{topic_key}_{sid}")
@@ -5330,7 +5359,7 @@ def render_input(topic_key: str, step: dict):
         min_v = int(step.get("min_v", 0))
         max_v = int(step.get("max_v", 10))
         default_v = int(step.get("default_v", min_v))
-        form_col, voice_col = st.columns([7, 1])
+        form_col, voice_col = st.columns([14, 1], vertical_alignment="bottom")
         with form_col:
             with st.form(f"form_{topic_key}_{sid}_number", clear_on_submit=False):
                 value = st.slider(
@@ -5366,7 +5395,7 @@ def render_input(topic_key: str, step: dict):
 
         st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
         suggestions = _quick_reply_suggestions(topic_key, state, step)
-        form_col, voice_col = st.columns([7, 1])
+        form_col, voice_col = st.columns([14, 1], vertical_alignment="bottom")
         with form_col:
             with st.form(f"form_{topic_key}_{sid}_free", clear_on_submit=False):
                 selected_suggestion = None
@@ -5608,7 +5637,7 @@ def render_topic_detail(topic_label: str, topic_key: str):
         st.markdown('</div><div class="composer-wrap">', unsafe_allow_html=True)
 
         st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
-        form_col, voice_col = st.columns([7, 1])
+        form_col, voice_col = st.columns([14, 1], vertical_alignment="bottom")
         with form_col:
             with st.form(f"form_pending_{topic_key}_{pending_suffix}", clear_on_submit=False):
                 pending_text = st.text_input(
