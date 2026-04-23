@@ -5560,17 +5560,9 @@ def render_input(topic_key: str, step: dict):
 
     state = st.session_state.topic_states[topic_key]
     topic_history = _recent_topic_history(state)
-    active_question_html = (
-        '<div class="active-question">'
-        '<div class="label">Current question</div>'
-        f'<div class="text">{_html.escape(step.get("text", ""))}</div>'
-        '</div>'
-    )
-
     # ── Options ─────────────────────────────────────────────────
     if stype == "options":
         st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
-        st.markdown(active_question_html, unsafe_allow_html=True)
         opts = step.get("opts", [])
         form_key = f"form_{topic_key}_{sid}_options"
         with st.form(form_key, clear_on_submit=False):
@@ -5603,7 +5595,6 @@ def render_input(topic_key: str, step: dict):
     # ── Multi-select ─────────────────────────────────────────────
     elif stype == "multi_select":
         st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
-        st.markdown(active_question_html, unsafe_allow_html=True)
         opts = step.get("opts", [])
         form_key = f"form_{topic_key}_{sid}_multi"
         with st.form(form_key, clear_on_submit=False):
@@ -5641,7 +5632,6 @@ def render_input(topic_key: str, step: dict):
     # ── Number ───────────────────────────────────────────────────
     elif stype == "number":
         st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
-        st.markdown(active_question_html, unsafe_allow_html=True)
         min_v = int(step.get("min_v", 0))
         max_v = int(step.get("max_v", 10))
         default_v = int(step.get("default_v", min_v))
@@ -5709,7 +5699,6 @@ def render_input(topic_key: str, step: dict):
             st.session_state[f"{widget_key}_voice_sync"] = transcript
 
         st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
-        st.markdown(active_question_html, unsafe_allow_html=True)
         suggestions = _quick_reply_suggestions(topic_key, state, step)
         with st.form(f"form_{topic_key}_{sid}_free", clear_on_submit=False):
             selected_suggestion = None
