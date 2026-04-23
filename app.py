@@ -2196,6 +2196,7 @@ def _record_agent_trace(topic_key: str, step: dict, pipeline: dict):
         "question_id": step.get("id"),
         "question": step.get("text"),
         "mode": "pipeline",
+        "patient_answer": pipeline.get("patient_answer"),
         "agent_1_answer_interpreter": {
             "matched_option": pipeline.get("matched_option"),
         },
@@ -2210,6 +2211,7 @@ def _record_agent_trace(topic_key: str, step: dict, pipeline: dict):
         "agent_4_doctor_relevance": {
             "doctor_note": pipeline.get("doctor_note"),
             "clinical_priority": pipeline.get("clinical_priority"),
+            "follow_up_goal": pipeline.get("follow_up_goal"),
             "next_step_action": pipeline.get("next_step_action"),
         },
         "agent_5_next_move": {
@@ -2219,6 +2221,8 @@ def _record_agent_trace(topic_key: str, step: dict, pipeline: dict):
         "orchestrator": {
             "assistant_message": pipeline.get("assistant_message"),
             "special_signals": pipeline.get("special_signals", {}),
+            "final_decision": None,
+            "next_question": None,
         },
     }
     st.session_state.setdefault("agent_traces", []).append(trace)
@@ -2238,18 +2242,47 @@ def _record_fastpath_trace(
         "question": step.get("text"),
         "mode": "fast_path",
         "source": source,
-        "answer": answer,
-        "agent_1_answer_interpreter": "Skipped",
-        "agent_2_urgency": "Skipped",
-        "agent_3_engagement": "Skipped",
-        "agent_4_doctor_relevance": "Skipped",
-        "agent_5_next_move": "Skipped",
+        "patient_answer": answer,
+        "agent_1_answer_interpreter": {
+            "matched_option": answer,
+        },
+        "agent_2_urgency": {
+            "urgency_tier": 0,
+        },
+        "agent_3_engagement": {
+            "wants_to_stop": False,
+            "reduce_follow_up": False,
+        },
+        "agent_4_doctor_relevance": {
+            "clinical_priority": "low",
+            "follow_up_goal": None,
+        },
+        "agent_5_next_move": {
+            "follow_up_triggered": False,
+            "follow_up_question": None,
+        },
         "orchestrator": {
-            "decision": note,
+            "assistant_message": None,
+            "final_decision": note,
+            "next_question": None,
         },
     }
     st.session_state.setdefault("agent_traces", []).append(trace)
     st.session_state["last_agent_trace"] = trace
+
+
+def _finalize_demo_trace(decision: str, next_question: Optional[str] = None):
+    trace = st.session_state.get("last_agent_trace")
+    if not trace:
+        return
+    orch = trace.setdefault("orchestrator", {})
+    orch["final_decision"] = decision
+    orch["next_question"] = next_question
+    st.session_state["last_agent_trace"] = trace
+    traces = st.session_state.get("agent_traces", [])
+    if traces:
+        traces[-1] = trace
+        st.session_state["agent_traces"] = traces
 
 
 def _mark_patient_fatigue(topic_key: Optional[str] = None):
@@ -2268,41 +2301,54 @@ def _render_demo_agent_panel():
     if not st.session_state.get("demo_mode"):
         return
     trace = st.session_state.get("last_agent_trace")
-    st.markdown("**Demo Mode: Live Agent Decisions**")
+    st.markdown("**Demo Mode: Live Reasoning**")
     if not trace:
         st.info("No agent decisions recorded yet for this topic step.")
         return
+    interp = trace.get("agent_1_answer_interpreter") or {}
+    urgency = trace.get("agent_2_urgency") or {}
+    engagement = trace.get("agent_3_engagement") or {}
+    doctor = trace.get("agent_4_doctor_relevance") or {}
+    next_move = trace.get("agent_5_next_move") or {}
+    orchestrator = trace.get("orchestrator") or {}
 
-    mode = trace.get("mode", "pipeline")
-    if mode == "fast_path":
-        st.markdown(
-            f"""
-            <div style="border:1px solid #d7e4ee;border-radius:16px;padding:12px 14px;margin:6px 0 12px 0;background:#f8fbff;">
-              <div style="font-size:11px;font-weight:800;letter-spacing:0.08em;text-transform:uppercase;color:#6b7d92;margin-bottom:8px;">Fast Path</div>
-              <div style="font-size:13px;color:#17324a;line-height:1.5;"><strong>Question:</strong> {_html.escape(str(trace.get("question") or ""))}</div>
-              <div style="font-size:13px;color:#17324a;line-height:1.5;"><strong>Answer:</strong> {_html.escape(str(trace.get("answer") or ""))}</div>
-              <div style="font-size:13px;color:#17324a;line-height:1.5;"><strong>Decision:</strong> {_html.escape(str((trace.get("orchestrator") or {}).get("decision") or ""))}</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        return
+    interpreted_as = interp.get("matched_option") or trace.get("patient_answer") or "a valid answer"
+    urgency_tier = urgency.get("urgency_tier", 0)
+    if urgency_tier >= 3:
+        urgency_text = "Emergency concern detected."
+    elif urgency_tier == 2:
+        urgency_text = "Needs same-day care team attention."
+    else:
+        urgency_text = "No urgent symptoms detected."
 
-    st.markdown(
-        f"""
-        <div style="border:1px solid #d7e4ee;border-radius:16px;padding:12px 14px;margin:6px 0 12px 0;background:#f8fbff;">
-          <div style="font-size:11px;font-weight:800;letter-spacing:0.08em;text-transform:uppercase;color:#6b7d92;margin-bottom:8px;">Pipeline</div>
-          <div style="font-size:13px;color:#17324a;line-height:1.55;"><strong>Question:</strong> {_html.escape(str(trace.get("question") or ""))}</div>
-          <div style="font-size:13px;color:#17324a;line-height:1.55;"><strong>Agent 1:</strong> {_html.escape(str((trace.get("agent_1_answer_interpreter") or {}).get("matched_option") or "No structured match"))}</div>
-          <div style="font-size:13px;color:#17324a;line-height:1.55;"><strong>Agent 2:</strong> urgency tier {_html.escape(str((trace.get("agent_2_urgency") or {}).get("urgency_tier") or 0))}</div>
-          <div style="font-size:13px;color:#17324a;line-height:1.55;"><strong>Agent 3:</strong> wants_to_stop={_html.escape(str((trace.get("agent_3_engagement") or {}).get("wants_to_stop") or False))}, reduce_follow_up={_html.escape(str((trace.get("agent_3_engagement") or {}).get("reduce_follow_up") or False))}</div>
-          <div style="font-size:13px;color:#17324a;line-height:1.55;"><strong>Agent 4:</strong> priority {_html.escape(str((trace.get("agent_4_doctor_relevance") or {}).get("clinical_priority") or "medium"))}</div>
-          <div style="font-size:13px;color:#17324a;line-height:1.55;"><strong>Agent 5:</strong> follow_up_triggered={_html.escape(str((trace.get("agent_5_next_move") or {}).get("follow_up_triggered") or False))}</div>
-          <div style="font-size:13px;color:#17324a;line-height:1.55;"><strong>Orchestrator:</strong> {_html.escape(str((trace.get("orchestrator") or {}).get("assistant_message") or "Moved to next step"))}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    if engagement.get("wants_to_stop"):
+        engagement_text = "Patient seems to want to stop or pause."
+    elif engagement.get("reduce_follow_up"):
+        engagement_text = "System is keeping follow-up lighter."
+    else:
+        engagement_text = "Engagement is normal."
+
+    missing = doctor.get("follow_up_goal")
+    if missing:
+        doctor_text = f"System still needs: {missing}"
+    else:
+        doctor_text = "No major detail is missing for this step."
+
+    decision = orchestrator.get("final_decision") or "System is moving to the next step."
+    next_question = orchestrator.get("next_question")
+    if next_move.get("follow_up_triggered") and next_move.get("follow_up_question"):
+        decision = f"Ask one follow-up: {next_move.get('follow_up_question')}"
+    elif next_question:
+        decision = f"Move to next question: {next_question}"
+
+    with st.expander("🔍 How the system made this decision", expanded=False):
+        st.caption("The system evaluates each answer across multiple clinical dimensions before deciding the next step.")
+        st.markdown(f"**Patient said:** `{trace.get('patient_answer')}`")
+        st.markdown(f"**Understanding:** System identified this as `{interpreted_as}`.")
+        st.markdown(f"**Urgency check:** {urgency_text}")
+        st.markdown(f"**Patient state:** {engagement_text}")
+        st.markdown(f"**Doctor relevance:** {doctor_text}")
+        st.markdown(f"**Final decision:** {decision}")
 
 
 
@@ -3753,6 +3799,7 @@ def run_agent_pipeline(
         st.session_state["urgency_state"] = urg_state
 
     return {
+        "patient_answer": current_raw_answer,
         "matched_option": matched,
         "follow_up": do_follow_up,
         "follow_up_question": follow_up_question,
@@ -3764,6 +3811,7 @@ def run_agent_pipeline(
         "wants_to_stop": wants_to_stop,
         "doctor_note": dr_out.get("doctor_note"),
         "clinical_priority": priority,
+        "follow_up_goal": followup_goal,
         "change_significance": dr_out.get("change_significance", "no_baseline"),
         "change_clinical_note": dr_out.get("clinical_note", ""),
         "next_step_action": dr_out.get("next_step_action"),
@@ -5261,6 +5309,7 @@ def handle_answer(
             "Exact structured option matched. Agents skipped and the app moved to the next regular step.",
         )
         if topic_is_complete(topic_key, state["data"], state.get("raw_answers")):
+            _finalize_demo_trace("Topic complete.")
             state["status"] = "completed"
             state["chat"].append({
                 "role": "assistant",
@@ -5268,6 +5317,10 @@ def handle_answer(
             })
             st.rerun()
             return
+        _finalize_demo_trace(
+            "Move to the next regular question.",
+            _step_prompt_text(next_step, topic_key=topic_key, state=state) if next_step else None,
+        )
         _append_next_question(topic_key, state, next_step)
         st.rerun()
         return
@@ -5287,6 +5340,7 @@ def handle_answer(
             "Structured numeric or multi-select answer accepted. Agents skipped and the app moved forward.",
         )
         if topic_is_complete(topic_key, state["data"], state.get("raw_answers")):
+            _finalize_demo_trace("Topic complete.")
             state["status"] = "completed"
             state["chat"].append({
                 "role": "assistant",
@@ -5294,6 +5348,10 @@ def handle_answer(
             })
             st.rerun()
             return
+        _finalize_demo_trace(
+            "Move to the next regular question.",
+            _step_prompt_text(next_step, topic_key=topic_key, state=state) if next_step else None,
+        )
         _append_next_question(topic_key, state, next_step)
         st.rerun()
         return
@@ -5323,6 +5381,7 @@ def handle_answer(
 
             # ── Emergency: terminate session ──────────────────────
             if pipeline.get("urgency_tier", 0) == 3:
+                _finalize_demo_trace("Stop the session and show emergency guidance.")
                 emergency_msg = pipeline.get("urgency_message") or (
                     "We are concerned about what you've shared. Please call 911 or "
                     "go to your nearest emergency room immediately. "
@@ -5347,6 +5406,7 @@ def handle_answer(
 
             # ── Patient wants to stop ─────────────────────────────
             if pipeline.get("wants_to_stop"):
+                _finalize_demo_trace("Pause here because the patient appears to want to stop.")
                 closing = "Of course — we'll pause here. The answers you've shared have been saved for your care team."
                 if ack:
                     closing = f"{ack}\n\n{closing}"
@@ -5357,6 +5417,7 @@ def handle_answer(
 
             # ── Tier 2: avoid detached follow-ups in the same turn ─
             if tier2_msg:
+                _finalize_demo_trace("Pause this topic so the care team can follow up directly.")
                 state["chat"].append({
                     "role": "assistant",
                     "content": "We'll pause this topic here for now so your care team can follow up directly.",
@@ -5383,6 +5444,7 @@ def handle_answer(
                         topic_key, state, step, fq, ack,
                         target_step=next_step,
                     )
+                    _finalize_demo_trace("Ask one follow-up question.", fq)
                     st.rerun()
                     return
 
@@ -5422,6 +5484,7 @@ def handle_answer(
 
     # ── Topic complete check ──────────────────────────────────────
     if topic_is_complete(topic_key, state["data"], state.get("raw_answers")):
+        _finalize_demo_trace("Topic complete.")
         state["status"] = "completed"
         final_message = "✅ Thank you — I have everything I need for this topic."
         if assistant_message:
@@ -5430,6 +5493,10 @@ def handle_answer(
         st.rerun()
         return
 
+    _finalize_demo_trace(
+        "Move to the next regular question.",
+        _step_prompt_text(next_step, topic_key=topic_key, state=state) if next_step else None,
+    )
     _append_next_question(topic_key, state, next_step, assistant_message)
     st.rerun()
     return
@@ -5906,7 +5973,7 @@ def render_sidebar():
             unsafe_allow_html=True,
         )
         st.session_state["demo_mode"] = st.checkbox(
-            "Demo mode: show agent decisions",
+            "Show AI reasoning (Demo mode)",
             value=bool(st.session_state.get("demo_mode", False)),
             key="demo_mode_checkbox",
         )
