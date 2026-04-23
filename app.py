@@ -5011,6 +5011,7 @@ def _store_followup_prompt(
     }
     combined_prompt = "\n\n".join([part for part in [assistant_message.strip(), question.strip()] if part])
     _append_assistant_message(state, combined_prompt)
+    _remember_prompted_step(state, step, combined_prompt)
 
 
 def _request_retry_for_step(topic_key: str, step: dict, raw_input: str, source: str = "typed"):
