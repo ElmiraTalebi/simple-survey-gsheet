@@ -1327,7 +1327,7 @@ div[data-baseweb="select"] > div {
     overflow: hidden;
     border: 1px solid #d7e1eb;
     background: #ffffff;
-    min-height: 164px;
+    min-height: 148px;
     box-shadow: 0 8px 18px rgba(23, 50, 74, 0.05);
     margin-bottom: 10px;
 }
@@ -1361,7 +1361,7 @@ div[data-baseweb="select"] > div {
 }
 
 .report-topic-body {
-    padding: 12px;
+    padding: 10px 12px;
 }
 
 .report-topic-name {
@@ -6964,12 +6964,16 @@ def screen_report():
         unsafe_allow_html=True,
     )
     _render_report_summary_banner(topic_insights)
-    _render_report_priority_board(topic_insights, all_data)
-    _render_report_missing_info(topic_insights, all_data)
-    _render_report_comparison_table(topic_insights)
-    _render_report_structured_sections(topic_insights, all_data)
 
-    with st.expander("Optional full clinical narrative report", expanded=False):
+    for row_start in range(0, len(topic_insights), 4):
+        row_items = topic_insights[row_start:row_start + 4]
+        cols = st.columns(len(row_items))
+        for col, insight in zip(cols, row_items):
+            with col:
+                _render_report_topic_card(insight)
+                _render_report_topic_detail(insight, all_data)
+
+    with st.expander("Full clinical narrative report", expanded=False):
         st.markdown('<div class="report-box">', unsafe_allow_html=True)
         st.markdown(st.session_state.report)
         st.markdown('</div>', unsafe_allow_html=True)
