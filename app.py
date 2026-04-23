@@ -121,7 +121,7 @@ FLOW_NUTRITION = [
     _q("pain_med_timing", "Are you timing your pain medication before meals to make eating easier?", opts=["Yes, it helps", "I try, but it's not enough", "No, I didn't know to do this", "No, I don't take pain medication"], when=lambda d: d.get("eating_ability") == "Struggling — only liquids or very little"),
     _q("tube_issues", "Is the tube feeding going well — no blockages, leaks, or discomfort around the site?", opts=["Working fine", "Some issues — leaking or blockage", "Discomfort/soreness around the tube"], when=lambda d: d.get("eating_ability") == "Not eating — using a feeding tube only"),
     _q("tube_oral_sips", "Are you still able to take any sips of water or liquids by mouth at all?", opts=["Yes, small amounts", "Very occasionally for comfort", "No, nothing by mouth"], when=lambda d: d.get("eating_ability") == "Not eating — using a feeding tube only"),
-    _q("weight", "What has your weight been recently? (Enter in pounds)", type="number", min_v=50, max_v=500, default_v=150),
+    _q("weight", "What has your weight been recently?", type="number", min_v=50, max_v=500, default_v=150),
     _q("weight_impact", "Your weight is lower than last time. Has that been affecting how you feel or your energy?", opts=["Yes, I've noticed a difference", "Not really"]),
     _q("swallowing_difficulty", "Are you having any difficulty swallowing — liquids, food, or pills?", opts=["Yes", "No"]),
     _q("swallowing_type", "Is it painful to swallow, or just mechanically difficult?", opts=["Painful to swallow", "Mechanically difficult"], when=lambda d: d.get("swallowing_difficulty") == "Yes"),
@@ -1406,12 +1406,12 @@ div[data-baseweb="select"] > div {
 }
 
 .active-question {
-    background: transparent;
-    border: none;
-    border-radius: 0;
-    padding: 0;
+    background: rgba(247, 251, 254, 0.92);
+    border: 1px solid #d9e4ed;
+    border-radius: 18px;
+    padding: 10px 12px;
     margin: 0 0 10px 0;
-    box-shadow: none;
+    box-shadow: 0 8px 18px rgba(23, 50, 74, 0.04);
 }
 
 .active-question .label {
@@ -1524,6 +1524,16 @@ div[data-baseweb="select"] > div {
     transform: translateY(-1px);
     border-color: #9fc1dd !important;
     color: #10375a !important;
+}
+
+.common-answer-buttons {
+    margin: 0 0 10px 0;
+}
+
+.common-answer-buttons [data-testid="stRadio"] label {
+    font-size: 12px !important;
+    font-weight: 700 !important;
+    color: #607589 !important;
 }
 
 .suggested-replies-note {
@@ -5550,10 +5560,17 @@ def render_input(topic_key: str, step: dict):
 
     state = st.session_state.topic_states[topic_key]
     topic_history = _recent_topic_history(state)
+    active_question_html = (
+        '<div class="active-question">'
+        '<div class="label">Current question</div>'
+        f'<div class="text">{_html.escape(step.get("text", ""))}</div>'
+        '</div>'
+    )
 
     # ── Options ─────────────────────────────────────────────────
     if stype == "options":
         st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
+        st.markdown(active_question_html, unsafe_allow_html=True)
         opts = step.get("opts", [])
         form_key = f"form_{topic_key}_{sid}_options"
         with st.form(form_key, clear_on_submit=False):
@@ -5586,6 +5603,7 @@ def render_input(topic_key: str, step: dict):
     # ── Multi-select ─────────────────────────────────────────────
     elif stype == "multi_select":
         st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
+        st.markdown(active_question_html, unsafe_allow_html=True)
         opts = step.get("opts", [])
         form_key = f"form_{topic_key}_{sid}_multi"
         with st.form(form_key, clear_on_submit=False):
@@ -5623,17 +5641,42 @@ def render_input(topic_key: str, step: dict):
     # ── Number ───────────────────────────────────────────────────
     elif stype == "number":
         st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
+        st.markdown(active_question_html, unsafe_allow_html=True)
         min_v = int(step.get("min_v", 0))
         max_v = int(step.get("max_v", 10))
         default_v = int(step.get("default_v", min_v))
+        is_weight_step = topic_key == "nutrition" and sid == "weight"
         with st.form(f"form_{topic_key}_{sid}_number", clear_on_submit=False):
+            if is_weight_step:
+                unit_key = f"unit_{topic_key}_{sid}"
+                if unit_key not in st.session_state:
+                    st.session_state[unit_key] = "lbs"
+                unit = st.radio(
+                    "Weight unit",
+                    ["lbs", "kg"],
+                    key=unit_key,
+                    horizontal=True,
+                )
+            else:
+                unit = "lbs"
             slider_col, mic_col = st.columns([20, 1], vertical_alignment="center")
             with slider_col:
+                slider_min = min_v
+                slider_max = max_v
+                slider_default = max(min(default_v, slider_max), slider_min)
+                slider_label = f"Choose a number from {min_v} to {max_v}"
+                if is_weight_step and unit == "kg":
+                    slider_min = max(20, round(min_v / 2.20462))
+                    slider_max = round(max_v / 2.20462)
+                    slider_default = max(min(round(default_v / 2.20462), slider_max), slider_min)
+                    slider_label = f"Choose your weight in kilograms from {slider_min} to {slider_max}"
+                elif is_weight_step:
+                    slider_label = f"Choose your weight in pounds from {slider_min} to {slider_max}"
                 value = st.slider(
-                    f"Choose a number from {min_v} to {max_v}",
-                    min_value=min_v,
-                    max_value=max_v,
-                    value=max(min(default_v, max_v), min_v),
+                    slider_label,
+                    min_value=slider_min,
+                    max_value=slider_max,
+                    value=slider_default,
                     key=f"num_{topic_key}_{sid}",
                 )
             with mic_col:
@@ -5642,7 +5685,10 @@ def render_input(topic_key: str, step: dict):
                 st.markdown('</div>', unsafe_allow_html=True)
             submitted = st.form_submit_button("Continue", type="primary", use_container_width=True)
         if submitted:
-            handle_answer(topic_key, step, value, source="structured")
+            final_value = value
+            if is_weight_step and unit == "kg":
+                final_value = round(value * 2.20462, 1)
+            handle_answer(topic_key, step, final_value, source="structured", display_override=f"{value} {unit}")
             return
         if _process_number_submission(topic_key, step, voice_text or "", f"voice_{topic_key}_{sid}_submitted"):
             return
@@ -5663,17 +5709,20 @@ def render_input(topic_key: str, step: dict):
             st.session_state[f"{widget_key}_voice_sync"] = transcript
 
         st.markdown('<div class="composer-shell compact">', unsafe_allow_html=True)
+        st.markdown(active_question_html, unsafe_allow_html=True)
         suggestions = _quick_reply_suggestions(topic_key, state, step)
         with st.form(f"form_{topic_key}_{sid}_free", clear_on_submit=False):
             selected_suggestion = None
             if suggestions:
-                choices = [""] + suggestions + ["Other"]
-                selected_suggestion = st.selectbox(
+                choices = ["Type my own answer"] + suggestions
+                st.markdown('<div class="common-answer-buttons">', unsafe_allow_html=True)
+                selected_suggestion = st.radio(
                     "Common answers",
                     choices,
-                    format_func=lambda x: "Choose a common answer..." if x == "" else x,
                     key=f"suggested_{topic_key}_{sid}",
+                    horizontal=(len(choices) <= 4),
                 )
+                st.markdown('</div>', unsafe_allow_html=True)
             text_col, mic_col = st.columns([20, 1], vertical_alignment="bottom")
             with text_col:
                 free_text = st.text_input(
@@ -5694,7 +5743,7 @@ def render_input(topic_key: str, step: dict):
 
         if submitted:
             candidate = (free_text or "").strip()
-            if not candidate and selected_suggestion and selected_suggestion != "Other":
+            if not candidate and selected_suggestion and selected_suggestion != "Type my own answer":
                 candidate = selected_suggestion
             if not candidate:
                 st.warning("Please type an answer or choose a common answer.")
