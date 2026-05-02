@@ -453,16 +453,6 @@ def _build_retry_prompt(
     topic_history: Optional[list[dict[str, str]]] = None,
     recent_questions: Optional[list[str]] = None,
 ) -> str:
-    if openai_client:
-        result = run_clarification_writer_agent(
-            step,
-            user_input,
-            topic_history=topic_history or [],
-            recent_questions=recent_questions or [],
-        )
-        clarification = str(result.get("clarification_question") or "").strip()
-        if clarification:
-            return clarification
     return _fallback_clarifying_question(step)
 
 
@@ -3778,6 +3768,16 @@ def run_single_pass_pipeline_agent(
     return merged
 
 
+def _deterministic_head_neck_focus(location_text: str) -> bool:
+    normalized = _norm_text(location_text)
+    focused_terms = {
+        "ear", "ears", "jaw", "mouth", "lip", "lips", "gum", "gums", "tooth",
+        "teeth", "cheek", "palate", "tongue", "throat",
+    }
+    words = set(normalized.split())
+    return bool(words & focused_terms)
+
+
 # ══════════════════════════════════════════════════════════════════
 # ORCHESTRATOR — coordinates all agents
 # ══════════════════════════════════════════════════════════════════
@@ -3968,9 +3968,8 @@ def _merge_sentiment_state(sentiment_out: dict):
 
 def interpret_user_input_with_options(step, user_input, topic_history: Optional[list[dict[str, str]]] = None):
     """
-    Use the Answer Interpreter Agent to classify free-text against question options.
-    Falls back to the catch-all option (Somewhere else / Other) if the agent returns
-    no_match but a catch-all exists and the answer is a real, meaningful response.
+    Classify simple typed text against question options without a model call.
+    Falls back to catch-all options for clear deterministic cases.
     Returns matched option string if found, else original input.
     """
     if not step.get("opts"):
@@ -3992,15 +3991,6 @@ def interpret_user_input_with_options(step, user_input, topic_history: Optional[
         and ("where" in _norm_text(step.get("text", "")) or "location" in _norm_text(step.get("text", "")))
     ):
         return "Somewhere else"
-
-    if not openai_client:
-        return user_input
-
-    result = run_answer_interpreter(step, user_input, topic_history=topic_history)
-    matched = result.get("matched_option")
-
-    if matched and matched in step.get("opts", []):
-        return matched
 
     return user_input
 
@@ -4498,16 +4488,31 @@ def _checkin_summary_html(topic_key: str, data: dict) -> str:
 # ── Sidebar summary: natural-language sentence per topic ─────────
 
 def _natural_summary(topic_key: str, data: dict) -> str:
-    """Return a short natural-language sentence summarising a topic's previous answers."""
+    """Return a short rule-based sentence summarising a topic's previous answers."""
     if not data:
         return ""
-    topic_label = next((label for label, key in TOPICS if key == topic_key), topic_key.replace("_", " ").title())
-    result = run_topic_summary_agent(topic_label, data)
-    summary = str(result.get("summary") or "").strip()
-    if summary:
-        return summary
+    fields = _SUMMARY_FIELDS.get(topic_key, [])
+    parts = []
+    for field_id, label in fields:
+        value = data.get(field_id)
+        if value in (None, "", [], {}):
+            continue
+        if isinstance(value, list):
+            value_text = ", ".join(str(v) for v in value if str(v).strip())
+        else:
+            value_text = str(value)
+        value_text = value_text.strip()
+        if not value_text:
+            continue
+        if len(value_text) > 42:
+            value_text = value_text[:39] + "..."
+        parts.append(f"{label}: {value_text}")
+        if len(parts) >= 2:
+            break
+    if parts:
+        return "; ".join(parts)
     answered = len([k for k, v in data.items() if v not in (None, "", [], {}) and not str(k).endswith("_other_detail")])
-    return f"{answered} details were recorded last visit." if answered else ""
+    return f"{answered} details recorded last visit." if answered else ""
 
 
 def _report_topic_fallback(topic_key: str, topic_label: str, last_topic_data: dict, current_topic_data: dict) -> dict:
@@ -4544,18 +4549,7 @@ def _report_topic_insights(all_data: dict) -> list[dict]:
     for label, key in TOPICS:
         current_topic_data = all_data.get(key, {}) or {}
         last_topic_data = last_ck.get(key, {}) or {}
-        fallback = _report_topic_fallback(key, label, last_topic_data, current_topic_data)
-        result = run_report_topic_insight_agent(label, last_topic_data, current_topic_data)
-        merged = {**fallback, **result}
-        merged["topic_key"] = key
-        merged["topic_label"] = label
-        if not merged.get("last_summary"):
-            merged["last_summary"] = fallback["last_summary"]
-        if not merged.get("current_summary"):
-            merged["current_summary"] = fallback["current_summary"]
-        merged["detail_lines"] = merged.get("detail_lines") or []
-        merged["attention_lines"] = merged.get("attention_lines") or []
-        insights.append(merged)
+        insights.append(_report_topic_fallback(key, label, last_topic_data, current_topic_data))
     return insights
 
 
@@ -4579,11 +4573,27 @@ def _report_status_text(status: str) -> str:
 
 
 def _render_report_summary_banner(topic_insights: list[dict]):
-    overview = run_report_overview_agent(topic_insights)
-    main_issue = overview.get("main_issue") or "Clinical check-in summary ready for review."
-    new_issues = overview.get("new_issues") or []
-    improvements = overview.get("improvements") or []
-    needs_attention = overview.get("needs_attention") or []
+    attention_topics = [
+        str(insight.get("topic_label", "")).split(" ", 1)[1]
+        for insight in topic_insights
+        if insight.get("status") in {"worsened", "new_issue"} and insight.get("current_summary")
+    ]
+    main_issue = (
+        f"New or updated information recorded for {', '.join(attention_topics[:3])}."
+        if attention_topics else
+        "Clinical check-in summary ready for review."
+    )
+    new_issues = attention_topics[:3]
+    improvements = [
+        str(insight.get("topic_label", "")).split(" ", 1)[1]
+        for insight in topic_insights
+        if insight.get("status") == "improved"
+    ][:3]
+    needs_attention = [
+        str(insight.get("topic_label", "")).split(" ", 1)[1]
+        for insight in topic_insights
+        if insight.get("attention_lines")
+    ][:4]
 
     parts = [
         '<div class="report-summary-banner">',
@@ -5551,8 +5561,9 @@ def handle_answer(
                 state["data"].pop(stale_id, None)
                 state["raw_answers"].pop(stale_id, None)
     if step.get("id") == "other_pain_desc":
-        focus = run_pain_location_focus_agent(verbatim if isinstance(verbatim, str) else str(answer))
-        state["data"]["other_pain_head_neck_focused"] = bool(focus.get("head_neck_focused"))
+        state["data"]["other_pain_head_neck_focused"] = _deterministic_head_neck_focus(
+            verbatim if isinstance(verbatim, str) else str(answer)
+        )
     if isinstance(verbatim, str) and not openai_client:
         _auto_capture_following_answers(topic_key, state, verbatim)
     next_step = _resolve_next_step(topic_key, state)
@@ -6619,8 +6630,6 @@ def screen_report():
 # ══════════════════════════════════════════════════════════════════
 # MAIN DISPATCH
 # ══════════════════════════════════════════════════════════════════
-
-_init_sheets()
 
 stage = st.session_state.get("app_stage", "login")
 
