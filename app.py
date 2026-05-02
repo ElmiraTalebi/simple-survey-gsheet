@@ -4880,10 +4880,15 @@ def _report_value_is_issue(field_id: str, value: Any) -> bool:
     norm = _report_value_norm(value)
     if not norm:
         return False
+    if field_id in {"pain_medications", "oral_rinse_use", "magic_mouthwash"}:
+        return False
     if isinstance(value, list):
-        if any(_norm_text(v) in {"none of these", "none", "no pain medication"} for v in value):
-            return False
-        return bool(value)
+        neutral_values = {"none of these", "none", "no pain medication", "other"}
+        issue_values = [
+            v for v in value
+            if _norm_text(v) not in neutral_values and str(v).strip()
+        ]
+        return any(_report_value_is_issue(field_id, v) for v in issue_values)
 
     negative_exact = {
         "no", "none", "none of these", "not really", "working fine", "working well",
