@@ -2236,6 +2236,7 @@ def _record_agent_trace(topic_key: str, step: dict, pipeline: dict):
         "question_id": step.get("id"),
         "question": step.get("text"),
         "mode": "single_pass",
+        "ai_used": True,
         "source": pipeline.get("source", "typed/free-text/voice"),
         "patient_answer": pipeline.get("patient_answer"),
         "agent_1_answer_interpreter": {
@@ -2282,6 +2283,7 @@ def _record_fastpath_trace(
         "question_id": step.get("id"),
         "question": step.get("text"),
         "mode": "fast_path",
+        "ai_used": False,
         "source": source,
         "patient_answer": answer,
         "agent_1_answer_interpreter": {
@@ -2361,7 +2363,7 @@ def _render_demo_agent_panel(topic_key: Optional[str] = None):
     st.markdown(
         '<div class="demo-reasoning-card">'
         '<div class="demo-title">Demo Mode</div>'
-        '<div class="demo-subtitle">How the system made this decision</div>'
+        '<div class="demo-subtitle">Decision trace</div>'
         '</div>',
         unsafe_allow_html=True,
     )
@@ -2380,6 +2382,7 @@ def _render_demo_agent_panel(topic_key: Optional[str] = None):
     orchestrator = trace.get("orchestrator") or {}
     mode = trace.get("mode", "pipeline")
     source = trace.get("source", "")
+    ai_used = bool(trace.get("ai_used", mode != "fast_path"))
 
     if mode == "fast_path":
         path_text = "No GPT call. The app accepted a pre-defined/structured answer and advanced through the flowchart."
@@ -2421,6 +2424,7 @@ def _render_demo_agent_panel(topic_key: Optional[str] = None):
     with st.expander("View reasoning", expanded=True):
         if current_prompt:
             st.markdown(f"**Current question:** {current_prompt}")
+        st.markdown(f"**AI used for latest answer:** `{'Yes' if ai_used else 'No'}`")
         st.markdown(f"**Processing path:** {path_text}")
         if source:
             st.markdown(f"**Input source:** `{source}`")
@@ -6412,7 +6416,7 @@ def render_sidebar():
             unsafe_allow_html=True,
         )
         st.session_state["demo_mode"] = st.checkbox(
-            "Show AI reasoning (Demo mode)",
+            "Show decision trace (Demo mode)",
             value=bool(st.session_state.get("demo_mode", False)),
             key="demo_mode_checkbox",
         )
