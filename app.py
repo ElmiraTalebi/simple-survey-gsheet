@@ -1904,25 +1904,30 @@ div[data-baseweb="select"] > div {
 }
 
 .demo-mini {
-    display: flex;
-    justify-content: space-between;
-    gap: 8px;
+    display: block;
     border-radius: 12px;
     background: #f7fbfe;
     border: 1px solid #e1ebf3;
-    padding: 6px 8px;
+    padding: 7px 9px;
 }
 
 .demo-mini span {
+    display: block;
     font-size: 10px;
     color: #70869a;
     font-weight: 800;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    margin-bottom: 3px;
 }
 
 .demo-mini strong {
-    font-size: 10px;
+    display: block;
+    font-size: 12px;
+    line-height: 1.4;
     color: #17324a;
-    text-align: right;
+    text-align: left;
+    font-weight: 800;
 }
 
 @media (max-width: 1100px) {
@@ -2550,9 +2555,9 @@ def _render_demo_agent_panel(topic_key: Optional[str] = None):
     orchestrator = trace.get("orchestrator") or {}
 
     if not ai_used:
-        path_text = "Flowchart only. No GPT call was made."
+        path_text = "The patient clicked one of the listed answers, so the app followed the flowchart directly."
     else:
-        path_text = "Single-pass AI orchestrator. One GPT call handled interpretation, urgency, and next-step logic."
+        path_text = "The patient used their own words, so the app used one AI review to understand the answer and choose the next step."
 
     decision = orchestrator.get("final_decision") or "Move to the next applicable flowchart question."
     next_question = orchestrator.get("next_question")
@@ -2574,16 +2579,16 @@ def _render_demo_agent_panel(topic_key: Optional[str] = None):
 
     def _demo_followup_depth_label(reduce_follow_up: bool) -> str:
         if reduce_follow_up:
-            return "Shortened: patient may be tired or frustrated"
-        return "Normal: continue with regular flowchart depth"
+            return "Keep it shorter because the patient may need a break"
+        return "Continue normally"
 
     def _demo_priority_label(priority_value: str) -> str:
         labels = {
-            "low": "Low: routine note for the report",
-            "medium": "Medium: clinically useful, not urgent",
-            "high": "High: important detail for care team review",
+            "low": "Routine detail",
+            "medium": "Useful symptom detail, not urgent",
+            "high": "Important detail for the care team",
         }
-        return labels.get(str(priority_value or "").lower(), "Medium: clinically useful, not urgent")
+        return labels.get(str(priority_value or "").lower(), "Useful symptom detail, not urgent")
 
     status_class = "ai" if ai_used else "flow"
     status_label = "AI used" if ai_used else "No AI"
@@ -2598,8 +2603,8 @@ def _render_demo_agent_panel(topic_key: Optional[str] = None):
     priority = doctor.get("clinical_priority") or "not specified"
 
     details_html = ""
-    agent_count_text = "1 AI agent: Single-pass orchestrator" if ai_used else "0 AI agents"
-    call_count_text = "1 GPT call" if ai_used else "0 GPT calls"
+    agent_count_text = "1 AI helper, using one prompt" if ai_used else "No AI helper used"
+    call_count_text = "One AI request" if ai_used else "No AI request"
 
     if ai_used:
         detail_items = []
@@ -2609,9 +2614,9 @@ def _render_demo_agent_panel(topic_key: Optional[str] = None):
             ("AI agents used", agent_count_text),
             ("Model calls", call_count_text),
             ("Urgency result", _demo_urgency_label(urgency_tier)),
-            ("Questioning style", _demo_followup_depth_label(bool(reduce_follow_up))),
+            ("Follow-up depth", _demo_followup_depth_label(bool(reduce_follow_up))),
             ("Patient asked to stop?", "Yes" if wants_to_stop else "No"),
-            ("Care-team importance", _demo_priority_label(str(priority))),
+            ("Clinical priority", _demo_priority_label(str(priority))),
         ])
         details_html = "".join(
             f'<div class="demo-mini"><span>{_html.escape(label)}</span><strong>{_html.escape(value)}</strong></div>'
