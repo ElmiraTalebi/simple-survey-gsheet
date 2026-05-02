@@ -4716,6 +4716,21 @@ _SUMMARY_FIELDS = {
 }
 
 
+def _value_with_other_detail(field_id: str, value: Any, data: dict) -> Any:
+    """Replace plain Other with the patient-entered detail for that field."""
+    detail = str((data or {}).get(f"{field_id}_other_detail") or "").strip()
+    if not detail:
+        return value
+    if isinstance(value, list):
+        return [
+            detail if _norm_text(item) == "other" else item
+            for item in value
+        ]
+    if _norm_text(value) == "other":
+        return detail
+    return value
+
+
 def _checkin_summary_html(topic_key: str, data: dict) -> str:
     """
     Build a chip-grid HTML block showing key facts from the previous check-in.
@@ -4729,13 +4744,9 @@ def _checkin_summary_html(topic_key: str, data: dict) -> str:
         val = data.get(field_id)
         if val is None:
             continue
+        val = _value_with_other_detail(field_id, val, data)
         field_type = QUESTION_TYPE_BY_ID.get(field_id, "options")
         if isinstance(val, list):
-            if field_id == "pain_medications" and "Other" in val and data.get("pain_medications_other_detail"):
-                val = [
-                    data["pain_medications_other_detail"] if item == "Other" else item
-                    for item in val
-                ]
             val_str = ", ".join(str(v) for v in val)
         else:
             val_str = str(val)
@@ -4781,6 +4792,7 @@ def _natural_summary(topic_key: str, data: dict) -> str:
         value = data.get(field_id)
         if value in (None, "", [], {}):
             continue
+        value = _value_with_other_detail(field_id, value, data)
         if isinstance(value, list):
             value_text = ", ".join(str(v) for v in value if str(v).strip())
         else:
@@ -5641,6 +5653,21 @@ def _is_exact_structured_option_reply(answer: Any, raw_answer: Any, step: dict, 
     return _norm_text(raw_text) == _norm_text(answer)
 
 
+def _answer_needs_other_detail(step: dict, answer: Any, data: dict) -> bool:
+    if "Other" not in step.get("opts", []):
+        return False
+    if str((data or {}).get(f"{step['id']}_other_detail") or "").strip():
+        return False
+    if isinstance(answer, list):
+        return any(_norm_text(item) == "other" for item in answer)
+    return _norm_text(answer) == "other"
+
+
+def _other_detail_question(step: dict) -> str:
+    q = str(step.get("q") or "this question").strip()
+    return f"For this question, what does Other mean exactly?\n\n{q}"
+
+
 def _store_followup_prompt(
     topic_key: str,
     state: dict,
@@ -5787,6 +5814,17 @@ def handle_pending_followup(topic_key: str, answer: str, source: str = "typed"):
         if source_step["type"] == "options":
             previous_raw = _norm_text(pending.get("raw_input", ""))
             retry_norm = _norm_text(retry_text)
+            if pending.get("allow_other_detail") and retry_text:
+                state["data"][f"{source_step['id']}_other_detail"] = retry_text
+                handle_answer(
+                    topic_key,
+                    source_step,
+                    "Other",
+                    source="structured",
+                    display_override=retry_text,
+                    raw_answer="Other",
+                )
+                return
             interpreted = None
             if (
                 source_step.get("id") == "sore_location"
@@ -6034,6 +6072,25 @@ def handle_answer(
     state["status"] = "in_progress"
 
     last_topic_data = st.session_state.last_checkin.get(topic_key, {})
+
+    if source == "structured" and _answer_needs_other_detail(step, answer, state["data"]):
+        _record_fastpath_trace(
+            topic_key,
+            step,
+            answer,
+            source,
+            "The patient selected Other, so the app asks for the exact detail before moving forward.",
+        )
+        _store_followup_prompt(
+            topic_key,
+            state,
+            step,
+            _other_detail_question(step),
+            retry_current_step=True,
+            allow_other_detail=True,
+        )
+        st.rerun()
+        return
 
     if (
         _is_exact_structured_option_reply(answer, verbatim, step, source)
