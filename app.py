@@ -92,28 +92,18 @@ def _safe_float(val, default: Optional[float] = None) -> Optional[float]:
 def _has_additional_symptom(d, label):
     return label in (d.get("additional_symptoms") or [])
 
-def _has_current_pain(d):
-    return (
-        d.get("has_pain") == "Yes"
-        or d.get("has_pain_improved") == "Yes"
-        or d.get("has_pain_new") == "Yes"
-        or d.get("has_pain_same") == "Yes"
-    )
-
 FLOW_PAIN = [
     _q("pain_since_last_visit", "How have you been feeling since last visit?", opts=["New symptoms", "Improved symptoms", "Symptoms same/unchanged"]),
     _q("has_pain", "Do you have any pain today?", opts=["Yes", "No"]),
-    _q("has_pain_improved", "That’s great news! Have you noticed any pain at all from last check-in?", opts=["Yes", "No"], when=lambda d: d.get("pain_since_last_visit") == "Improved symptoms"),
-    _q("has_pain_new", "Have your new symptoms included any pain?", opts=["Yes", "No"], when=lambda d: d.get("pain_since_last_visit") == "New symptoms"),
-    _q("has_pain_same", "Do you have any pain today?", opts=["Yes", "No"], when=lambda d: d.get("pain_since_last_visit") == "Symptoms same/unchanged"),
-    _q("pain_location", "Where are you feeling the pain?", opts=["Throat", "Tongue", "Somewhere else"], when=_has_current_pain),
-    _q("pain_start", "When did the pain start?", type="free_text", placeholder="e.g., about a week ago, since I started radiation…", when=_has_current_pain),
-    _q("pain_severity", "On a scale of 0–10, how bad is the pain at its worst?", type="number", min_v=0, max_v=10, default_v=5, when=_has_current_pain),
-    _q("pain_timing", "Is the pain constant, intermittent, or only happening with swallowing or eating?", opts=["Constant", "Intermittent", "Only when swallowing", "Only when eating", "Both swallowing and eating"], when=_has_current_pain),
-    _q("pain_better_worse", "Is there anything that makes the pain better or worse?", type="free_text", placeholder="e.g., pain medicine helps, swallowing makes it worse…", when=_has_current_pain),
-    _q("pain_medications", "Which medications are you currently taking for pain?", type="multi_select", opts=["Gabapentin", "Oxycodone", "Butrans patch", "Other", "No pain medication"], when=_has_current_pain),
+    _q("pain_location", "Where are you feeling the pain?", opts=["Throat", "Tongue", "Somewhere else"], when=lambda d: d.get("has_pain") == "Yes"),
+    _q("pain_change_details", "How has the pain changed since your last visit?", type="free_text", placeholder="e.g., less intense, same location, worse with swallowing…", when=lambda d: d.get("has_pain") == "Yes"),
+    _q("pain_start", "When did the pain start?", type="free_text", placeholder="e.g., about a week ago, since I started radiation…", when=lambda d: d.get("has_pain") == "Yes"),
+    _q("pain_better_worse", "Is there anything that makes the pain better or worse?", type="free_text", placeholder="e.g., pain medicine helps, swallowing makes it worse…", when=lambda d: d.get("has_pain") == "Yes"),
+    _q("pain_medications", "Which medications are you currently taking for pain?", type="multi_select", opts=["Gabapentin", "Oxycodone", "Butrans patch", "Other", "No pain medication"]),
     _q("med_dose_freq", "How often are you taking your pain medication, and at what dose?", type="free_text", placeholder="e.g., Oxycodone 5mg every 6 hours…", when=lambda d: (bool(d.get("pain_medications")) and "No pain medication" not in (d.get("pain_medications") or []))),
     _q("med_side_effects", "Are you experiencing any side effects from your pain medications, such as constipation or anything else?", opts=["Yes", "No"], when=lambda d: (bool(d.get("pain_medications")) and "No pain medication" not in (d.get("pain_medications") or []))),
+    _q("pain_severity", "On a scale of 0–10, how bad is the pain at its worst?", type="number", min_v=0, max_v=10, default_v=5, when=lambda d: d.get("has_pain") == "Yes"),
+    _q("pain_timing", "Is the pain constant, intermittent, or only happening with swallowing or eating?", opts=["Constant", "Intermittent", "Only when swallowing", "Only when eating", "Both swallowing and eating"], when=lambda d: d.get("has_pain") == "Yes"),
     _q("tongue_type", "Is it a sore or ulcer on the tongue, or a general painful feeling?", opts=["There's a sore/ulcer", "Just pain, no visible sore"], when=lambda d: d.get("pain_location") == "Tongue"),
     _q("tongue_spot", "Is the pain in one specific spot, or does it spread?", opts=["One spot", "Spreads across tongue", "Whole mouth"], when=lambda d: d.get("pain_location") == "Tongue"),
     _q("other_pain_desc", "Which body part is hurting?", type="free_text", placeholder="e.g., near my jaw and ear…", when=lambda d: d.get("pain_location") == "Somewhere else"),
@@ -2349,10 +2339,7 @@ _PAIN_DETAIL_WORKUP_STEP_IDS = {
 
 def _prior_pain_symptom_present() -> bool:
     last = st.session_state.get("last_checkin", {}).get("pain", {}) or {}
-    if any(
-        _norm_text(last.get(key)) == "yes"
-        for key in ("has_pain", "has_pain_improved", "has_pain_new", "has_pain_same")
-    ):
+    if _norm_text(last.get("has_pain")) == "yes":
         return True
     pain_markers = (
         "pain_location",
@@ -2365,16 +2352,12 @@ def _prior_pain_symptom_present() -> bool:
     )
     return any(str(last.get(key) or "").strip() for key in pain_markers)
 
-
-def _current_pain_reported(data: dict) -> bool:
-    return any(
-        data.get(key) == "Yes"
-        for key in ("has_pain", "has_pain_improved", "has_pain_new", "has_pain_same")
-    )
-
-
 def _pain_detail_workup_needed(data: dict) -> bool:
-    return _current_pain_reported(data)
+    if data.get("has_pain") != "Yes":
+        return False
+    if not _prior_pain_symptom_present():
+        return True
+    return data.get("pain_since_last_visit") == "New symptoms"
 
 
 def _step_is_relevant(topic_key: str, step: dict, data: dict, raw_answers: Optional[dict] = None) -> bool:
@@ -2383,9 +2366,13 @@ def _step_is_relevant(topic_key: str, step: dict, data: dict, raw_answers: Optio
         step_id = step.get("id")
         if step_id == "pain_since_last_visit":
             return bool(st.session_state.get("has_prev_checkin", False))
-        if step_id == "has_pain":
-            return not bool(st.session_state.get("has_prev_checkin", False))
-        if step_id in _PAIN_DETAIL_WORKUP_STEP_IDS and _current_pain_reported(data):
+        if step_id == "pain_change_details":
+            return (
+                data.get("has_pain") == "Yes"
+                and _prior_pain_symptom_present()
+                and data.get("pain_since_last_visit") != "New symptoms"
+            )
+        if step_id in _PAIN_DETAIL_WORKUP_STEP_IDS and data.get("has_pain") == "Yes":
             if not _pain_detail_workup_needed(data):
                 return False
 
@@ -4798,9 +4785,7 @@ _SUMMARY_FIELDS = {
     "pain": [
         ("pain_since_last_visit", "Since last visit"),
         ("has_pain",            "Pain today"),
-        ("has_pain_improved",    "Pain after improvement"),
-        ("has_pain_new",         "Pain with new symptoms"),
-        ("has_pain_same",        "Pain today"),
+        ("pain_change_details",  "Pain change"),
         ("pain_location",       "Location"),
         ("pain_severity",       "Severity"),
         ("pain_timing",         "Timing"),
@@ -5046,9 +5031,6 @@ _REPORT_COLOR_FIELDS_BY_TOPIC = {
     "pain": {
         "pain_since_last_visit",
         "has_pain",
-        "has_pain_improved",
-        "has_pain_new",
-        "has_pain_same",
         "pain_location",
         "pain_severity",
         "pain_timing",
@@ -5108,9 +5090,6 @@ _REPORT_COLOR_FIELDS_BY_TOPIC = {
 
 _REPORT_YES_IS_ISSUE_FIELDS = {
     "has_pain",
-    "has_pain_improved",
-    "has_pain_new",
-    "has_pain_same",
     "swallowing_difficulty",
     "taste_changes",
     "mouth_sores",
