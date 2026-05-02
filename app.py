@@ -3657,6 +3657,12 @@ Tier 3.
 FOLLOW-UP RULES:
 - Follow-up should be rare.
 - Ask at most one follow-up for the current question.
+- If the patient gives a meaningful, clinically usable answer in their own words,
+  accept it even if it does not use the exact option wording.
+- Do not ask for clarification just because the answer is not phrased like the
+  predefined answers. Map it to the closest option or catch-all when reasonable.
+- Only ask "I did not catch that" style clarification when the answer is empty,
+  nonsensical, unrelated, or the wrong information type for the question.
 - Never ask a follow-up that repeats the current question or the candidate next step.
 - If the candidate next step naturally gathers the missing detail, do not ask a
   custom follow-up.
@@ -5154,6 +5160,16 @@ def _process_option_submission(
             raw_answer=candidate,
         )
     else:
+        if openai_client and source in {"typed", "voice"}:
+            handle_answer(
+                topic_key,
+                step,
+                candidate,
+                source=source,
+                display_override=candidate,
+                raw_answer=candidate,
+            )
+            return True
         if _respect_patient_control_signal(topic_key, step, candidate):
             return True
         _request_retry_for_step(topic_key, step, candidate, source=source)
@@ -5692,6 +5708,14 @@ def handle_answer(
                 )
                 pipeline["source"] = source
                 _record_agent_trace(topic_key, step, pipeline)
+
+                matched_option = pipeline.get("matched_option")
+                if step.get("type") == "options" and matched_option in step.get("opts", []):
+                    answer = matched_option
+                    state["data"][step["id"]] = matched_option
+                    if st.session_state.get("structured_responses"):
+                        st.session_state["structured_responses"][-1]["answer"] = matched_option
+                    next_step = _resolve_next_step(topic_key, state)
 
             # ── Emergency: terminate session ──────────────────────
             if pipeline.get("urgency_tier", 0) == 3:
