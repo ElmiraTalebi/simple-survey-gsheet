@@ -2056,7 +2056,6 @@ def _ensure_step_prompted(topic_key: str, state: dict, step: Optional[dict]):
     if last_id == step.get("id") and (
         last_text == prompt_text or _is_semantically_redundant_question(last_text, prompt_text)
     ):
-        _append_assistant_message(state, last_text or prompt_text, prompt_step=step, prompt_text=prompt_text)
         return
     _append_assistant_message(state, prompt_text, prompt_step=step, prompt_text=prompt_text)
     _remember_prompted_step(state, step, prompt_text)
@@ -5030,12 +5029,28 @@ def _append_next_question(
     prompt_consumed = False
     if message and next_text and _is_semantically_redundant_question(message, next_text):
         prompt_consumed = True
+    if message and next_text:
+        message_norm = _norm_text(message)
+        next_norm = _norm_text(next_text)
+        message_parts = [part.strip() for part in message.split("\n\n") if part.strip()]
+        if next_norm and (
+            next_norm in message_norm
+            or any(_norm_text(part) == next_norm for part in message_parts)
+        ):
+            prompt_consumed = True
     if next_text and not prompt_consumed:
         combined = "\n\n".join(part for part in [message, next_text] if part)
         _append_assistant_message(state, combined, prompt_step=next_step, prompt_text=next_text)
         _remember_prompted_step(state, next_step, next_text)
     elif message:
-        _append_assistant_message(state, message)
+        _append_assistant_message(
+            state,
+            message,
+            prompt_step=next_step if prompt_consumed else None,
+            prompt_text=next_text if prompt_consumed else "",
+        )
+        if prompt_consumed:
+            _remember_prompted_step(state, next_step, next_text)
     elif not next_step:
         _clear_current_prompt_flags(state)
         _remember_prompted_step(state, None, "")
