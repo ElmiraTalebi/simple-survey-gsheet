@@ -1970,8 +1970,8 @@ _openai_error: Optional[str] = None
 
 # Performance defaults: keep the common path fast.
 ENABLE_DYNAMIC_PROMPT_REWRITE = False
-ENABLE_LLM_SEMANTIC_REDUNDANCY = True
-ENABLE_FULL_PIPELINE_FOR_EXACT_STRUCTURED_OPTIONS = True
+ENABLE_LLM_SEMANTIC_REDUNDANCY = False
+ENABLE_FULL_PIPELINE_FOR_EXACT_STRUCTURED_OPTIONS = False
 
 if OPENAI_API_KEY:
     try:
@@ -3594,6 +3594,190 @@ def run_next_move_agent(
     }
 
 
+_ONE_PASS_PIPELINE_SYS = f"""
+You are the Single-Pass Clinical Orchestrator for ChatReport, a clinical chatbot
+serving head and neck cancer patients. {_HNC_CONTEXT}
+
+Your job is to make all live conversation decisions in ONE response:
+1. Interpret the patient's current answer against the current question/options.
+2. Screen urgency and safety.
+3. Detect whether the patient wants to stop or needs less follow-up.
+4. Decide whether the answer is clinically sufficient.
+5. Decide whether to ask one follow-up, skip downstream questions, or move on.
+6. Write any short patient-facing acknowledgment/message.
+
+IMPORTANT PERFORMANCE CONTRACT:
+- This is the only model call for the current answer.
+- Return the final follow-up question yourself if one is truly needed.
+- Do not rely on later agents.
+
+MATCHING RULES:
+- If the answer clearly maps to one option, return that option verbatim.
+- If a catch-all option exists such as "Somewhere else", "Other", "None of these",
+  or "Something else", use it for meaningful answers that do not match a specific option.
+- If the question asks for a body location and the answer names a real body part,
+  that is meaningful. Map to the best specific option or catch-all.
+- Do not accept wrong-type answers. For example, if asked where pain is and the
+  patient gives timing, matched_option should be null.
+- For yes/no options, natural answers like "yeah", "not really", "fine", "none",
+  or "no issues" may map to the appropriate option when clear.
+
+URGENCY RULES:
+{_RED_FLAGS}
+
+Urgency tiers:
+0 no urgency, continue normally.
+1 watch/log for report, continue normally.
+2 urgent same-day care-team attention, show a care team message and pause topic.
+3 emergency, stop session and show emergency guidance.
+
+Use Tier 2 only for clearly acute or unsafe situations. Pain 7-9/10 alone in active
+HNC treatment is usually Tier 1 unless uncontrolled, suddenly worse, preventing all
+intake, or accompanied by fever/chills. Suicidal ideation or self-harm intent is
+Tier 3.
+
+FOLLOW-UP RULES:
+- Follow-up should be rare.
+- Ask at most one follow-up for the current question.
+- Never ask a follow-up that repeats the current question or the candidate next step.
+- If the candidate next step naturally gathers the missing detail, do not ask a
+  custom follow-up.
+- If the patient appears frustrated, resistant, tired, or wants to stop, avoid
+  nonessential follow-up.
+- If the patient answers with a reassuring negative screen, skip unnecessary
+  downstream impact/management questions when safe.
+- If the patient already gave detail that answers the immediate next step, use
+  next_step_action to skip/carry it forward instead of asking again.
+- Numeric severity questions may need one clarification if no usable number was given.
+
+Return ONLY valid JSON with this exact shape:
+{{
+  "matched_option": "..." or null,
+  "follow_up": true/false,
+  "follow_up_question": "..." or "",
+  "acknowledgment": "..." or "",
+  "assistant_message": "..." or "",
+  "urgency_tier": 0,
+  "urgency_message": null,
+  "reduce_follow_up": false,
+  "wants_to_stop": false,
+  "doctor_note": null,
+  "clinical_priority": "low|medium|high",
+  "follow_up_goal": null,
+  "change_significance": "critical|notable|stable|no_baseline",
+  "change_clinical_note": "",
+  "next_step_action": {{
+    "skip_immediate_next_step": false,
+    "suggested_answer": null,
+    "reason": null,
+    "carry_forward_answer": null,
+    "plan": []
+  }},
+  "special_signals": {{
+    "trajectory_mismatch": false,
+    "medication_stop_signal": false,
+    "aggravating_medication_signal": false,
+    "severity_underreporting": false,
+    "screen_negative_signal": false
+  }},
+  "sentiment_note": null,
+  "new_urgency_signals": [],
+  "new_sentiment_signals": []
+}}
+"""
+
+
+def run_single_pass_pipeline_agent(
+    topic_key: str,
+    step: dict,
+    current_raw_answer: str,
+    session_answers: dict,
+    prior_baseline: dict,
+    last_topic_data: dict,
+    followup_count: int,
+    topic_history: list[dict[str, str]],
+    recent_questions: list[str],
+    candidate_next_step: Optional[dict],
+    upcoming_steps: list[dict],
+    active_urgency_signals: list,
+    active_sentiment_signals: list,
+) -> dict:
+    default = {
+        **_pipeline_default(),
+        "patient_answer": current_raw_answer,
+        "new_urgency_signals": [],
+        "new_sentiment_signals": [],
+    }
+    result = _call_agent(_ONE_PASS_PIPELINE_SYS, {
+        "topic_key": topic_key,
+        "current_question": {
+            "id": step.get("id"),
+            "text": step.get("text", ""),
+            "type": step.get("type", "options"),
+            "options": step.get("opts", []),
+        },
+        "patient_answer": current_raw_answer,
+        "session_answers_so_far": session_answers,
+        "prior_baseline_for_topic": prior_baseline,
+        "last_topic_data": last_topic_data,
+        "last_answer_for_same_question": last_topic_data.get(step.get("id")) if last_topic_data else None,
+        "follow_up_count_this_question": followup_count,
+        "recent_topic_history": topic_history,
+        "recent_question_texts": recent_questions,
+        "candidate_next_step": {
+            "id": candidate_next_step.get("id"),
+            "text": candidate_next_step.get("text"),
+            "type": candidate_next_step.get("type"),
+            "options": candidate_next_step.get("opts", []),
+        } if candidate_next_step else None,
+        "upcoming_steps": [
+            {
+                "id": s.get("id"),
+                "text": s.get("text"),
+                "type": s.get("type"),
+                "options": s.get("opts", []),
+            }
+            for s in (upcoming_steps or [])
+        ],
+        "active_urgency_signals": active_urgency_signals,
+        "active_sentiment_signals": active_sentiment_signals,
+        "patient_fatigue": bool(st.session_state.get("patient_fatigue", False)),
+    }, max_tokens=650)
+
+    if not result:
+        return default
+
+    matched = result.get("matched_option")
+    if matched and matched not in step.get("opts", []):
+        matched = None
+    merged = {**default, **result, "matched_option": matched}
+
+    if followup_count >= 1:
+        merged["follow_up"] = False
+        merged["follow_up_question"] = ""
+        merged["follow_up_goal"] = None
+
+    if st.session_state.get("patient_fatigue") and merged.get("clinical_priority") != "high":
+        merged["reduce_follow_up"] = True
+        merged["follow_up"] = False
+        merged["follow_up_question"] = ""
+
+    if merged.get("wants_to_stop"):
+        merged["follow_up"] = False
+        merged["follow_up_question"] = ""
+
+    if merged.get("urgency_tier", 0) == 3:
+        merged["wants_to_stop"] = True
+
+    if merged.get("follow_up") and not str(merged.get("follow_up_question") or "").strip():
+        merged["follow_up"] = False
+
+    if not str(merged.get("assistant_message") or "").strip() and not merged.get("follow_up"):
+        merged["assistant_message"] = _default_chatty_reply(topic_key, current_raw_answer, step, last_topic_data)
+
+    return merged
+
+
 # ══════════════════════════════════════════════════════════════════
 # ORCHESTRATOR — coordinates all agents
 # ══════════════════════════════════════════════════════════════════
@@ -3674,223 +3858,70 @@ def run_agent_pipeline(
     last_topic_data: dict,
 ) -> dict:
     """
-    Orchestrator: runs all agents in sequence (with parallelism where safe)
-    and returns a unified decision dict consumed by handle_answer.
-
-    Returns:
-    {
-        "matched_option": str|None,
-        "follow_up": bool,
-        "follow_up_question": str,
-        "acknowledgment": str,
-        "assistant_message": str,
-        "urgency_tier": int,
-        "urgency_message": str|None,
-        "reduce_follow_up": bool,
-        "wants_to_stop": bool,
-        "doctor_note": str|None,
-        "clinical_priority": str,
-        "change_significance": str,
-        "change_clinical_note": str,
-        "special_signals": dict,
-        "sentiment_note": str|None,
-    }
+    Single live-model orchestration call for typed/free-text/voice answers.
+    Predefined structured clicks bypass this function before it is called.
     """
     if not openai_client:
         return _pipeline_default()
 
-    question_count = len(state.get("data", {}))
     current_raw_answer = str(raw_answer if raw_answer is not None else answer)
     session_answers = _build_session_answers(topic_key)
     prior_baseline  = _build_prior_baseline(topic_key)
-    last_step_answer = _last_checkin_answer(topic_key, step.get("id"))
     followup_count  = state.get("followup_counts", {}).get(step["id"], 0)
     topic_history = _build_topic_history(topic_key)
     recent_questions = _build_recent_question_texts(topic_key)
     candidate_next_step = get_next_step(topic_key, state["data"], state.get("raw_answers"))
-    candidate_next_step_last_answer = _last_checkin_answer(
-        topic_key,
-        candidate_next_step.get("id") if candidate_next_step else None,
-    )
     upcoming_steps = get_upcoming_steps(topic_key, state["data"], state.get("raw_answers"), limit=5)
-
-    # ── STEP 1: Answer Interpreter (must run first) ────────────────
-    interp = run_answer_interpreter(step, current_raw_answer, topic_history=topic_history)
-    matched = interp.get("matched_option")
-    distress = interp.get("distress_flag", False)
-    urgency_flag = interp.get("urgency_flag", False)
-    # ── STEP 2: Run urgency and sentiment in parallel ──────────────
-    urgency_out = {}
-    sentiment_out = {}
-
     active_urgency_signals = st.session_state.get("urgency_state", {}).get("all_signals", [])
     active_sentiment_signals = st.session_state.get("sentiment_state", {}).get("all_signals", [])
 
-    def _run_urgency():
-        return run_urgency_agent(
-            step, current_raw_answer, matched, session_answers, prior_baseline,
-            active_urgency_signals, distress, urgency_flag
-        )
-
-    def _run_sentiment():
-        return run_sentiment_agent(
-            step, current_raw_answer, session_answers, active_sentiment_signals, question_count,
-            topic_history=topic_history, recent_questions=recent_questions,
-        )
-
-    with _futures.ThreadPoolExecutor(max_workers=2) as pool:
-        f_urgency   = pool.submit(_run_urgency)
-        f_sentiment = pool.submit(_run_sentiment)
-        urgency_out  = f_urgency.result()
-        sentiment_out = f_sentiment.result()
-
-    # ── STEP 3: Urgency interrupt check ───────────────────────────
-    tier = urgency_out.get("session_tier", 0)
-
-    # Update session-level urgency state
-    _merge_urgency_state(tier, urgency_out)
-
-    if tier == 3:
-        # Emergency — bypass all other agents
-        return {
-            **_pipeline_default(),
-            "matched_option": matched,
-            "urgency_tier": 3,
-            "urgency_message": urgency_out.get("patient_message"),
-            "wants_to_stop": True,
-        }
-
-    # ── STEP 4: Doctor-Relevance ───────────────────────────────────
-    dr_out = run_doctor_relevance(
-        step, current_raw_answer, matched, last_topic_data, session_answers, followup_count,
-        topic_history=topic_history, recent_questions=recent_questions,
+    pipeline = run_single_pass_pipeline_agent(
+        topic_key=topic_key,
+        step=step,
+        current_raw_answer=current_raw_answer,
+        session_answers=session_answers,
+        prior_baseline=prior_baseline,
+        last_topic_data=last_topic_data,
+        followup_count=followup_count,
+        topic_history=topic_history,
+        recent_questions=recent_questions,
         candidate_next_step=candidate_next_step,
         upcoming_steps=upcoming_steps,
+        active_urgency_signals=active_urgency_signals,
+        active_sentiment_signals=active_sentiment_signals,
     )
 
-    # ── STEP 5: Apply follow-up decision logic ─────────────────────
-    adapt = sentiment_out.get("adaptation", {})
-    sigs  = sentiment_out.get("signals", {})
-    reduce = adapt.get("reduce_follow_up_depth", False)
-    wants_to_stop = sigs.get("E7_wants_to_stop", False)
-    if st.session_state.get("patient_fatigue"):
-        reduce = True
+    tier = _safe_int(pipeline.get("urgency_tier"), 0)
+    _merge_urgency_state(tier, {"new_signals": pipeline.get("new_urgency_signals", [])})
+    _merge_sentiment_state({
+        "signals": {signal: True for signal in pipeline.get("new_sentiment_signals", [])},
+        "engagement_trajectory": "declining" if pipeline.get("reduce_follow_up") else "stable",
+        "emotional_state": "fatigued" if pipeline.get("reduce_follow_up") else "neutral",
+    })
 
-    dr_recommends  = dr_out.get("follow_up_recommended", False)
-    followup_goal  = dr_out.get("follow_up_goal", "")
-    priority       = dr_out.get("clinical_priority", "medium")
-
-    # Override rules (clinical necessity > patient experience)
-    force_followup = False
-    if step.get("type") == "number" and dr_out.get("information_completeness") != "complete":
-        force_followup = True  # Numeric severity is always high priority
-    if dr_out.get("special_signals", {}).get("medication_stop_signal") and followup_count == 0:
-        force_followup = True
-
-    # Suppression rules
-    suppress = False
-    if followup_count >= 1:
-        suppress = True  # Absolute limit
-    if wants_to_stop:
-        suppress = True
-    if interp.get("match_type") in ("off_topic", "invalid"):
-        suppress = True
-    if reduce and priority != "high":
-        suppress = True
-    if sigs.get("E3_resistance") and priority != "high":
-        suppress = True
-    if (
-        step.get("type") == "options"
-        and candidate_next_step
-        and matched in (step.get("opts") or [])
-        and dr_out.get("information_completeness") == "complete"
-        and not force_followup
-    ):
-        suppress = True
-    do_follow_up = (force_followup or dr_recommends) and not suppress
-
-    # ── STEP 6: Compose follow-up question if needed ───────────────
-    follow_up_question = ""
-    if do_follow_up and followup_goal:
-        tone = adapt.get("tone_profile", "standard")
-        simplify = adapt.get("simplify_next_question", False)
-        nm_out = run_next_move_agent(
-            step, current_raw_answer, followup_goal, tone, simplify,
-            topic_history=topic_history, recent_questions=recent_questions,
-            candidate_next_step=candidate_next_step,
-            last_checkin_answer=last_step_answer,
-            candidate_next_step_last_answer=candidate_next_step_last_answer,
+    if tier == 2:
+        default_msg = (
+            "Thank you for sharing this with us. We can see you're having a really difficult time. "
+            "A member of your care team will be reaching out to you today. Please keep your phone nearby. "
+            "Your responses have been saved."
         )
-        preamble = nm_out.get("preamble") or ""
-        fq = nm_out.get("follow_up_question", "")
-        follow_up_question = f"{preamble} {fq}".strip() if preamble and fq else fq
-        if _question_already_asked(state, follow_up_question):
-            follow_up_question = ""
-            do_follow_up = False
+        pipeline["urgency_message"] = pipeline.get("urgency_message") or default_msg
+    elif tier == 3:
+        default_msg = (
+            "We're concerned about what you've shared. Please call 911 or go to your nearest "
+            "emergency room immediately. Your care team has been notified."
+        )
+        pipeline["urgency_message"] = pipeline.get("urgency_message") or default_msg
+        pipeline["wants_to_stop"] = True
 
-    # ── STEP 7: Build assistant message for non-follow-up case ─────
-    assistant_message = ""
-    if not do_follow_up:
-        comp_note    = dr_out.get("clinical_note", "")
-        patient_change_note = (dr_out.get("patient_facing_note") or "").strip()
-        change_dir   = dr_out.get("change_direction", "new_data")
-        prev_answer  = dr_out.get("last_answer", "")
-        emotional    = sentiment_out.get("emotional_state", "neutral")
-
-        # Build a brief contextual acknowledgment
-        if dr_out.get("patient_acknowledgment") and dr_out.get("answered_with_uncertainty"):
-            assistant_message = dr_out["patient_acknowledgment"]
-        elif patient_change_note:
-            assistant_message = patient_change_note
-        elif comp_note and change_dir in ("worsened", "improved") and prev_answer:
-            assistant_message = comp_note
-        elif emotional == "distressed":
-            assistant_message = "That sounds really difficult. I've made a note of this for your care team."
-        elif emotional in ("anxious", "overwhelmed"):
-            assistant_message = "I hear you — I've made a note of that for your care team."
-        elif change_dir == "worsened":
-            assistant_message = "I've noted that, and I can see things have been harder than last time."
-        elif change_dir == "improved":
-            assistant_message = "That's helpful to know, and it sounds like there's been some improvement since last time."
-        else:
-            assistant_message = _default_chatty_reply(topic_key, answer, step, last_topic_data)
-
-    # ── STEP 8: Compose acknowledgment if needed ───────────────────
-    acknowledgment = ""
-    if adapt.get("acknowledgment_required") and adapt.get("acknowledgment_text"):
-        acknowledgment = adapt["acknowledgment_text"]
-
-    # ── STEP 9: Merge urgency and sentiment state ──────────────────
-    _merge_sentiment_state(sentiment_out)
-
-    # ── STEP 10: Tier 2 notice ─────────────────────────────────────
-    urgency_msg = None
     urg_state = st.session_state.get("urgency_state", {})
-    if tier == 2 and not urg_state.get("escalation_shown", False):
-        urgency_msg = urgency_out.get("patient_message")
+    if tier == 2 and pipeline.get("urgency_message") and not urg_state.get("escalation_shown", False):
         urg_state["escalation_shown"] = True
         st.session_state["urgency_state"] = urg_state
+    elif tier == 2:
+        pipeline["urgency_message"] = None
 
-    return {
-        "patient_answer": current_raw_answer,
-        "matched_option": matched,
-        "follow_up": do_follow_up,
-        "follow_up_question": follow_up_question,
-        "acknowledgment": acknowledgment,
-        "assistant_message": assistant_message,
-        "urgency_tier": tier,
-        "urgency_message": urgency_msg,
-        "reduce_follow_up": reduce,
-        "wants_to_stop": wants_to_stop,
-        "doctor_note": dr_out.get("doctor_note"),
-        "clinical_priority": priority,
-        "follow_up_goal": followup_goal,
-        "change_significance": dr_out.get("change_significance", "no_baseline"),
-        "change_clinical_note": dr_out.get("clinical_note", ""),
-        "next_step_action": dr_out.get("next_step_action"),
-        "special_signals": dr_out.get("special_signals", {}),
-        "sentiment_note": sentiment_out.get("engagement_note_for_doctor"),
-    }
+    return pipeline
 
 
 def _pipeline_default() -> dict:
