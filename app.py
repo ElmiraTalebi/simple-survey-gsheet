@@ -92,18 +92,28 @@ def _safe_float(val, default: Optional[float] = None) -> Optional[float]:
 def _has_additional_symptom(d, label):
     return label in (d.get("additional_symptoms") or [])
 
+def _has_current_pain(d):
+    return (
+        d.get("has_pain") == "Yes"
+        or d.get("has_pain_improved") == "Yes"
+        or d.get("has_pain_new") == "Yes"
+        or d.get("has_pain_same") == "Yes"
+    )
+
 FLOW_PAIN = [
     _q("pain_since_last_visit", "How have you been feeling since last visit?", opts=["New symptoms", "Improved symptoms", "Symptoms same/unchanged"]),
     _q("has_pain", "Do you have any pain today?", opts=["Yes", "No"]),
-    _q("pain_location", "Where are you feeling the pain?", opts=["Throat", "Tongue", "Somewhere else"], when=lambda d: d.get("has_pain") == "Yes"),
-    _q("pain_change_details", "How has the pain changed since your last visit?", type="free_text", placeholder="e.g., less intense, same location, worse with swallowing…", when=lambda d: d.get("has_pain") == "Yes"),
-    _q("pain_start", "When did the pain start?", type="free_text", placeholder="e.g., about a week ago, since I started radiation…", when=lambda d: d.get("has_pain") == "Yes"),
-    _q("pain_better_worse", "Is there anything that makes the pain better or worse?", type="free_text", placeholder="e.g., pain medicine helps, swallowing makes it worse…", when=lambda d: d.get("has_pain") == "Yes"),
-    _q("pain_medications", "Which medications are you currently taking for pain?", type="multi_select", opts=["Gabapentin", "Oxycodone", "Butrans patch", "Other", "No pain medication"]),
+    _q("has_pain_improved", "That’s great news! Have you noticed any pain at all from last check-in?", opts=["Yes", "No"], when=lambda d: d.get("pain_since_last_visit") == "Improved symptoms"),
+    _q("has_pain_new", "Have your new symptoms included any pain?", opts=["Yes", "No"], when=lambda d: d.get("pain_since_last_visit") == "New symptoms"),
+    _q("has_pain_same", "Do you have any pain today?", opts=["Yes", "No"], when=lambda d: d.get("pain_since_last_visit") == "Symptoms same/unchanged"),
+    _q("pain_location", "Where are you feeling the pain?", opts=["Throat", "Tongue", "Somewhere else"], when=_has_current_pain),
+    _q("pain_start", "When did the pain start?", type="free_text", placeholder="e.g., about a week ago, since I started radiation…", when=_has_current_pain),
+    _q("pain_severity", "On a scale of 0–10, how bad is the pain at its worst?", type="number", min_v=0, max_v=10, default_v=5, when=_has_current_pain),
+    _q("pain_timing", "Is the pain constant, intermittent, or only happening with swallowing or eating?", opts=["Constant", "Intermittent", "Only when swallowing", "Only when eating", "Both swallowing and eating"], when=_has_current_pain),
+    _q("pain_better_worse", "Is there anything that makes the pain better or worse?", type="free_text", placeholder="e.g., pain medicine helps, swallowing makes it worse…", when=_has_current_pain),
+    _q("pain_medications", "Which medications are you currently taking for pain?", type="multi_select", opts=["Gabapentin", "Oxycodone", "Butrans patch", "Other", "No pain medication"], when=_has_current_pain),
     _q("med_dose_freq", "How often are you taking your pain medication, and at what dose?", type="free_text", placeholder="e.g., Oxycodone 5mg every 6 hours…", when=lambda d: (bool(d.get("pain_medications")) and "No pain medication" not in (d.get("pain_medications") or []))),
     _q("med_side_effects", "Are you experiencing any side effects from your pain medications, such as constipation or anything else?", opts=["Yes", "No"], when=lambda d: (bool(d.get("pain_medications")) and "No pain medication" not in (d.get("pain_medications") or []))),
-    _q("pain_severity", "On a scale of 0–10, how bad is the pain at its worst?", type="number", min_v=0, max_v=10, default_v=5, when=lambda d: d.get("has_pain") == "Yes"),
-    _q("pain_timing", "Is the pain constant, intermittent, or only happening with swallowing or eating?", opts=["Constant", "Intermittent", "Only when swallowing", "Only when eating", "Both swallowing and eating"], when=lambda d: d.get("has_pain") == "Yes"),
     _q("tongue_type", "Is it a sore or ulcer on the tongue, or a general painful feeling?", opts=["There's a sore/ulcer", "Just pain, no visible sore"], when=lambda d: d.get("pain_location") == "Tongue"),
     _q("tongue_spot", "Is the pain in one specific spot, or does it spread?", opts=["One spot", "Spreads across tongue", "Whole mouth"], when=lambda d: d.get("pain_location") == "Tongue"),
     _q("other_pain_desc", "Which body part is hurting?", type="free_text", placeholder="e.g., near my jaw and ear…", when=lambda d: d.get("pain_location") == "Somewhere else"),
@@ -2031,6 +2041,17 @@ def render_active_question(question: str, label: str = "Current question"):
 
 def _dynamic_step_text(topic_key: Optional[str], step: dict, state: Optional[dict] = None) -> str:
     question_text = step["text"]
+    if topic_key == "pain" and step.get("id") == "pain_change_details":
+        data = (state or {}).get("data", {}) if state else {}
+        location = str(
+            data.get("other_pain_desc")
+            or data.get("pain_location_raw")
+            or data.get("pain_location")
+            or ""
+        ).strip()
+        if location and _norm_text(location) != "somewhere else":
+            pain_label = f"{location} pain"
+            return f"How has the {pain_label} changed since your last visit?"
     if not ENABLE_DYNAMIC_PROMPT_REWRITE:
         return question_text
     if not state or not topic_key or not openai_client:
@@ -2328,7 +2349,10 @@ _PAIN_DETAIL_WORKUP_STEP_IDS = {
 
 def _prior_pain_symptom_present() -> bool:
     last = st.session_state.get("last_checkin", {}).get("pain", {}) or {}
-    if _norm_text(last.get("has_pain")) == "yes":
+    if any(
+        _norm_text(last.get(key)) == "yes"
+        for key in ("has_pain", "has_pain_improved", "has_pain_new", "has_pain_same")
+    ):
         return True
     pain_markers = (
         "pain_location",
@@ -2342,12 +2366,15 @@ def _prior_pain_symptom_present() -> bool:
     return any(str(last.get(key) or "").strip() for key in pain_markers)
 
 
+def _current_pain_reported(data: dict) -> bool:
+    return any(
+        data.get(key) == "Yes"
+        for key in ("has_pain", "has_pain_improved", "has_pain_new", "has_pain_same")
+    )
+
+
 def _pain_detail_workup_needed(data: dict) -> bool:
-    if data.get("has_pain") != "Yes":
-        return False
-    if not _prior_pain_symptom_present():
-        return True
-    return data.get("pain_since_last_visit") == "New symptoms"
+    return _current_pain_reported(data)
 
 
 def _step_is_relevant(topic_key: str, step: dict, data: dict, raw_answers: Optional[dict] = None) -> bool:
@@ -2356,13 +2383,9 @@ def _step_is_relevant(topic_key: str, step: dict, data: dict, raw_answers: Optio
         step_id = step.get("id")
         if step_id == "pain_since_last_visit":
             return bool(st.session_state.get("has_prev_checkin", False))
-        if step_id == "pain_change_details":
-            return (
-                data.get("has_pain") == "Yes"
-                and _prior_pain_symptom_present()
-                and data.get("pain_since_last_visit") != "New symptoms"
-            )
-        if step_id in _PAIN_DETAIL_WORKUP_STEP_IDS and data.get("has_pain") == "Yes":
+        if step_id == "has_pain":
+            return not bool(st.session_state.get("has_prev_checkin", False))
+        if step_id in _PAIN_DETAIL_WORKUP_STEP_IDS and _current_pain_reported(data):
             if not _pain_detail_workup_needed(data):
                 return False
 
@@ -4775,7 +4798,9 @@ _SUMMARY_FIELDS = {
     "pain": [
         ("pain_since_last_visit", "Since last visit"),
         ("has_pain",            "Pain today"),
-        ("pain_change_details",  "Pain change"),
+        ("has_pain_improved",    "Pain after improvement"),
+        ("has_pain_new",         "Pain with new symptoms"),
+        ("has_pain_same",        "Pain today"),
         ("pain_location",       "Location"),
         ("pain_severity",       "Severity"),
         ("pain_timing",         "Timing"),
@@ -5021,6 +5046,9 @@ _REPORT_COLOR_FIELDS_BY_TOPIC = {
     "pain": {
         "pain_since_last_visit",
         "has_pain",
+        "has_pain_improved",
+        "has_pain_new",
+        "has_pain_same",
         "pain_location",
         "pain_severity",
         "pain_timing",
@@ -5080,6 +5108,9 @@ _REPORT_COLOR_FIELDS_BY_TOPIC = {
 
 _REPORT_YES_IS_ISSUE_FIELDS = {
     "has_pain",
+    "has_pain_improved",
+    "has_pain_new",
+    "has_pain_same",
     "swallowing_difficulty",
     "taste_changes",
     "mouth_sores",
@@ -6021,14 +6052,38 @@ def _is_exact_structured_option_reply(answer: Any, raw_answer: Any, step: dict, 
     return _norm_text(raw_text) == _norm_text(answer)
 
 
-def _answer_needs_other_detail(step: dict, answer: Any, data: dict) -> bool:
-    if "Other" not in step.get("opts", []):
+_CATCHALL_DETAIL_TARGETS = {
+    ("pain", "pain_location", "somewhere else"): "other_pain_desc",
+    ("activity", "activity_limiting_factor", "other"): "activity_other_desc",
+    ("activity", "activity_limiting_factor", "something else"): "activity_other_desc",
+}
+
+
+def _selected_catchall_label(answer: Any) -> str:
+    values = answer if isinstance(answer, list) else [answer]
+    for item in values:
+        text = str(item or "").strip()
+        if _norm_text(text) in {"other", "somewhere else", "something else"}:
+            return text
+    return ""
+
+
+def _catchall_detail_target_step(topic_key: str, step: dict, answer: Any) -> Optional[dict]:
+    label = _selected_catchall_label(answer)
+    target_id = _CATCHALL_DETAIL_TARGETS.get((topic_key, step.get("id"), _norm_text(label)))
+    return STEP_BY_ID.get(target_id) if target_id else None
+
+
+def _answer_needs_catchall_detail(topic_key: str, step: dict, answer: Any, data: dict) -> bool:
+    label = _selected_catchall_label(answer)
+    if not label:
         return False
-    if str((data or {}).get(f"{step['id']}_other_detail") or "").strip():
+    target_step = _catchall_detail_target_step(topic_key, step, answer)
+    if target_step and str((data or {}).get(target_step["id"]) or "").strip():
         return False
-    if isinstance(answer, list):
-        return any(_norm_text(item) == "other" for item in answer)
-    return _norm_text(answer) == "other"
+    if not target_step and str((data or {}).get(f"{step['id']}_other_detail") or "").strip():
+        return False
+    return True
 
 
 def _patient_typed_other_detail(answer: Any, raw_answer: Any) -> str:
@@ -6042,9 +6097,35 @@ def _patient_typed_other_detail(answer: Any, raw_answer: Any) -> str:
     return ""
 
 
-def _other_detail_question(step: dict) -> str:
-    q = str(step.get("q") or "this question").strip()
-    return f"For this question, what does Other mean exactly?\n\n{q}"
+def _other_detail_question(step: dict, topic_key: str = "") -> str:
+    return _catchall_detail_question(step, "Other", topic_key=topic_key)
+
+
+def _catchall_detail_question(step: dict, label: str, topic_key: str = "") -> str:
+    step_id = step.get("id")
+    norm_label = _norm_text(label)
+    prompts = {
+        ("pain", "pain_location", "somewhere else"): "Where exactly are you feeling the pain?",
+        ("pain", "pain_medications", "other"): "Which other pain medication are you taking?",
+        ("nutrition", "eating_barrier", "other"): "What else is stopping you from eating more?",
+        ("nutrition", "fluid_barrier", "other"): "What else is making it hard to drink?",
+        ("oral", "teeth_issue_type", "other"): "What other teeth or gum problem are you having?",
+        ("activity", "activity_limiting_factor", "other"): "What else is limiting your activities?",
+        ("activity", "activity_limiting_factor", "something else"): "What else is limiting your activities?",
+        ("other", "additional_symptoms", "other"): "What other symptom would you like to report?",
+        ("other", "sexual_cause", "other"): "What else do you think this is related to?",
+    }
+    prompt = prompts.get((topic_key, step_id, norm_label))
+    if prompt:
+        return prompt
+
+    question = str(step.get("text") or step.get("q") or "").strip()
+    question_lower = question[:1].lower() + question[1:] if question else "this"
+    if norm_label == "somewhere else":
+        return f"Where exactly, related to: {question_lower}"
+    if norm_label in {"other", "something else"}:
+        return f"What else would you like to add for: {question_lower}"
+    return f"Could you tell me a little more about your answer to: {question_lower}"
 
 
 def _store_followup_prompt(
@@ -6450,21 +6531,24 @@ def handle_answer(
 
     last_topic_data = st.session_state.last_checkin.get(topic_key, {})
 
-    if source == "structured" and _answer_needs_other_detail(step, answer, state["data"]):
+    if source == "structured" and _answer_needs_catchall_detail(topic_key, step, answer, state["data"]):
+        catchall_label = _selected_catchall_label(answer)
+        target_step = _catchall_detail_target_step(topic_key, step, answer)
         _record_fastpath_trace(
             topic_key,
             step,
             answer,
             source,
-            "The patient selected Other, so the app asks for the exact detail before moving forward.",
+            f"The patient selected {catchall_label}, so the app asks for the exact detail before moving forward.",
         )
         _store_followup_prompt(
             topic_key,
             state,
             step,
-            _other_detail_question(step),
-            retry_current_step=True,
+            _catchall_detail_question(step, catchall_label, topic_key=topic_key),
+            retry_current_step=target_step is None,
             allow_other_detail=True,
+            target_step=target_step,
         )
         st.rerun()
         return
