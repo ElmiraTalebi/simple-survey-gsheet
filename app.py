@@ -4799,15 +4799,169 @@ def _natural_summary(topic_key: str, data: dict) -> str:
     return f"{answered} details recorded last visit." if answered else ""
 
 
+def _report_clean_fields(data: dict) -> dict:
+    return {
+        k: v for k, v in (data or {}).items()
+        if not str(k).startswith("_")
+        and not str(k).endswith("_doctor_note")
+        and k not in {"other_pain_head_neck_focused"}
+        and v not in (None, "", [], {})
+    }
+
+
+def _report_value_text(value: Any) -> str:
+    if isinstance(value, list):
+        return ", ".join(str(v) for v in value if str(v).strip())
+    return str(value or "").strip()
+
+
+def _report_value_norm(value: Any) -> str:
+    return _norm_text(_report_value_text(value))
+
+
+def _report_numeric_value(value: Any) -> Optional[float]:
+    if isinstance(value, (int, float)):
+        return float(value)
+    match = re.search(r"-?\d+(?:\.\d+)?", _report_value_text(value))
+    if not match:
+        return None
+    try:
+        return float(match.group(0))
+    except ValueError:
+        return None
+
+
+_REPORT_HIGHER_IS_WORSE_FIELDS = {
+    "pain_severity",
+    "throat_severity",
+    "tongue_severity",
+    "other_pain_severity",
+}
+
+_REPORT_ORDERED_FIELDS = {
+    "eating_ability": {
+        "Eating normally — no problems": 0,
+        "Eating less than usual, but managing": 1,
+        "Struggling — only liquids or very little": 2,
+        "Not eating — using a feeding tube only": 3,
+    },
+    "activity_level": {
+        "Doing everything normally": 0,
+        "Doing less than usual": 1,
+        "Struggling with daily tasks": 2,
+    },
+}
+
+
+def _report_ordered_score(field_id: str, value: Any) -> Optional[int]:
+    order = _REPORT_ORDERED_FIELDS.get(field_id)
+    if not order:
+        return None
+    value_norm = _report_value_norm(value)
+    for label, score in order.items():
+        if _norm_text(label) == value_norm:
+            return score
+    return None
+
+
+def _report_value_is_issue(field_id: str, value: Any) -> bool:
+    norm = _report_value_norm(value)
+    if not norm:
+        return False
+    if isinstance(value, list):
+        if any(_norm_text(v) in {"none of these", "none", "no pain medication"} for v in value):
+            return False
+        return bool(value)
+
+    negative_exact = {
+        "no", "none", "none of these", "not really", "working fine", "working well",
+        "doing everything normally", "eating normally no problems", "no voice is fine",
+        "yes drinking well", "mostly normal food", "improved", "getting better",
+        "no pain medication",
+    }
+    if norm in negative_exact:
+        return False
+    if norm.startswith("no ") or norm.startswith("no,") or " no " in f" {norm} ":
+        return False
+    if field_id in {"sleep_quality"}:
+        return norm == "yes"
+    if field_id in {"eating_ability", "activity_level"}:
+        score = _report_ordered_score(field_id, value)
+        return bool(score and score > 0)
+    if field_id in _REPORT_HIGHER_IS_WORSE_FIELDS:
+        numeric = _report_numeric_value(value)
+        return numeric is not None and numeric > 0
+
+    issue_terms = (
+        "yes", "struggling", "less than usual", "very little", "pain", "worse",
+        "getting worse", "leakage", "blockage", "discomfort", "not enough",
+        "nausea", "vomiting", "diarrhea", "constipation", "dizziness", "falls",
+        "fever", "chills", "shortness", "breathing", "numbness", "tingling",
+        "skin", "voice", "hearing", "dry", "mucus", "sores", "tired", "fatigue",
+    )
+    return any(term in norm for term in issue_terms)
+
+
+def _report_compare_topic(topic_key: str, last_topic_data: dict, current_topic_data: dict) -> tuple[str, list[str], list[str]]:
+    last_clean = _report_clean_fields(last_topic_data)
+    current_clean = _report_clean_fields(current_topic_data)
+    if not current_clean:
+        return "unanswered", [], []
+
+    red_reasons = []
+    green_reasons = []
+    fields = sorted(set(last_clean) | set(current_clean))
+
+    for field_id in fields:
+        current_exists = field_id in current_clean
+        last_exists = field_id in last_clean
+        current_value = current_clean.get(field_id)
+        last_value = last_clean.get(field_id)
+        label = field_id.replace("_", " ").title()
+
+        if field_id in _REPORT_HIGHER_IS_WORSE_FIELDS and current_exists and last_exists:
+            current_num = _report_numeric_value(current_value)
+            last_num = _report_numeric_value(last_value)
+            if current_num is not None and last_num is not None:
+                if current_num > last_num:
+                    red_reasons.append(f"{label} increased from {last_num:g} to {current_num:g}.")
+                elif current_num < last_num:
+                    green_reasons.append(f"{label} decreased from {last_num:g} to {current_num:g}.")
+                continue
+
+        current_score = _report_ordered_score(field_id, current_value)
+        last_score = _report_ordered_score(field_id, last_value)
+        if current_score is not None and last_score is not None:
+            if current_score > last_score:
+                red_reasons.append(f"{label} worsened.")
+            elif current_score < last_score:
+                green_reasons.append(f"{label} improved.")
+            continue
+
+        current_issue = current_exists and _report_value_is_issue(field_id, current_value)
+        last_issue = last_exists and _report_value_is_issue(field_id, last_value)
+        if current_issue and not last_issue:
+            red_reasons.append(f"New or active issue: {label}.")
+        elif last_issue and current_exists and not current_issue:
+            green_reasons.append(f"Improved/resolved: {label}.")
+        elif current_issue and last_issue:
+            current_norm = _report_value_norm(current_value)
+            if "getting worse" in current_norm or current_norm == "worse":
+                red_reasons.append(f"{label} is reported as worse.")
+            elif "getting better" in current_norm or current_norm == "improved":
+                green_reasons.append(f"{label} is reported as improved.")
+
+    if red_reasons:
+        return "new_issue" if not last_clean else "worsened", red_reasons[:4], green_reasons[:3]
+    if green_reasons:
+        return "improved", [], green_reasons[:4]
+    return "stable", [], []
+
+
 def _report_topic_fallback(topic_key: str, topic_label: str, last_topic_data: dict, current_topic_data: dict) -> dict:
     last_summary = _natural_summary(topic_key, last_topic_data) if last_topic_data else "No prior details recorded."
     current_summary = _natural_summary(topic_key, current_topic_data) if current_topic_data else "Not answered this visit."
-    if not current_topic_data:
-        status = "unanswered"
-    elif not last_topic_data:
-        status = "new_issue"
-    else:
-        status = "stable"
+    status, attention_lines, detail_lines = _report_compare_topic(topic_key, last_topic_data, current_topic_data)
     status_label = {
         "worsened": "Worsened",
         "new_issue": "New issue",
@@ -4822,8 +4976,8 @@ def _report_topic_fallback(topic_key: str, topic_label: str, last_topic_data: di
         "status_label": status_label,
         "last_summary": last_summary,
         "current_summary": current_summary,
-        "detail_lines": [],
-        "attention_lines": [],
+        "detail_lines": detail_lines,
+        "attention_lines": attention_lines,
     }
 
 
