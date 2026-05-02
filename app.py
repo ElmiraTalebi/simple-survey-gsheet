@@ -1763,6 +1763,168 @@ div[data-baseweb="select"] > div {
     margin-bottom: 10px;
 }
 
+.demo-flow {
+    margin-top: 10px;
+    border: 1px solid #d9e4ed;
+    border-radius: 22px;
+    background: linear-gradient(180deg, rgba(255,255,255,0.96) 0%, rgba(247,251,254,0.96) 100%);
+    padding: 12px;
+    box-shadow: 0 18px 36px rgba(23, 50, 74, 0.08);
+}
+
+.demo-flow-top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 4px 2px 10px 2px;
+}
+
+.demo-flow-kicker {
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #7b90a3;
+    margin-bottom: 4px;
+}
+
+.demo-flow-title {
+    font-family: 'Manrope', sans-serif;
+    font-size: 13px;
+    line-height: 1.45;
+    font-weight: 800;
+    color: #17324a;
+}
+
+.demo-status {
+    flex: 0 0 auto;
+    border-radius: 999px;
+    padding: 5px 9px;
+    font-size: 10px;
+    font-weight: 800;
+    white-space: nowrap;
+    border: 1px solid transparent;
+}
+
+.demo-status.flow {
+    color: #0f6b3d;
+    background: #ecfdf5;
+    border-color: #bbf7d0;
+}
+
+.demo-status.ai {
+    color: #0f5d93;
+    background: #edf7ff;
+    border-color: #bfdbfe;
+}
+
+.demo-node {
+    display: grid;
+    grid-template-columns: 28px 1fr;
+    gap: 10px;
+    align-items: start;
+    border: 1px solid #e1eaf2;
+    border-radius: 18px;
+    background: #ffffff;
+    padding: 10px;
+}
+
+.demo-node.current {
+    border-color: #b7d5eb;
+    background: linear-gradient(180deg, #f7fbff 0%, #eef7ff 100%);
+}
+
+.demo-node-index {
+    width: 26px;
+    height: 26px;
+    border-radius: 999px;
+    background: #17324a;
+    color: #ffffff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: 800;
+}
+
+.demo-node-label {
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #7d92a7;
+    margin-bottom: 4px;
+}
+
+.demo-node-text {
+    font-size: 13px;
+    line-height: 1.5;
+    color: #17324a;
+    font-weight: 750;
+    word-break: break-word;
+}
+
+.demo-node-subtext {
+    margin-top: 4px;
+    font-size: 12px;
+    line-height: 1.45;
+    color: #64788c;
+}
+
+.demo-chip-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 7px;
+}
+
+.demo-chip {
+    border-radius: 999px;
+    padding: 3px 8px;
+    background: #f1f6fb;
+    border: 1px solid #dce8f2;
+    color: #39566f;
+    font-size: 10px;
+    font-weight: 800;
+}
+
+.demo-connector {
+    width: 2px;
+    height: 16px;
+    margin: 2px 0 2px 23px;
+    background: linear-gradient(180deg, #bfd3e4 0%, #d9e7f2 100%);
+}
+
+.demo-mini-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 6px;
+    margin-top: 9px;
+}
+
+.demo-mini {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    border-radius: 12px;
+    background: #f7fbfe;
+    border: 1px solid #e1ebf3;
+    padding: 6px 8px;
+}
+
+.demo-mini span {
+    font-size: 10px;
+    color: #70869a;
+    font-weight: 800;
+}
+
+.demo-mini strong {
+    font-size: 10px;
+    color: #17324a;
+    text-align: right;
+}
+
 @media (max-width: 1100px) {
     .demo-reasoning-card {
         position: static;
@@ -2400,31 +2562,90 @@ def _render_demo_agent_panel(topic_key: Optional[str] = None):
     elif next_question:
         decision = f"Move to next question: {next_question}"
 
+    status_class = "ai" if ai_used else "flow"
+    status_label = "AI used" if ai_used else "No AI"
+    path_label = "Single-pass AI" if ai_used else "Flowchart only"
+    answer_text = str(trace.get("patient_answer") or "")
+    question_text = str(trace.get("question") or "Not available")
+    current_text = current_prompt or "Topic complete or waiting for the next action."
+    matched = interp.get("matched_option")
+    urgency_tier = urgency.get("urgency_tier", 0)
+    reduce_follow_up = engagement.get("reduce_follow_up", False)
+    wants_to_stop = engagement.get("wants_to_stop", False)
+    priority = doctor.get("clinical_priority") or "not specified"
+
+    details_html = ""
+    if ai_used:
+        detail_items = []
+        if matched:
+            detail_items.append(("Interpreted as", str(matched)))
+        detail_items.extend([
+            ("Urgency tier", str(urgency_tier)),
+            ("Follow-up depth", "reduced" if reduce_follow_up else "standard"),
+            ("Patient stop signal", "yes" if wants_to_stop else "no"),
+            ("Clinical priority", str(priority)),
+        ])
+        details_html = "".join(
+            f'<div class="demo-mini"><span>{_html.escape(label)}</span><strong>{_html.escape(value)}</strong></div>'
+            for label, value in detail_items
+        )
+    else:
+        details_html = (
+            '<div class="demo-mini"><span>Interpretation</span><strong>Pre-defined option accepted</strong></div>'
+            '<div class="demo-mini"><span>GPT calls</span><strong>0</strong></div>'
+        )
+
     st.caption("Demo mode shows the latest processed answer and the next system action.")
-    with st.expander("Latest decision trace", expanded=True):
-        st.markdown(f"**Question just answered:** {trace.get('question') or 'Not available'}")
-        st.markdown(f"**Patient answer:** `{trace.get('patient_answer')}`")
-        st.markdown(f"**Input source:** `{source or 'unknown'}`")
-        st.markdown(f"**AI used:** `{'Yes' if ai_used else 'No'}`")
-        st.markdown(f"**Processing path:** {path_text}")
-
-        if ai_used:
-            matched = interp.get("matched_option")
-            urgency_tier = urgency.get("urgency_tier", 0)
-            reduce_follow_up = engagement.get("reduce_follow_up", False)
-            wants_to_stop = engagement.get("wants_to_stop", False)
-            priority = doctor.get("clinical_priority") or "not specified"
-            if matched:
-                st.markdown(f"**Interpreted as:** `{matched}`")
-            st.markdown(f"**Urgency tier:** `{urgency_tier}`")
-            st.markdown(f"**Patient control signals:** reduce follow-up `{reduce_follow_up}`, wants to stop `{wants_to_stop}`")
-            st.markdown(f"**Clinical priority:** `{priority}`")
-        else:
-            st.markdown("**Flowchart result:** The answer was accepted as structured input and advanced without AI interpretation.")
-
-        st.markdown(f"**Decision:** {decision}")
-        if current_prompt:
-            st.markdown(f"**Current question now:** {current_prompt}")
+    st.markdown(
+        f'''
+        <div class="demo-flow">
+            <div class="demo-flow-top">
+                <div>
+                    <div class="demo-flow-kicker">Latest answer</div>
+                    <div class="demo-flow-title">{_html.escape(question_text)}</div>
+                </div>
+                <div class="demo-status {status_class}">{status_label}</div>
+            </div>
+            <div class="demo-node">
+                <div class="demo-node-index">1</div>
+                <div class="demo-node-body">
+                    <div class="demo-node-label">Patient input</div>
+                    <div class="demo-node-text">{_html.escape(answer_text)}</div>
+                    <div class="demo-chip-row">
+                        <span class="demo-chip">{_html.escape(source or "unknown")}</span>
+                    </div>
+                </div>
+            </div>
+            <div class="demo-connector"></div>
+            <div class="demo-node">
+                <div class="demo-node-index">2</div>
+                <div class="demo-node-body">
+                    <div class="demo-node-label">Processing path</div>
+                    <div class="demo-node-text">{_html.escape(path_label)}</div>
+                    <div class="demo-node-subtext">{_html.escape(path_text)}</div>
+                    <div class="demo-mini-grid">{details_html}</div>
+                </div>
+            </div>
+            <div class="demo-connector"></div>
+            <div class="demo-node">
+                <div class="demo-node-index">3</div>
+                <div class="demo-node-body">
+                    <div class="demo-node-label">Decision</div>
+                    <div class="demo-node-text">{_html.escape(decision)}</div>
+                </div>
+            </div>
+            <div class="demo-connector"></div>
+            <div class="demo-node current">
+                <div class="demo-node-index">4</div>
+                <div class="demo-node-body">
+                    <div class="demo-node-label">Current question now</div>
+                    <div class="demo-node-text">{_html.escape(current_text)}</div>
+                </div>
+            </div>
+        </div>
+        ''',
+        unsafe_allow_html=True,
+    )
 
 
 
