@@ -2562,6 +2562,29 @@ def _render_demo_agent_panel(topic_key: Optional[str] = None):
     elif next_question:
         decision = f"Move to next question: {next_question}"
 
+    def _demo_urgency_label(tier: Any) -> str:
+        tier_int = _safe_int_value(tier, 0)
+        labels = {
+            0: "No urgent concern detected",
+            1: "Not urgent: continue the check-in",
+            2: "Urgent: care team should follow up today",
+            3: "Emergency: stop and show emergency guidance",
+        }
+        return labels.get(tier_int, "No urgent concern detected")
+
+    def _demo_followup_depth_label(reduce_follow_up: bool) -> str:
+        if reduce_follow_up:
+            return "Shortened: patient may be tired or frustrated"
+        return "Normal: continue with regular flowchart depth"
+
+    def _demo_priority_label(priority_value: str) -> str:
+        labels = {
+            "low": "Low: routine note for the report",
+            "medium": "Medium: clinically useful, not urgent",
+            "high": "High: important detail for care team review",
+        }
+        return labels.get(str(priority_value or "").lower(), "Medium: clinically useful, not urgent")
+
     status_class = "ai" if ai_used else "flow"
     status_label = "AI used" if ai_used else "No AI"
     path_label = "Single-pass AI" if ai_used else "Flowchart only"
@@ -2575,15 +2598,20 @@ def _render_demo_agent_panel(topic_key: Optional[str] = None):
     priority = doctor.get("clinical_priority") or "not specified"
 
     details_html = ""
+    agent_count_text = "1 AI agent: Single-pass orchestrator" if ai_used else "0 AI agents"
+    call_count_text = "1 GPT call" if ai_used else "0 GPT calls"
+
     if ai_used:
         detail_items = []
         if matched:
-            detail_items.append(("Interpreted as", str(matched)))
+            detail_items.append(("Answer understood as", str(matched)))
         detail_items.extend([
-            ("Urgency tier", str(urgency_tier)),
-            ("Follow-up depth", "reduced" if reduce_follow_up else "standard"),
-            ("Patient stop signal", "yes" if wants_to_stop else "no"),
-            ("Clinical priority", str(priority)),
+            ("AI agents used", agent_count_text),
+            ("Model calls", call_count_text),
+            ("Urgency result", _demo_urgency_label(urgency_tier)),
+            ("Questioning style", _demo_followup_depth_label(bool(reduce_follow_up))),
+            ("Patient asked to stop?", "Yes" if wants_to_stop else "No"),
+            ("Care-team importance", _demo_priority_label(str(priority))),
         ])
         details_html = "".join(
             f'<div class="demo-mini"><span>{_html.escape(label)}</span><strong>{_html.escape(value)}</strong></div>'
@@ -2592,7 +2620,8 @@ def _render_demo_agent_panel(topic_key: Optional[str] = None):
     else:
         details_html = (
             '<div class="demo-mini"><span>Interpretation</span><strong>Pre-defined option accepted</strong></div>'
-            '<div class="demo-mini"><span>GPT calls</span><strong>0</strong></div>'
+            f'<div class="demo-mini"><span>AI agents used</span><strong>{_html.escape(agent_count_text)}</strong></div>'
+            f'<div class="demo-mini"><span>Model calls</span><strong>{_html.escape(call_count_text)}</strong></div>'
         )
 
     st.caption("Demo mode shows the latest processed answer and the next system action.")
