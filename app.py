@@ -1193,6 +1193,60 @@ div[data-baseweb="select"] > div {
     color: #17324a;
 }
 
+.report-detail-summary-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+    gap: 12px;
+    padding: 14px;
+}
+
+.report-detail-summary-card {
+    border: 1px solid #dfe9f2;
+    border-radius: 16px;
+    background: #ffffff;
+    padding: 14px 16px;
+    min-height: 96px;
+}
+
+.report-detail-summary-card.now {
+    background: #f8fbfe;
+}
+
+.report-detail-section {
+    border-top: 1px solid #e4edf4;
+    padding: 14px 16px;
+}
+
+.report-detail-section-title {
+    font-size: 12px;
+    font-weight: 850;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: #70859a;
+    margin-bottom: 8px;
+}
+
+.report-detail-points {
+    margin: 0;
+    padding-left: 18px;
+    color: #17324a;
+    font-size: 13px;
+    line-height: 1.6;
+}
+
+.report-detail-chip-block {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px;
+}
+
+.report-detail-chip-panel {
+    border: 1px solid #e3ebf2;
+    border-radius: 16px;
+    background: rgba(255,255,255,0.9);
+    padding: 12px;
+}
+
 @media (max-width: 900px) {
     .report-summary-banner,
     .report-detail-grid {
@@ -5312,33 +5366,57 @@ def _render_report_topic_detail(insight: dict, all_data: dict):
     current_topic_data = all_data.get(topic_key, {}) or {}
 
     with st.expander("More details", expanded=False):
-        col1, col2 = st.columns(2)
-        with col1:
-            st.markdown("**Last check-in**")
-            st.markdown(str(insight.get("last_summary") or "No prior details recorded."))
-        with col2:
-            st.markdown("**Current check-in**")
-            st.markdown(str(insight.get("current_summary") or "Not answered this visit."))
-
+        detail_parts = [
+            '<div class="report-detail-shell inline">',
+            '<div class="report-detail-summary-grid">',
+            '<div class="report-detail-summary-card">',
+            '<div class="report-detail-label">Last check-in</div>',
+            f'<div class="report-detail-text">{_html.escape(str(insight.get("last_summary") or "No prior details recorded."))}</div>',
+            '</div>',
+            '<div class="report-detail-summary-card now">',
+            '<div class="report-detail-label">Current check-in</div>',
+            f'<div class="report-detail-text">{_html.escape(str(insight.get("current_summary") or "Not answered this visit."))}</div>',
+            '</div>',
+            '</div>',
+        ]
         if insight.get("attention_lines"):
-            st.markdown("**Key points**")
+            detail_parts.extend([
+                '<div class="report-detail-section">',
+                '<div class="report-detail-section-title">Key points</div>',
+                '<ul class="report-detail-points">',
+            ])
             for line in insight["attention_lines"]:
-                st.markdown(f"- {line}")
+                detail_parts.append(f'<li>{_html.escape(str(line))}</li>')
+            detail_parts.extend(['</ul>', '</div>'])
         if insight.get("detail_lines"):
-            st.markdown("**Comparison details**")
+            detail_parts.extend([
+                '<div class="report-detail-section">',
+                '<div class="report-detail-section-title">Comparison details</div>',
+                '<ul class="report-detail-points">',
+            ])
             for line in insight["detail_lines"]:
-                st.markdown(f"- {line}")
+                detail_parts.append(f'<li>{_html.escape(str(line))}</li>')
+            detail_parts.extend(['</ul>', '</div>'])
 
         last_html = _checkin_summary_html(topic_key, last_topic_data)
         now_html = _checkin_summary_html(topic_key, current_topic_data)
         if last_html or now_html:
-            col1, col2 = st.columns(2)
-            with col1:
-                st.markdown("**Last visit details**")
-                st.markdown(last_html or '<div style="color:#7a8ea4;">No prior details recorded.</div>', unsafe_allow_html=True)
-            with col2:
-                st.markdown("**Current visit details**")
-                st.markdown(now_html or '<div style="color:#7a8ea4;">No current details recorded.</div>', unsafe_allow_html=True)
+            detail_parts.extend([
+                '<div class="report-detail-section">',
+                '<div class="report-detail-chip-block">',
+                '<div class="report-detail-chip-panel">',
+                '<div class="report-detail-section-title">Last visit details</div>',
+                last_html or '<div style="color:#7a8ea4;">No prior details recorded.</div>',
+                '</div>',
+                '<div class="report-detail-chip-panel">',
+                '<div class="report-detail-section-title">Current visit details</div>',
+                now_html or '<div style="color:#7a8ea4;">No current details recorded.</div>',
+                '</div>',
+                '</div>',
+                '</div>',
+            ])
+        detail_parts.append('</div>')
+        st.markdown("".join(detail_parts), unsafe_allow_html=True)
 
 # ══════════════════════════════════════════════════════════════════
 # FREE-FORM CHAT LLM
@@ -7356,7 +7434,11 @@ def screen_report():
 
     for row_start in range(0, len(topic_insights), 4):
         row_items = topic_insights[row_start:row_start + 4]
-        cols = st.columns(len(row_items))
+        col_weights = [
+            1.55 if insight.get("status") in {"worsened", "new_issue"} else 1.0
+            for insight in row_items
+        ]
+        cols = st.columns(col_weights)
         for col, insight in zip(cols, row_items):
             with col:
                 _render_report_topic_card(insight)
