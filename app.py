@@ -4865,11 +4865,67 @@ _REPORT_ORDERED_FIELDS = {
 }
 
 
+_REPORT_CONTEXT_FIELDS = {
+    "pain_medications",
+    "med_dose_freq",
+    "oral_rinse_use",
+    "magic_mouthwash",
+    "nausea_management",
+    "vomiting_management",
+    "diarrhea_management",
+}
+
+_REPORT_YES_IS_ISSUE_FIELDS = {
+    "has_pain",
+    "swallowing_difficulty",
+    "taste_changes",
+    "mouth_sores",
+    "dry_mouth",
+    "mucus_issues",
+    "constipation",
+    "fatigue",
+    "sleep_quality",
+    "med_side_effects",
+    "breathing_issues",
+    "hearing_changes",
+    "dizziness",
+    "numbness",
+    "skin_issues",
+    "voice_hoarseness",
+    "fever_chills",
+}
+
+
 def _report_ordered_score(field_id: str, value: Any) -> Optional[int]:
     order = _REPORT_ORDERED_FIELDS.get(field_id)
+    value_norm = _report_value_norm(value)
+    if field_id == "eating_ability":
+        if "feeding tube" in value_norm and "only" in value_norm:
+            return 3
+        if "struggling" in value_norm or "only liquids" in value_norm or "very little" in value_norm:
+            return 2
+        if "less than usual" in value_norm or "managing" in value_norm:
+            return 1
+        if "normal" in value_norm or "no problems" in value_norm:
+            return 0
+    if field_id == "activity_level":
+        if "struggling" in value_norm or "daily tasks" in value_norm:
+            return 2
+        if "less than usual" in value_norm or "doing less" in value_norm:
+            return 1
+        if "normal" in value_norm:
+            return 0
+    if field_id == "emotional_state":
+        if any(term in value_norm for term in ("very bad", "terrible", "awful", "depressed", "panic", "overwhelmed")):
+            return 3
+        if any(term in value_norm for term in ("bad", "worse", "hard", "difficult", "anxious", "worried", "stress")):
+            return 2
+        if any(term in value_norm for term in ("a little", "some", "okay", "ok")):
+            return 1
+        if any(term in value_norm for term in ("good", "fine", "better", "normal")):
+            return 0
     if not order:
         return None
-    value_norm = _report_value_norm(value)
     for label, score in order.items():
         if _norm_text(label) == value_norm:
             return score
@@ -4880,7 +4936,7 @@ def _report_value_is_issue(field_id: str, value: Any) -> bool:
     norm = _report_value_norm(value)
     if not norm:
         return False
-    if field_id in {"pain_medications", "oral_rinse_use", "magic_mouthwash"}:
+    if field_id in _REPORT_CONTEXT_FIELDS:
         return False
     if isinstance(value, list):
         neutral_values = {"none of these", "none", "no pain medication", "other"}
@@ -4900,9 +4956,11 @@ def _report_value_is_issue(field_id: str, value: Any) -> bool:
         return False
     if norm.startswith("no ") or norm.startswith("no,") or " no " in f" {norm} ":
         return False
+    if field_id in _REPORT_YES_IS_ISSUE_FIELDS:
+        return norm in {"yes", "a little", "very little", "not really"} or "yes" in norm
     if field_id in {"sleep_quality"}:
         return norm == "yes"
-    if field_id in {"eating_ability", "activity_level"}:
+    if field_id in {"eating_ability", "activity_level", "emotional_state"}:
         score = _report_ordered_score(field_id, value)
         return bool(score and score > 0)
     if field_id in _REPORT_HIGHER_IS_WORSE_FIELDS:
@@ -4915,8 +4973,40 @@ def _report_value_is_issue(field_id: str, value: Any) -> bool:
         "nausea", "vomiting", "diarrhea", "constipation", "dizziness", "falls",
         "fever", "chills", "shortness", "breathing", "numbness", "tingling",
         "skin", "voice", "hearing", "dry", "mucus", "sores", "tired", "fatigue",
+        "headache", "headaches",
     )
     return any(term in norm for term in issue_terms)
+
+
+def _report_issue_tokens(value: Any) -> set[str]:
+    norm = _report_value_norm(value)
+    token_map = {
+        "pain": ("pain", "ache", "sore"),
+        "nausea": ("nausea", "nauseated"),
+        "vomiting": ("vomit", "throwing up"),
+        "diarrhea": ("diarrhea", "loose stool"),
+        "constipation": ("constipation", "constipated"),
+        "dizziness": ("dizziness", "dizzy", "falls", "fall"),
+        "fever": ("fever", "chills"),
+        "breathing": ("shortness", "breathing", "breath"),
+        "numbness": ("numbness", "numb", "tingling"),
+        "skin": ("skin", "rash", "peeling"),
+        "hearing": ("hearing", "ear"),
+        "voice": ("voice", "hoarse", "hoarseness"),
+        "dry mouth": ("dry mouth", "dry"),
+        "mucus": ("mucus", "secretions", "phlegm"),
+        "mouth sores": ("mouth sore", "sores", "ulcer"),
+        "fatigue": ("fatigue", "tired"),
+        "swallowing": ("swallowing", "swallow"),
+        "eating": ("not eating", "very little", "only liquids", "struggling"),
+        "mood": ("anxious", "worried", "very bad", "depressed", "overwhelmed"),
+        "headache": ("headache", "headaches"),
+    }
+    return {
+        token
+        for token, terms in token_map.items()
+        if any(term in norm for term in terms)
+    }
 
 
 def _report_compare_topic(topic_key: str, last_topic_data: dict, current_topic_data: dict) -> tuple[str, list[str], list[str]]:
@@ -4967,9 +5057,24 @@ def _report_compare_topic(topic_key: str, last_topic_data: dict, current_topic_d
                 red_reasons.append(f"{label} is reported as worse.")
             elif "getting better" in current_norm or current_norm == "improved":
                 green_reasons.append(f"{label} is reported as improved.")
+            else:
+                current_tokens = _report_issue_tokens(current_value)
+                last_tokens = _report_issue_tokens(last_value)
+                new_tokens = current_tokens - last_tokens
+                resolved_tokens = last_tokens - current_tokens
+                if new_tokens:
+                    red_reasons.append(f"New symptom detail: {', '.join(sorted(new_tokens))}.")
+                elif resolved_tokens and not current_tokens:
+                    green_reasons.append(f"Resolved symptom detail: {', '.join(sorted(resolved_tokens))}.")
 
     if red_reasons:
-        return "new_issue" if not last_clean else "worsened", red_reasons[:4], green_reasons[:3]
+        has_true_worsening = any(
+            "worsened" in reason.lower()
+            or "increased" in reason.lower()
+            or "reported as worse" in reason.lower()
+            for reason in red_reasons
+        )
+        return ("worsened" if has_true_worsening else "new_issue"), red_reasons[:4], green_reasons[:3]
     if green_reasons:
         return "improved", [], green_reasons[:4]
     return "stable", [], []
