@@ -96,6 +96,7 @@ FLOW_PAIN = [
     _q("pain_since_last_visit", "How have you been feeling since last visit?", opts=["New symptoms", "Improved symptoms", "Symptoms same/unchanged"]),
     _q("has_pain", "Do you have any pain today?", opts=["Yes", "No"]),
     _q("pain_location", "Where are you feeling the pain?", opts=["Throat", "Tongue", "Somewhere else"], when=lambda d: d.get("has_pain") == "Yes"),
+    _q("prior_pain_location_followup", "Are you still having pain in the area you mentioned last time?", opts=["Yes", "No"], when=lambda d: d.get("has_pain") == "Yes"),
     _q("pain_change_details", "How has the pain changed since your last visit?", type="free_text", placeholder="e.g., less intense, same location, worse with swallowing…", when=lambda d: d.get("has_pain") == "Yes"),
     _q("pain_start", "When did the pain start?", type="free_text", placeholder="e.g., about a week ago, since I started radiation…", when=lambda d: d.get("has_pain") == "Yes"),
     _q("pain_better_worse", "Is there anything that makes the pain better or worse?", type="free_text", placeholder="e.g., pain medicine helps, swallowing makes it worse…", when=lambda d: d.get("has_pain") == "Yes"),
@@ -2031,6 +2032,10 @@ def render_active_question(question: str, label: str = "Current question"):
 
 def _dynamic_step_text(topic_key: Optional[str], step: dict, state: Optional[dict] = None) -> str:
     question_text = step["text"]
+    if topic_key == "pain" and step.get("id") == "prior_pain_location_followup":
+        prior_location = _prior_pain_location_text()
+        if prior_location:
+            return f"Last time you mentioned {prior_location} pain. Are you still having pain there?"
     if topic_key == "pain" and step.get("id") == "pain_change_details":
         data = (state or {}).get("data", {}) if state else {}
         location = str(
@@ -2337,6 +2342,48 @@ _PAIN_DETAIL_WORKUP_STEP_IDS = {
 }
 
 
+def _prior_pain_location_text() -> str:
+    last = st.session_state.get("last_checkin", {}).get("pain", {}) or {}
+    location = str(
+        last.get("other_pain_desc")
+        or last.get("pain_location_raw")
+        or last.get("pain_location")
+        or ""
+    ).strip()
+    if _norm_text(location) in {"", "somewhere else", "none", "no"}:
+        return ""
+    return location
+
+
+def _current_pain_location_text(data: dict) -> str:
+    return str(
+        (data or {}).get("other_pain_desc")
+        or (data or {}).get("pain_location_raw")
+        or (data or {}).get("pain_location")
+        or ""
+    ).strip()
+
+
+def _pain_location_mentions_prior(data: dict) -> bool:
+    prior = _norm_text(_prior_pain_location_text())
+    current = _norm_text(_current_pain_location_text(data))
+    if not prior or not current or current == "somewhere else":
+        return False
+    return prior == current or prior in current or current in prior
+
+
+def _prior_pain_location_needs_followup(data: dict) -> bool:
+    if not st.session_state.get("has_prev_checkin", False):
+        return False
+    if (data or {}).get("has_pain") != "Yes":
+        return False
+    if not _prior_pain_location_text():
+        return False
+    if not _current_pain_location_text(data):
+        return False
+    return not _pain_location_mentions_prior(data)
+
+
 def _prior_pain_symptom_present() -> bool:
     last = st.session_state.get("last_checkin", {}).get("pain", {}) or {}
     if _norm_text(last.get("has_pain")) == "yes":
@@ -2372,6 +2419,8 @@ def _step_is_relevant(topic_key: str, step: dict, data: dict, raw_answers: Optio
                 and _prior_pain_symptom_present()
                 and data.get("pain_since_last_visit") != "New symptoms"
             )
+        if step_id == "prior_pain_location_followup":
+            return _prior_pain_location_needs_followup(data)
         if step_id in _PAIN_DETAIL_WORKUP_STEP_IDS and data.get("has_pain") == "Yes":
             if not _pain_detail_workup_needed(data):
                 return False
@@ -4787,6 +4836,7 @@ _SUMMARY_FIELDS = {
         ("has_pain",            "Pain today"),
         ("pain_change_details",  "Pain change"),
         ("pain_location",       "Location"),
+        ("prior_pain_location_followup", "Prior location"),
         ("pain_severity",       "Severity"),
         ("pain_timing",         "Timing"),
         ("pain_medications",    "Medications"),
@@ -5032,6 +5082,7 @@ _REPORT_COLOR_FIELDS_BY_TOPIC = {
         "pain_since_last_visit",
         "has_pain",
         "pain_location",
+        "prior_pain_location_followup",
         "pain_severity",
         "pain_timing",
         "tongue_type",
@@ -5090,6 +5141,7 @@ _REPORT_COLOR_FIELDS_BY_TOPIC = {
 
 _REPORT_YES_IS_ISSUE_FIELDS = {
     "has_pain",
+    "prior_pain_location_followup",
     "swallowing_difficulty",
     "taste_changes",
     "mouth_sores",
@@ -6071,6 +6123,8 @@ def _patient_typed_other_detail(answer: Any, raw_answer: Any) -> str:
         return ""
     if isinstance(answer, list) and any(_norm_text(item) == "other" for item in answer):
         return raw
+    if not isinstance(answer, str):
+        return ""
     if _norm_text(answer) == "other":
         return raw
     return ""
