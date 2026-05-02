@@ -287,6 +287,13 @@ def _norm_text(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).strip()
 
 
+def _safe_int_value(val, default: int = 0) -> int:
+    try:
+        return int(val)
+    except (TypeError, ValueError):
+        return default
+
+
 _BODY_LOCATION_PATTERN = re.compile(
     r"\b("
     r"head|face|nose|ear|ears|jaw|chin|mouth|tongue|throat|neck|shoulder|arm|elbow|wrist|hand|hands|finger|fingers|"
@@ -3891,7 +3898,7 @@ def run_agent_pipeline(
         active_sentiment_signals=active_sentiment_signals,
     )
 
-    tier = _safe_int(pipeline.get("urgency_tier"), 0)
+    tier = _safe_int_value(pipeline.get("urgency_tier"), 0)
     _merge_urgency_state(tier, {"new_signals": pipeline.get("new_urgency_signals", [])})
     _merge_sentiment_state({
         "signals": {signal: True for signal in pipeline.get("new_sentiment_signals", [])},
