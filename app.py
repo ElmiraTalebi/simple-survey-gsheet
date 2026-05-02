@@ -93,6 +93,7 @@ def _has_additional_symptom(d, label):
     return label in (d.get("additional_symptoms") or [])
 
 FLOW_PAIN = [
+    _q("pain_since_last_visit", "How have you been feeling since last visit?", opts=["New symptoms", "Improved symptoms", "Symptoms same/unchanged"]),
     _q("has_pain", "Do you have any pain today?", opts=["Yes", "No"]),
     _q("pain_location", "Where are you feeling the pain?", opts=["Throat", "Tongue", "Somewhere else"], when=lambda d: d.get("has_pain") == "Yes"),
     _q("pain_start", "When did the pain start?", type="free_text", placeholder="e.g., about a week ago, since I started radiation…", when=lambda d: d.get("has_pain") == "Yes"),
@@ -2381,16 +2382,11 @@ def _topic_status_label(topic_key: str) -> str:
 
 
 def _guided_current_topic_key() -> Optional[str]:
-    """Return the next clinician-ordered topic the patient should answer."""
+    """Return the selected topic, or fall back to the next unfinished topic."""
     selected = st.session_state.get("selected_topic")
-    if selected and selected != "freeform":
-        selected_state = st.session_state.topic_states.get(selected, {})
-        if selected_state.get("status") == "in_progress" and not topic_is_complete(
-            selected,
-            selected_state.get("data", {}),
-            selected_state.get("raw_answers"),
-        ):
-            return selected
+    topic_keys = {key for _, key in TOPICS}
+    if selected in topic_keys:
+        return selected
 
     for _, key in TOPICS:
         state = st.session_state.topic_states[key]
@@ -2407,7 +2403,8 @@ def _guided_current_topic_key() -> Optional[str]:
 
 def _sync_guided_topic_selection() -> Optional[str]:
     current = _guided_current_topic_key()
-    st.session_state.selected_topic = current
+    if current:
+        st.session_state.selected_topic = current
     return current
 
 
@@ -4723,6 +4720,7 @@ def load_last_checkin(name: str) -> dict:
 # Key fields to surface per topic — (field_id, short_label)
 _SUMMARY_FIELDS = {
     "pain": [
+        ("pain_since_last_visit", "Since last visit"),
         ("has_pain",            "Pain today"),
         ("pain_location",       "Location"),
         ("pain_severity",       "Severity"),
@@ -4911,6 +4909,11 @@ _REPORT_HIGHER_IS_WORSE_FIELDS = {
 }
 
 _REPORT_ORDERED_FIELDS = {
+    "pain_since_last_visit": {
+        "Improved symptoms": 0,
+        "Symptoms same/unchanged": 1,
+        "New symptoms": 2,
+    },
     "eating_ability": {
         "Eating normally — no problems": 0,
         "Eating less than usual, but managing": 1,
@@ -4963,6 +4966,7 @@ _REPORT_CONTEXT_FIELDS = {
 
 _REPORT_COLOR_FIELDS_BY_TOPIC = {
     "pain": {
+        "pain_since_last_visit",
         "has_pain",
         "pain_location",
         "pain_severity",
@@ -5097,6 +5101,8 @@ def _report_value_is_issue(field_id: str, value: Any) -> bool:
         return False
     if field_id in _REPORT_CONTEXT_FIELDS:
         return False
+    if field_id == "pain_since_last_visit":
+        return "new symptom" in norm
     if isinstance(value, list):
         neutral_values = {"none of these", "none", "no pain medication", "other"}
         issue_values = [
@@ -5194,6 +5200,14 @@ def _report_compare_topic(topic_key: str, last_topic_data: dict, current_topic_d
         current_value = current_clean.get(field_id)
         last_value = last_clean.get(field_id)
         label = field_id.replace("_", " ").title()
+
+        if field_id == "pain_since_last_visit" and current_exists and not last_exists:
+            current_norm = _report_value_norm(current_value)
+            if "new symptom" in current_norm:
+                red_reasons.append("New issue: Pain symptoms since last visit.")
+            elif "improved" in current_norm:
+                green_reasons.append("Improved: Pain symptoms since last visit.")
+            continue
 
         if field_id in _REPORT_HIGHER_IS_WORSE_FIELDS and current_exists and last_exists:
             current_num = _report_numeric_value(current_value)
@@ -7185,35 +7199,42 @@ def render_sidebar():
         has_prev = st.session_state.get("has_prev_checkin", False)
         last_ck  = st.session_state.get("last_checkin", {})
         current_topic = _guided_current_topic_key()
+        st.caption("You can switch topics anytime.")
 
         for label, key in TOPICS:
             status = st.session_state.topic_states[key]["status"]
             icon   = {"completed": "✅", "in_progress": "🔵"}.get(status, "⚪")
             dname  = label.split(" ", 1)[1] if " " in label else label
-            marker = "▶ " if current_topic == key else "   "
             answered, applicable = get_topic_progress(
                 key,
                 st.session_state.topic_states[key].get("data", {}),
                 st.session_state.topic_states[key].get("raw_answers"),
             )
             status_text = _topic_status_label(key)
-            line = f"{marker}{icon} {dname}\n   {status_text}"
+            topic_button_label = f"{'▶ ' if current_topic == key else ''}{icon} {dname} · {status_text}"
             if applicable:
-                line += f" · {answered}/{applicable}"
+                topic_button_label += f" · {answered}/{applicable}"
+            if st.button(
+                topic_button_label,
+                key=f"sidebar_topic_{key}",
+                use_container_width=True,
+            ):
+                st.session_state.selected_topic = key
+                st.rerun()
             if has_prev:
                 prev_data = last_ck.get(key, {})
                 if prev_data:
                     snip = _natural_summary(key, prev_data)
-                    line += f"\n   Last: {snip}" if snip else "\n   Last: data recorded"
+                    last_line = f"Last: {snip}" if snip else "Last: data recorded"
                 else:
-                    line += "\n   Last: no prior data"
-            st.markdown(
-                f'<div style="white-space:pre-wrap;border:1px solid #dde6f5;'
-                f'border-radius:12px;padding:8px 10px;margin-bottom:6px;'
-                f'background:{"#eef6ff" if current_topic == key else "#ffffff"};'
-                f'font-size:13px;color:#26364a;">{_html.escape(line)}</div>',
-                unsafe_allow_html=True,
-            )
+                    last_line = "Last: no prior data"
+                st.markdown(
+                    f'<div style="white-space:pre-wrap;border:1px solid #dde6f5;'
+                    f'border-radius:10px;padding:6px 8px;margin:-4px 0 6px 0;'
+                    f'background:{"#eef6ff" if current_topic == key else "#ffffff"};'
+                    f'font-size:12px;color:#52657a;">{_html.escape(last_line)}</div>',
+                    unsafe_allow_html=True,
+                )
 
         # ── Anything else? ────────────────────────────────────────
         ff_msgs  = [m for m in st.session_state.freeform_chat if m["role"] == "user"]
@@ -7240,7 +7261,7 @@ def render_sidebar():
         if any_started:
             submit_label = "📤 Submit Check-In" if all_topics_done else "💾 Save Partial Check-In"
             if not all_topics_done and not partial_allowed:
-                st.caption("Submit unlocks after the guided topics are complete. Use the tired/stop-soon button if you need to save a partial check-in.")
+                st.caption("Submit unlocks after all topics are complete. Use the tired/stop-soon button if you need to save a partial check-in.")
             if st.button(
                 submit_label,
                 use_container_width=True,
@@ -7283,7 +7304,7 @@ def screen_login():
         Your answers help your care team review symptoms before the visit.
         </p>
         <div class="subtle-note">
-            You can answer by selecting choices, typing, or using voice. We will guide you through the check-in in the order your care team needs.
+            You can answer by selecting choices, typing, or using voice. You can move between topics anytime from the sidebar.
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -7400,7 +7421,7 @@ def screen_main():
     selected = _sync_guided_topic_selection()
 
     if not selected:
-        st.markdown('<div class="card"><div style="font-size:12px;font-weight:800;color:#6b7b92;text-transform:uppercase;letter-spacing:0.08em;">Check-in complete</div><div style="font-size:28px;font-weight:800;letter-spacing:-0.03em;margin-top:6px;">You have finished the guided topics</div><div style="font-size:14px;color:#5f6f84;line-height:1.7;margin-top:8px;">You can submit the check-in from the sidebar, or add anything else below for your care team.</div></div>', unsafe_allow_html=True)
+        st.markdown('<div class="card"><div style="font-size:12px;font-weight:800;color:#6b7b92;text-transform:uppercase;letter-spacing:0.08em;">Check-in complete</div><div style="font-size:28px;font-weight:800;letter-spacing:-0.03em;margin-top:6px;">You have finished all topics</div><div style="font-size:14px;color:#5f6f84;line-height:1.7;margin-top:8px;">You can submit the check-in from the sidebar, or add anything else below for your care team.</div></div>', unsafe_allow_html=True)
         _render_demo_agent_panel()
         render_freeform_chat()
         return
