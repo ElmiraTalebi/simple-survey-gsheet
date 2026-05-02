@@ -96,19 +96,20 @@ FLOW_PAIN = [
     _q("pain_since_last_visit", "How have you been feeling since last visit?", opts=["New symptoms", "Improved symptoms", "Symptoms same/unchanged"]),
     _q("has_pain", "Do you have any pain today?", opts=["Yes", "No"]),
     _q("pain_location", "Where are you feeling the pain?", opts=["Throat", "Tongue", "Somewhere else"], when=lambda d: d.get("has_pain") == "Yes"),
+    _q("pain_change_details", "How has the pain changed since your last visit?", type="free_text", placeholder="e.g., less intense, same location, worse with swallowing…", when=lambda d: d.get("has_pain") == "Yes"),
     _q("pain_start", "When did the pain start?", type="free_text", placeholder="e.g., about a week ago, since I started radiation…", when=lambda d: d.get("has_pain") == "Yes"),
-    _q("pain_timing", "Is the pain constant, intermittent, or only happening with swallowing or eating?", opts=["Constant", "Intermittent", "Only when swallowing", "Only when eating", "Both swallowing and eating"], when=lambda d: d.get("has_pain") == "Yes"),
     _q("pain_better_worse", "Is there anything that makes the pain better or worse?", type="free_text", placeholder="e.g., pain medicine helps, swallowing makes it worse…", when=lambda d: d.get("has_pain") == "Yes"),
+    _q("pain_medications", "Which medications are you currently taking for pain?", type="multi_select", opts=["Gabapentin", "Oxycodone", "Butrans patch", "Other", "No pain medication"]),
+    _q("med_dose_freq", "How often are you taking your pain medication, and at what dose?", type="free_text", placeholder="e.g., Oxycodone 5mg every 6 hours…", when=lambda d: (bool(d.get("pain_medications")) and "No pain medication" not in (d.get("pain_medications") or []))),
+    _q("med_side_effects", "Are you experiencing any side effects from your pain medications, such as constipation or anything else?", opts=["Yes", "No"], when=lambda d: (bool(d.get("pain_medications")) and "No pain medication" not in (d.get("pain_medications") or []))),
     _q("pain_severity", "On a scale of 0–10, how bad is the pain at its worst?", type="number", min_v=0, max_v=10, default_v=5, when=lambda d: d.get("has_pain") == "Yes"),
+    _q("pain_timing", "Is the pain constant, intermittent, or only happening with swallowing or eating?", opts=["Constant", "Intermittent", "Only when swallowing", "Only when eating", "Both swallowing and eating"], when=lambda d: d.get("has_pain") == "Yes"),
     _q("tongue_type", "Is it a sore or ulcer on the tongue, or a general painful feeling?", opts=["There's a sore/ulcer", "Just pain, no visible sore"], when=lambda d: d.get("pain_location") == "Tongue"),
     _q("tongue_spot", "Is the pain in one specific spot, or does it spread?", opts=["One spot", "Spreads across tongue", "Whole mouth"], when=lambda d: d.get("pain_location") == "Tongue"),
     _q("other_pain_desc", "Which body part is hurting?", type="free_text", placeholder="e.g., near my jaw and ear…", when=lambda d: d.get("pain_location") == "Somewhere else"),
     _q("ear_pain", "Do you have ear pain or hearing changes?", opts=["Yes", "No"], when=lambda d: (d.get("pain_location") == "Somewhere else" and bool(d.get("other_pain_head_neck_focused")))),
     _q("jaw_swelling", "Do you feel any swelling near your jaw?", opts=["Yes", "No"], when=lambda d: (d.get("pain_location") == "Somewhere else" and bool(d.get("other_pain_head_neck_focused")))),
     _q("pain_with_chewing", "Does the pain worsen when chewing or opening your mouth?", opts=["Yes", "No"], when=lambda d: (d.get("pain_location") == "Somewhere else" and bool(d.get("other_pain_head_neck_focused")))),
-    _q("pain_medications", "Which medications are you currently taking for pain?", type="multi_select", opts=["Gabapentin", "Oxycodone", "Butrans patch", "Other", "No pain medication"]),
-    _q("med_dose_freq", "How often are you taking your pain medication, and at what dose?", type="free_text", placeholder="e.g., Oxycodone 5mg every 6 hours…", when=lambda d: (bool(d.get("pain_medications")) and "No pain medication" not in (d.get("pain_medications") or []))),
-    _q("med_side_effects", "Are you experiencing any side effects from your pain medications, such as constipation or anything else?", opts=["Yes", "No"], when=lambda d: (bool(d.get("pain_medications")) and "No pain medication" not in (d.get("pain_medications") or []))),
 ]
 
 FLOW_NUTRITION = [
@@ -118,7 +119,7 @@ FLOW_NUTRITION = [
     _q("nutritional_shakes", "How many nutritional shakes or Boost/Ensure drinks are you having per day?", opts=["None", "1–2", "3–4", "More than 4"], when=lambda d: d.get("eating_ability") == "Struggling — only liquids or very little"),
     _q("eating_barrier", "What is stopping you from eating more?", opts=["Pain when eating/swallowing", "Feel full very quickly", "No appetite", "Nausea", "Too tired to prepare food", "Other"], when=lambda d: d.get("eating_ability") == "Struggling — only liquids or very little"),
     _q("fluid_struggling", "Are you drinking enough fluids — water, juice, or anything?", opts=["Yes, drinking well", "A little", "Very little, hard to drink"], when=lambda d: d.get("eating_ability") == "Struggling — only liquids or very little"),
-    _q("fluid_barrier", "What's making it hard to drink?", opts=["Pain when swallowing", "Dry mouth", "Nausea", "Just not thirsty"], when=lambda d: (d.get("eating_ability") == "Struggling — only liquids or very little" and d.get("fluid_struggling") in ["A little", "Very little, hard to drink"])),
+    _q("fluid_barrier", "What's making it hard to drink?", opts=["Pain when swallowing", "Dry mouth", "Nausea", "Just not thirsty", "Other"], when=lambda d: (d.get("eating_ability") == "Struggling — only liquids or very little" and d.get("fluid_struggling") in ["A little", "Very little, hard to drink"])),
     _q("pain_med_timing", "Are you timing your pain medication before meals to make eating easier?", opts=["Yes, it helps", "I try, but it's not enough", "No, I didn't know to do this", "No, I don't take pain medication"], when=lambda d: d.get("eating_ability") == "Struggling — only liquids or very little"),
     _q("tube_issues", "Is the tube feeding going well — no blockages, leaks, or discomfort around the site?", opts=["Working fine", "Some issues — leaking or blockage", "Discomfort/soreness around the tube"], when=lambda d: d.get("eating_ability") == "Not eating — using a feeding tube only"),
     _q("tube_oral_sips", "Are you still able to take any sips of water or liquids by mouth at all?", opts=["Yes, small amounts", "Very occasionally for comfort", "No, nothing by mouth"], when=lambda d: d.get("eating_ability") == "Not eating — using a feeding tube only"),
@@ -143,7 +144,7 @@ FLOW_ORAL = [
     _q("sore_new_or_old", "Is this new since your last visit, or have you had it for a while?", opts=["New", "Not sure", "Same one as before"], when=lambda d: d.get("mouth_sores") == "Yes"),
     _q("sore_location", "Where exactly is it?", opts=["Inside the mouth/cheek", "On the tongue", "Back of the throat", "Gums/lips", "Multiple spots"], when=lambda d: (d.get("mouth_sores") == "Yes" and d.get("sore_new_or_old") in ["New", "Not sure"])),
     _q("sore_pain_impact", "Is the sore painful? Is it affecting your ability to eat or drink?", opts=["No pain, just noticed it", "A little, but manageable", "Yes, can't eat/drink comfortably"], when=lambda d: (d.get("mouth_sores") == "Yes" and d.get("sore_new_or_old") in ["New", "Not sure"])),
-    _q("magic_mouthwash", "Are you using magic mouthwash or any other supportive medications for it? If yes, is it helping?", opts=["Yes, it helps", "Yes, but not enough", "No, I don't have it", "No, I don't use it"], when=lambda d: (d.get("mouth_sores") == "Yes" and d.get("sore_new_or_old") in ["New", "Not sure"])),
+    _q("magic_mouthwash", "Are you using magic mouthwash or any other supportive medications?", opts=["Yes, it helps", "Yes, but not enough", "No, I don't have it", "No, I don't use it"], when=lambda d: (d.get("mouth_sores") == "Yes" and d.get("sore_new_or_old") in ["New", "Not sure"])),
     _q("sore_progression", "Is the sore getting better, staying the same, or getting worse?", opts=["Getting better", "About the same", "Getting worse", "Not sure"], when=lambda d: (d.get("mouth_sores") == "Yes" and d.get("sore_new_or_old") == "Same one as before")),
     _q("sore_eating_impact_old", "Is it still preventing you from eating or drinking comfortably?", opts=["Yes", "A little", "No"], when=lambda d: (d.get("mouth_sores") == "Yes" and d.get("sore_new_or_old") == "Same one as before" and d.get("sore_progression") in ["About the same", "Getting worse"])),
     _q("dry_mouth", "Are you experiencing any dryness in your mouth?", opts=["Yes", "No"]),
@@ -155,7 +156,7 @@ FLOW_ORAL = [
     _q("mucus_impact", "Is the mucus affecting your ability to swallow or sleep?", opts=["Yes", "No"], when=lambda d: d.get("mucus_issues") == "Yes"),
     _q("mucus_management", "Are you using anything to manage it — like Robitussin or saline rinses?", opts=["Yes", "No"], when=lambda d: d.get("mucus_issues") == "Yes"),
     _q("teeth_gum_issues", "Are you having any problems with your teeth or gums?", opts=["Yes", "No"]),
-    _q("teeth_issue_type", "Is there pain, bleeding, or sores with your teeth or gums?", opts=["Pain", "Bleeding", "Sores", "Multiple issues"], when=lambda d: d.get("teeth_gum_issues") == "Yes"),
+    _q("teeth_issue_type", "Is there pain, bleeding, or sores with your teeth or gums?", opts=["Pain", "Bleeding", "Sores", "Multiple issues", "Other"], when=lambda d: d.get("teeth_gum_issues") == "Yes"),
     _q("brushing_difficult", "Is it making brushing difficult?", opts=["Yes", "No"], when=lambda d: d.get("teeth_gum_issues") == "Yes"),
     _q("avoiding_brushing", "Are you avoiding brushing because of the discomfort?", opts=["Yes", "No"], when=lambda d: d.get("teeth_gum_issues") == "Yes"),
     _q("oral_rinse_use", "Are you using mouthwash or oral rinses regularly?", opts=["Yes", "No"]),
@@ -179,17 +180,15 @@ FLOW_GI = [
 ]
 
 FLOW_FATIGUE = [
-    _q("fatigue", "Are you feeling more tired or weak than usual?", opts=["Yes", "No"]),
-    _q("fatigue_daily_impact", "Is the fatigue affecting your daily activities — getting dressed, moving around?", opts=["Yes", "No"], when=lambda d: d.get("fatigue") == "Yes"),
-    _q("sleep_quality", "Are you having trouble falling asleep or staying asleep?", opts=["Yes", "No"]),
-    _q("sleep_wake_reason", "Are you waking up because of pain or other symptoms?", type="free_text", placeholder="e.g., pain wakes me up around 3am…", when=lambda d: d.get("sleep_quality") == "Yes"),
+    _q("sleep_quality", "Are you having trouble falling asleep or staying asleep?", opts=["Trouble falling asleep", "Trouble staying asleep", "Both", "No"]),
+    _q("sleep_wake_reason", "Are you waking up because of pain or other symptoms?", type="free_text", placeholder="e.g., pain wakes me up around 3am…", when=lambda d: d.get("sleep_quality") in ["Trouble staying asleep", "Both"]),
 ]
 
 FLOW_ACTIVITY = [
     _q("activity_level", "How is your daily life — are you able to do your usual activities?", opts=["Doing everything normally", "Doing less than usual", "Struggling with daily tasks"]),
     _q("difficult_activities", "What activities are most difficult right now?", type="free_text", placeholder="e.g., climbing stairs, cooking, getting dressed…", when=lambda d: d.get("activity_level") in ["Doing less than usual", "Struggling with daily tasks"]),
-    _q("activity_limiting_factor", "Is the difficulty mainly due to pain, fatigue, or something else?", opts=["Pain", "Fatigue", "Both", "Something else"], when=lambda d: d.get("activity_level") in ["Doing less than usual", "Struggling with daily tasks"]),
-    _q("activity_other_desc", "Can you tell me more about what's limiting your activities?", type="free_text", placeholder="e.g., balance issues, weakness…", when=lambda d: d.get("activity_limiting_factor") == "Something else"),
+    _q("activity_limiting_factor", "Is the difficulty mainly due to pain, fatigue, or something else?", opts=["Pain", "Fatigue", "Both", "Other"], when=lambda d: d.get("activity_level") in ["Doing less than usual", "Struggling with daily tasks"]),
+    _q("activity_other_desc", "Can you tell me more about what's limiting your activities?", type="free_text", placeholder="e.g., balance issues, weakness…", when=lambda d: d.get("activity_limiting_factor") in ["Something else", "Other"]),
 ]
 
 FLOW_MOOD = [
@@ -197,7 +196,7 @@ FLOW_MOOD = [
 ]
 
 FLOW_OTHER = [
-    _q("additional_symptoms", "Are there any additional symptoms you would like to report?", type="multi_select", opts=["Breathing / shortness of breath", "Hearing problems or changes", "Dizziness / lightheadedness", "Numbness or tingling", "Fever or chills", "Skin problems, wounds, or redness", "Voice or speaking changes", "Trouble concentrating or remembering things", "Sexual health concerns", "None of these"]),
+    _q("additional_symptoms", "Are there any additional symptoms you would like to report?", type="multi_select", opts=["Breathing / shortness of breath", "Hearing problems or changes", "Dizziness / lightheadedness", "Numbness or tingling", "Fever or chills", "Skin problems, wounds, or redness", "Voice or speaking changes", "Trouble concentrating or remembering things", "Sexual health concerns", "Other", "None of these"]),
     _q("breathing_issues", "Are you having any difficulty breathing or shortness of breath?", opts=["Yes", "No"], when=lambda d: _has_additional_symptom(d, "Breathing / shortness of breath")),
     _q("breathing_timing", "Is the breathing difficulty constant, or does it come on with activity?", opts=["It's constant", "It comes on with activity"], when=lambda d: d.get("breathing_issues") == "Yes"),
     _q("wheezing", "Are you wheezing or feeling like something is blocking your airway?", opts=["Yes", "No"], when=lambda d: d.get("breathing_issues") == "Yes"),
@@ -2310,8 +2309,63 @@ def voice_widget(key_suffix: str, label: str = "Speak your answer") -> Optional[
 # FLOW ENGINE
 # ══════════════════════════════════════════════════════════════════
 
+_PAIN_DETAIL_WORKUP_STEP_IDS = {
+    "pain_start",
+    "pain_better_worse",
+    "pain_medications",
+    "med_dose_freq",
+    "med_side_effects",
+    "pain_severity",
+    "pain_timing",
+    "tongue_type",
+    "tongue_spot",
+    "other_pain_desc",
+    "ear_pain",
+    "jaw_swelling",
+    "pain_with_chewing",
+}
+
+
+def _prior_pain_symptom_present() -> bool:
+    last = st.session_state.get("last_checkin", {}).get("pain", {}) or {}
+    if _norm_text(last.get("has_pain")) == "yes":
+        return True
+    pain_markers = (
+        "pain_location",
+        "pain_start",
+        "pain_change_details",
+        "pain_better_worse",
+        "pain_severity",
+        "pain_timing",
+        "other_pain_desc",
+    )
+    return any(str(last.get(key) or "").strip() for key in pain_markers)
+
+
+def _pain_detail_workup_needed(data: dict) -> bool:
+    if data.get("has_pain") != "Yes":
+        return False
+    if not _prior_pain_symptom_present():
+        return True
+    return data.get("pain_since_last_visit") == "New symptoms"
+
+
 def _step_is_relevant(topic_key: str, step: dict, data: dict, raw_answers: Optional[dict] = None) -> bool:
     raw_answers = raw_answers or {}
+    if topic_key == "pain":
+        step_id = step.get("id")
+        if step_id == "pain_since_last_visit":
+            return bool(st.session_state.get("has_prev_checkin", False))
+        if step_id == "pain_change_details":
+            return (
+                data.get("has_pain") == "Yes"
+                and _prior_pain_symptom_present()
+                and data.get("pain_since_last_visit") != "New symptoms"
+            )
+        if step_id in _PAIN_DETAIL_WORKUP_STEP_IDS and data.get("has_pain") == "Yes":
+            if not _pain_detail_workup_needed(data):
+                return False
+
     if topic_key == "oral" and step.get("id") == "oral_rinse_open":
         denied_oral_symptoms = (
             data.get("mouth_sores") == "No"
@@ -3644,7 +3698,6 @@ next_step_action:
     - Patient answers a location chooser with a specific body part like "nose" and the next step asks which body part hurts → skip that next step and carry forward "nose"
     - Patient says a sore is not painful and next step asks whether treatment for painful sores is helping → skip with suggested_answer "No"
     - Patient says IV fluids are helping and gives no sign they want changes, and next step asks about adjusting frequency → skip with suggested_answer "No"
-    - Patient says medication is not causing drowsiness and next step asks whether drowsiness is affecting schedule → skip with suggested_answer "No"
   - Do not use this to skip structurally essential questions like a severity rating or a new symptom location unless the current answer already fully covers them
 
 follow_up_goal: A statement of WHAT information is needed — NOT a question.
@@ -4722,6 +4775,7 @@ _SUMMARY_FIELDS = {
     "pain": [
         ("pain_since_last_visit", "Since last visit"),
         ("has_pain",            "Pain today"),
+        ("pain_change_details",  "Pain change"),
         ("pain_location",       "Location"),
         ("pain_severity",       "Severity"),
         ("pain_timing",         "Timing"),
@@ -4745,7 +4799,6 @@ _SUMMARY_FIELDS = {
         ("constipation",    "Constipation"),
     ],
     "fatigue": [
-        ("fatigue",           "Fatigue"),
         ("sleep_quality",     "Sleep"),
     ],
     "activity": [
@@ -5005,7 +5058,6 @@ _REPORT_COLOR_FIELDS_BY_TOPIC = {
         "constipation",
     },
     "fatigue": {
-        "fatigue",
         "sleep_quality",
     },
     "activity": {
@@ -5034,7 +5086,6 @@ _REPORT_YES_IS_ISSUE_FIELDS = {
     "dry_mouth",
     "mucus_issues",
     "constipation",
-    "fatigue",
     "sleep_quality",
     "med_side_effects",
     "breathing_issues",
@@ -5124,7 +5175,7 @@ def _report_value_is_issue(field_id: str, value: Any) -> bool:
     if field_id in _REPORT_YES_IS_ISSUE_FIELDS:
         return norm in {"yes", "a little", "very little", "not really"} or "yes" in norm
     if field_id in {"sleep_quality"}:
-        return norm == "yes"
+        return norm not in {"no", "none", "not really"}
     if field_id in {"eating_ability", "activity_level", "emotional_state"}:
         score = _report_ordered_score(field_id, value)
         return bool(score and score > 0)
@@ -6557,6 +6608,11 @@ def handle_answer(
                 return
 
             # ── Follow-up question ────────────────────────────────
+            if topic_key == "mood":
+                pipeline["follow_up"] = False
+                pipeline["follow_up_question"] = ""
+                pipeline["follow_up_goal"] = None
+
             if pipeline.get("follow_up") and pipeline.get("follow_up_question"):
                 fq = pipeline["follow_up_question"]
                 # Reject if semantically redundant with original question
