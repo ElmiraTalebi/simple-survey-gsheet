@@ -2383,6 +2383,8 @@ def _render_demo_agent_panel(topic_key: Optional[str] = None):
     mode = trace.get("mode", "pipeline")
     source = trace.get("source", "")
     ai_used = bool(trace.get("ai_used", mode != "fast_path"))
+    if mode == "fast_path" or source == "structured":
+        ai_used = False
 
     if mode == "fast_path":
         path_text = "No GPT call. The app accepted a pre-defined/structured answer and advanced through the flowchart."
@@ -2429,6 +2431,10 @@ def _render_demo_agent_panel(topic_key: Optional[str] = None):
         if source:
             st.markdown(f"**Input source:** `{source}`")
         st.markdown(f"**Patient said:** `{trace.get('patient_answer')}`")
+        if not ai_used:
+            st.markdown("**Flowchart result:** The answer matched a pre-defined option and moved directly to the next applicable question.")
+            st.markdown(f"**Final decision:** {decision}")
+            return
         st.markdown(f"**Understanding:** System identified this as `{interpreted_as}`.")
         st.markdown(f"**Urgency check:** {urgency_text}")
         st.markdown(f"**Patient state:** {engagement_text}")
