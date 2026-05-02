@@ -2368,11 +2368,17 @@ def _render_demo_agent_panel(topic_key: Optional[str] = None):
         unsafe_allow_html=True,
     )
     if not trace:
-        st.caption("Demo mode will show the latest answer path after the patient answers a question.")
+        st.caption("Demo mode shows what happened after the latest answer.")
         if current_prompt:
-            st.markdown(f"**Current question:** {current_prompt}")
-        st.info("No reasoning has been recorded yet for this step.")
+            st.markdown(f"**Current question now:** {current_prompt}")
+        st.info("No answer has been processed yet.")
         return
+
+    mode = trace.get("mode", "fast_path")
+    source = trace.get("source", "")
+    ai_used = bool(trace.get("ai_used", mode != "fast_path"))
+    if mode == "fast_path" or source == "structured":
+        ai_used = False
 
     interp = trace.get("agent_1_answer_interpreter") or {}
     urgency = trace.get("agent_2_urgency") or {}
@@ -2380,66 +2386,45 @@ def _render_demo_agent_panel(topic_key: Optional[str] = None):
     doctor = trace.get("agent_4_doctor_relevance") or {}
     next_move = trace.get("agent_5_next_move") or {}
     orchestrator = trace.get("orchestrator") or {}
-    mode = trace.get("mode", "pipeline")
-    source = trace.get("source", "")
-    ai_used = bool(trace.get("ai_used", mode != "fast_path"))
-    if mode == "fast_path" or source == "structured":
-        ai_used = False
 
-    if mode == "fast_path":
-        path_text = "No GPT call. The app accepted a pre-defined/structured answer and advanced through the flowchart."
-    elif mode == "single_pass":
-        path_text = "One GPT call. The single-pass orchestrator handled interpretation, urgency, follow-up, and next-step logic."
+    if not ai_used:
+        path_text = "Flowchart only. No GPT call was made."
     else:
-        path_text = "Legacy multi-agent path."
+        path_text = "Single-pass AI orchestrator. One GPT call handled interpretation, urgency, and next-step logic."
 
-    interpreted_as = interp.get("matched_option") or trace.get("patient_answer") or "a valid answer"
-    urgency_tier = urgency.get("urgency_tier", 0)
-    if urgency_tier >= 3:
-        urgency_text = "Emergency concern detected."
-    elif urgency_tier == 2:
-        urgency_text = "Needs same-day care team attention."
-    else:
-        urgency_text = "No urgent symptoms detected."
-
-    if engagement.get("wants_to_stop"):
-        engagement_text = "Patient seems to want to stop or pause."
-    elif engagement.get("reduce_follow_up"):
-        engagement_text = "System is keeping follow-up lighter."
-    else:
-        engagement_text = "Engagement is normal."
-
-    missing = doctor.get("follow_up_goal")
-    if missing:
-        doctor_text = f"System still needs: {missing}"
-    else:
-        doctor_text = "No major detail is missing for this step."
-
-    decision = orchestrator.get("final_decision") or "System is moving to the next step."
+    decision = orchestrator.get("final_decision") or "Move to the next applicable flowchart question."
     next_question = orchestrator.get("next_question")
-    if next_move.get("follow_up_triggered") and next_move.get("follow_up_question"):
-        decision = f"Ask one follow-up: {next_move.get('follow_up_question')}"
+    follow_up_question = next_move.get("follow_up_question")
+    if next_move.get("follow_up_triggered") and follow_up_question:
+        decision = f"Ask one follow-up: {follow_up_question}"
     elif next_question:
         decision = f"Move to next question: {next_question}"
 
-    st.caption("Demo mode shows whether the answer used the no-GPT flowchart path or the single-pass orchestrator.")
-    with st.expander("View reasoning", expanded=True):
-        if current_prompt:
-            st.markdown(f"**Current question:** {current_prompt}")
-        st.markdown(f"**AI used for latest answer:** `{'Yes' if ai_used else 'No'}`")
+    st.caption("Demo mode shows the latest processed answer and the next system action.")
+    with st.expander("Latest decision trace", expanded=True):
+        st.markdown(f"**Question just answered:** {trace.get('question') or 'Not available'}")
+        st.markdown(f"**Patient answer:** `{trace.get('patient_answer')}`")
+        st.markdown(f"**Input source:** `{source or 'unknown'}`")
+        st.markdown(f"**AI used:** `{'Yes' if ai_used else 'No'}`")
         st.markdown(f"**Processing path:** {path_text}")
-        if source:
-            st.markdown(f"**Input source:** `{source}`")
-        st.markdown(f"**Patient said:** `{trace.get('patient_answer')}`")
-        if not ai_used:
-            st.markdown("**Flowchart result:** The answer matched a pre-defined option and moved directly to the next applicable question.")
-            st.markdown(f"**Final decision:** {decision}")
-            return
-        st.markdown(f"**Understanding:** System identified this as `{interpreted_as}`.")
-        st.markdown(f"**Urgency check:** {urgency_text}")
-        st.markdown(f"**Patient state:** {engagement_text}")
-        st.markdown(f"**Doctor relevance:** {doctor_text}")
-        st.markdown(f"**Final decision:** {decision}")
+
+        if ai_used:
+            matched = interp.get("matched_option")
+            urgency_tier = urgency.get("urgency_tier", 0)
+            reduce_follow_up = engagement.get("reduce_follow_up", False)
+            wants_to_stop = engagement.get("wants_to_stop", False)
+            priority = doctor.get("clinical_priority") or "not specified"
+            if matched:
+                st.markdown(f"**Interpreted as:** `{matched}`")
+            st.markdown(f"**Urgency tier:** `{urgency_tier}`")
+            st.markdown(f"**Patient control signals:** reduce follow-up `{reduce_follow_up}`, wants to stop `{wants_to_stop}`")
+            st.markdown(f"**Clinical priority:** `{priority}`")
+        else:
+            st.markdown("**Flowchart result:** The answer was accepted as structured input and advanced without AI interpretation.")
+
+        st.markdown(f"**Decision:** {decision}")
+        if current_prompt:
+            st.markdown(f"**Current question now:** {current_prompt}")
 
 
 
@@ -6616,143 +6601,19 @@ def screen_overview():
             st.rerun()
 
 
-def _story_source_label(source: str) -> str:
-    mapping = {
-        "structured": "Pre-defined answer",
-        "typed": "Typed answer",
-        "voice": "Voice answer",
-        "free_text": "Free-text answer",
-        "followup": "Follow-up answer",
-    }
-    return mapping.get(source or "", source or "Unknown")
-
-
-def _story_ai_path(source: str, answer_type: str) -> str:
-    if source == "voice":
-        return "Whisper transcribes audio, then the single-pass orchestrator evaluates the text."
-    if source == "structured":
-        return "No GPT call. The answer is saved and the flowchart chooses the next applicable question."
-    if answer_type in {"number", "multi_select"}:
-        return "No GPT call for structured numeric or multi-select input. The flowchart moves forward."
-    return "One GPT call: the single-pass orchestrator interprets the answer, checks urgency, and decides the next move."
-
-
-def render_how_it_works_tab(selected_topic: Optional[str]):
-    st.markdown(
-        '<div class="overview-card" style="max-width:1120px;margin-top:6px;">'
-        '<div style="font-size:12px;font-weight:800;letter-spacing:0.08em;text-transform:uppercase;color:#6b7b92;margin-bottom:8px;">'
-        'Live system story'
-        '</div>'
-        '<div style="font-size:30px;font-weight:800;letter-spacing:-0.04em;color:#10233d;">'
-        'What happens as the patient answers'
-        '</div>'
-        '<div style="font-size:15px;line-height:1.75;color:#56667d;margin-top:10px;">'
-        'This view explains the app logic step by step using the current session data. It does not call GPT.'
-        '</div>'
-        '</div>',
-        unsafe_allow_html=True,
-    )
-
-    st.markdown("#### The story in plain English")
-    story_steps = [
-        ("1", "The app finds the current topic", "It follows the clinician-defined topic order and opens the first incomplete topic."),
-        ("2", "The flowchart asks the next applicable question", "Each question has rules that decide whether it should appear based on prior answers."),
-        ("3", "The patient answers", "Clicked pre-defined answers are handled without GPT. Typed and voice answers may use AI."),
-        ("4", "The answer is saved", "The app stores both the structured answer and the patient’s original wording when available."),
-        ("5", "The next move is chosen", "The flowchart either advances, skips irrelevant questions, asks one follow-up, or completes the topic."),
-        ("6", "The clinician report is prepared later", "At submission, the saved answers are turned into a report and saved to Google Sheets."),
-    ]
-    cols = st.columns(3)
-    for idx, (num, title, body) in enumerate(story_steps):
-        with cols[idx % 3]:
-            st.markdown(
-                f'<div class="soft-card" style="min-height:150px;">'
-                f'<div style="font-size:11px;font-weight:800;color:#0f6cbd;text-transform:uppercase;letter-spacing:0.08em;">Step {num}</div>'
-                f'<div style="font-size:16px;font-weight:800;color:#17324a;margin-top:6px;">{_html.escape(title)}</div>'
-                f'<div style="font-size:13px;line-height:1.6;color:#5f7287;margin-top:8px;">{_html.escape(body)}</div>'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
-
-    st.markdown("#### Current state")
-    if selected_topic:
-        state = st.session_state.topic_states.get(selected_topic, {})
-        next_step = get_next_step(selected_topic, state.get("data", {}), state.get("raw_answers"))
-        answered, applicable = get_topic_progress(selected_topic, state.get("data", {}), state.get("raw_answers"))
-        topic_name = TOPIC_LABELS.get(selected_topic, selected_topic)
-        st.markdown(f"**Topic:** {topic_name}")
-        st.markdown(f"**Progress:** {answered}/{applicable or 1} applicable questions answered")
-        if next_step:
-            st.markdown(f"**Next flowchart question:** {next_step.get('text')}")
-            if next_step.get("opts"):
-                st.markdown(f"**Pre-defined answers:** {', '.join(str(x) for x in next_step.get('opts', []))}")
-        else:
-            st.markdown("**Next flowchart question:** This topic is complete.")
-    else:
-        st.markdown("All guided topics are complete. The next step is optional free-form notes or submission.")
-
-    responses = st.session_state.get("structured_responses", [])
-    st.markdown("#### Latest answer processing")
-    if responses:
-        latest = responses[-1]
-        answer_type = latest.get("answer_type", "")
-        source = latest.get("source", "")
-        st.markdown(
-            f'<div class="soft-card">'
-            f'<div style="font-size:13px;color:#65788d;">Patient answered</div>'
-            f'<div style="font-size:18px;font-weight:800;color:#17324a;margin:4px 0 8px 0;">{_html.escape(str(latest.get("display_answer", "")))}</div>'
-            f'<div style="font-size:13px;line-height:1.7;color:#5f7287;">'
-            f'<strong>Question:</strong> {_html.escape(str(latest.get("question_text", "")))}<br>'
-            f'<strong>Input type:</strong> {_html.escape(_story_source_label(source))}<br>'
-            f'<strong>AI path:</strong> {_html.escape(_story_ai_path(source, answer_type))}'
-            f'</div>'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
-    else:
-        st.info("No answers have been recorded yet. Start the check-in to see the live processing story.")
-
-    traces = st.session_state.get("agent_traces", [])
-    st.markdown("#### Session timeline")
-    if traces:
-        timeline_rows = []
-        for trace in traces[-8:]:
-            mode = trace.get("mode", "pipeline")
-            topic = trace.get("topic", "")
-            question = trace.get("question", "")
-            patient_answer = trace.get("patient_answer", "")
-            orch = trace.get("orchestrator") or {}
-            decision = orch.get("final_decision") or "Moved through the flowchart."
-            timeline_rows.append({
-                "Topic": topic,
-                "Mode": "No GPT" if mode == "fast_path" else "One GPT call",
-                "Question": question,
-                "Answer": patient_answer,
-                "Decision": decision,
-            })
-        st.dataframe(timeline_rows, use_container_width=True, hide_index=True)
-    else:
-        st.caption("The timeline will populate after the first answer.")
-
-
 def screen_main():
     render_sidebar()
 
     selected = _sync_guided_topic_selection()
 
-    checkin_tab, story_tab = st.tabs(["Patient Check-In", "How It Works"])
+    if not selected:
+        st.markdown('<div class="card"><div style="font-size:12px;font-weight:800;color:#6b7b92;text-transform:uppercase;letter-spacing:0.08em;">Check-in complete</div><div style="font-size:28px;font-weight:800;letter-spacing:-0.03em;margin-top:6px;">You have finished the guided topics</div><div style="font-size:14px;color:#5f6f84;line-height:1.7;margin-top:8px;">You can submit the check-in from the sidebar, or add anything else below for your care team.</div></div>', unsafe_allow_html=True)
+        _render_demo_agent_panel()
+        render_freeform_chat()
+        return
 
-    with checkin_tab:
-        if not selected:
-            st.markdown('<div class="card"><div style="font-size:12px;font-weight:800;color:#6b7b92;text-transform:uppercase;letter-spacing:0.08em;">Check-in complete</div><div style="font-size:28px;font-weight:800;letter-spacing:-0.03em;margin-top:6px;">You have finished the guided topics</div><div style="font-size:14px;color:#5f6f84;line-height:1.7;margin-top:8px;">You can submit the check-in from the sidebar, or add anything else below for your care team.</div></div>', unsafe_allow_html=True)
-            _render_demo_agent_panel()
-            render_freeform_chat()
-        else:
-            topic_label = TOPIC_LABELS.get(selected, selected)
-            render_topic_detail(topic_label, selected)
-
-    with story_tab:
-        render_how_it_works_tab(selected)
+    topic_label = TOPIC_LABELS.get(selected, selected)
+    render_topic_detail(topic_label, selected)
 
 
 def screen_report():
