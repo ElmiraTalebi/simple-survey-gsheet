@@ -4719,7 +4719,7 @@ _SUMMARY_FIELDS = {
 def _value_with_other_detail(field_id: str, value: Any, data: dict) -> Any:
     """Replace plain Other with the patient-entered detail for that field."""
     detail = str((data or {}).get(f"{field_id}_other_detail") or "").strip()
-    if not detail:
+    if not detail or _norm_text(detail) == "other":
         return value
     if isinstance(value, list):
         return [
@@ -4812,13 +4812,19 @@ def _natural_summary(topic_key: str, data: dict) -> str:
 
 
 def _report_clean_fields(data: dict) -> dict:
-    return {
-        k: v for k, v in (data or {}).items()
-        if not str(k).startswith("_")
-        and not str(k).endswith("_doctor_note")
-        and k not in {"other_pain_head_neck_focused"}
-        and v not in (None, "", [], {})
-    }
+    clean = {}
+    for k, v in (data or {}).items():
+        key = str(k)
+        if (
+            key.startswith("_")
+            or key.endswith("_other_detail")
+            or key.endswith("_doctor_note")
+            or key in {"other_pain_head_neck_focused"}
+            or v in (None, "", [], {})
+        ):
+            continue
+        clean[key] = _value_with_other_detail(key, v, data)
+    return clean
 
 
 def _report_value_text(value: Any) -> str:
@@ -4862,17 +4868,104 @@ _REPORT_ORDERED_FIELDS = {
         "Doing less than usual": 1,
         "Struggling with daily tasks": 2,
     },
+    "fluid_intake_managing": {
+        "Yes, drinking well": 0,
+        "A little less than usual": 1,
+        "Struggling to drink enough": 2,
+    },
+    "fluid_struggling": {
+        "Yes, drinking well": 0,
+        "A little": 1,
+        "Very little, hard to drink": 2,
+    },
+    "tube_issues": {
+        "Working fine": 0,
+        "Some issues — leaking or blockage": 2,
+        "Discomfort/soreness around the tube": 2,
+    },
 }
 
 
 _REPORT_CONTEXT_FIELDS = {
+    "eating_barrier",
+    "fluid_barrier",
+    "food_type",
     "pain_medications",
+    "pain_med_timing",
     "med_dose_freq",
+    "nutritional_shakes",
     "oral_rinse_use",
     "magic_mouthwash",
     "nausea_management",
+    "swallowing_method",
+    "swallowing_type",
+    "taste_eating_impact",
+    "taste_type",
+    "tube_oral",
+    "tube_oral_sips",
     "vomiting_management",
     "diarrhea_management",
+}
+
+_REPORT_COLOR_FIELDS_BY_TOPIC = {
+    "pain": {
+        "has_pain",
+        "pain_location",
+        "pain_severity",
+        "pain_timing",
+        "tongue_type",
+        "tongue_spot",
+        "other_pain_desc",
+        "ear_pain",
+        "jaw_swelling",
+        "pain_with_chewing",
+        "med_side_effects",
+    },
+    "nutrition": {
+        "eating_ability",
+        "fluid_intake_managing",
+        "fluid_struggling",
+        "swallowing_difficulty",
+        "choking_coughing",
+        "feeding_tube",
+        "tube_issues",
+        "taste_changes",
+    },
+    "oral": {
+        "mouth_sores",
+        "sore_new_or_old",
+        "sore_pain_impact",
+        "sore_progression",
+        "sore_eating_impact_old",
+        "dry_mouth",
+        "dry_mouth_impact",
+        "mucus_issues",
+        "mucus_impact",
+    },
+    "gi": {
+        "nausea_vomiting",
+        "constipation",
+    },
+    "fatigue": {
+        "fatigue",
+        "sleep_quality",
+    },
+    "activity": {
+        "activity_level",
+    },
+    "mood": {
+        "emotional_state",
+    },
+    "other": {
+        "additional_symptoms",
+        "breathing_issues",
+        "hearing_changes",
+        "dizziness",
+        "numbness",
+        "skin_issues",
+        "voice_hoarseness",
+        "fever_chills",
+    },
 }
 
 _REPORT_YES_IS_ISSUE_FIELDS = {
@@ -4914,6 +5007,18 @@ def _report_ordered_score(field_id: str, value: Any) -> Optional[int]:
         if "less than usual" in value_norm or "doing less" in value_norm:
             return 1
         if "normal" in value_norm:
+            return 0
+    if field_id in {"fluid_intake_managing", "fluid_struggling"}:
+        if "struggling" in value_norm or "very little" in value_norm or "hard to drink" in value_norm:
+            return 2
+        if "little" in value_norm or "less than usual" in value_norm:
+            return 1
+        if "drinking well" in value_norm:
+            return 0
+    if field_id == "tube_issues":
+        if "leak" in value_norm or "blockage" in value_norm or "discomfort" in value_norm or "sore" in value_norm:
+            return 2
+        if "working fine" in value_norm or "working well" in value_norm:
             return 0
     if field_id == "emotional_state":
         if any(term in value_norm for term in ("very bad", "terrible", "awful", "depressed", "panic", "overwhelmed")):
@@ -5010,6 +5115,13 @@ def _report_issue_tokens(value: Any) -> set[str]:
 
 
 def _report_compare_topic(topic_key: str, last_topic_data: dict, current_topic_data: dict) -> tuple[str, list[str], list[str]]:
+    """
+    Color rule for the doctor dashboard:
+    - new clinical issue => red
+    - worsened clinical issue => red
+    - improved/resolved clinical issue => green
+    - unchanged clinical state => gray
+    """
     last_clean = _report_clean_fields(last_topic_data)
     current_clean = _report_clean_fields(current_topic_data)
     if not current_clean:
@@ -5017,7 +5129,10 @@ def _report_compare_topic(topic_key: str, last_topic_data: dict, current_topic_d
 
     red_reasons = []
     green_reasons = []
+    color_fields = _REPORT_COLOR_FIELDS_BY_TOPIC.get(topic_key)
     fields = sorted(set(last_clean) | set(current_clean))
+    if color_fields is not None:
+        fields = [field_id for field_id in fields if field_id in color_fields]
 
     for field_id in fields:
         current_exists = field_id in current_clean
@@ -5048,7 +5163,7 @@ def _report_compare_topic(topic_key: str, last_topic_data: dict, current_topic_d
         current_issue = current_exists and _report_value_is_issue(field_id, current_value)
         last_issue = last_exists and _report_value_is_issue(field_id, last_value)
         if current_issue and not last_issue:
-            red_reasons.append(f"New or active issue: {label}.")
+            red_reasons.append(f"New issue: {label}.")
         elif last_issue and current_exists and not current_issue:
             green_reasons.append(f"Improved/resolved: {label}.")
         elif current_issue and last_issue:
@@ -5773,6 +5888,17 @@ def _answer_needs_other_detail(step: dict, answer: Any, data: dict) -> bool:
     return _norm_text(answer) == "other"
 
 
+def _patient_typed_other_detail(answer: Any, raw_answer: Any) -> str:
+    raw = str(raw_answer or "").strip()
+    if not raw or _norm_text(raw) == "other":
+        return ""
+    if isinstance(answer, list) and any(_norm_text(item) == "other" for item in answer):
+        return raw
+    if _norm_text(answer) == "other":
+        return raw
+    return ""
+
+
 def _other_detail_question(step: dict) -> str:
     q = str(step.get("q") or "this question").strip()
     return f"For this question, what does Other mean exactly?\n\n{q}"
@@ -6154,15 +6280,13 @@ def handle_answer(
     verbatim = raw_answer if raw_answer is not None else display
     if isinstance(verbatim, str) and verbatim.strip():
         state["raw_answers"][step["id"]] = verbatim.strip()
-    if (
-        step.get("type") == "multi_select"
-        and isinstance(answer, list)
-        and "Other" in answer
-        and isinstance(verbatim, str)
-        and verbatim.strip()
-    ):
-        state["data"][f"{step['id']}_other_detail"] = verbatim.strip()
+    typed_other_detail = _patient_typed_other_detail(answer, verbatim)
+    if typed_other_detail:
+        state["data"][f"{step['id']}_other_detail"] = typed_other_detail
     answer = _coerce_structured_answer(topic_key, step, answer, state["data"], raw_answer=raw_answer)
+    typed_other_detail = _patient_typed_other_detail(answer, verbatim)
+    if typed_other_detail:
+        state["data"][f"{step['id']}_other_detail"] = typed_other_detail
     state["data"][step["id"]] = answer
     _record_response_metadata(topic_key, step, answer, source, verbatim, display)
     _capture_rich_answer_into_next_step(topic_key, state, step, answer, verbatim)
