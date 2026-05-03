@@ -1248,10 +1248,116 @@ div[data-baseweb="select"] > div {
     padding: 12px;
 }
 
+.report-compare-table {
+    border: 1px solid #dfe8f1;
+    border-radius: 14px;
+    overflow: hidden;
+    background: #ffffff;
+}
+
+.report-compare-header,
+.report-compare-field-row {
+    display: grid;
+    grid-template-columns: minmax(110px, 0.8fr) minmax(150px, 1.2fr) minmax(150px, 1.2fr) minmax(92px, 0.7fr);
+    gap: 0;
+}
+
+.report-compare-header {
+    background: #f1f6fa;
+    border-bottom: 1px solid #dfe8f1;
+}
+
+.report-compare-cell {
+    padding: 10px 12px;
+    border-right: 1px solid #e5edf4;
+    color: #17324a;
+    font-size: 13px;
+    line-height: 1.45;
+}
+
+.report-compare-cell:last-child {
+    border-right: 0;
+}
+
+.report-compare-header .report-compare-cell {
+    font-size: 10px;
+    font-weight: 850;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: #70859a;
+}
+
+.report-compare-field-row {
+    border-bottom: 1px solid #edf2f6;
+}
+
+.report-compare-field-row:last-child {
+    border-bottom: 0;
+}
+
+.report-compare-field {
+    font-weight: 850;
+}
+
+.report-change-pill {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 26px;
+    padding: 4px 9px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 850;
+    line-height: 1.2;
+    text-align: center;
+    background: #eef3f7;
+    color: #637589;
+}
+
+.report-change-pill.red {
+    background: #ffeceb;
+    color: #bd2e27;
+}
+
+.report-change-pill.green {
+    background: #eaf7ee;
+    color: #2d7a38;
+}
+
+.report-change-pill.gray {
+    background: #eef3f7;
+    color: #637589;
+}
+
 @media (max-width: 900px) {
     .report-summary-banner,
     .report-detail-grid {
         grid-template-columns: 1fr;
+    }
+
+    .report-compare-header {
+        display: none;
+    }
+
+    .report-compare-field-row {
+        display: block;
+        padding: 10px 12px;
+    }
+
+    .report-compare-cell {
+        border-right: 0;
+        padding: 5px 0;
+    }
+
+    .report-compare-cell::before {
+        content: attr(data-label);
+        display: block;
+        font-size: 10px;
+        font-weight: 850;
+        letter-spacing: 0.07em;
+        text-transform: uppercase;
+        color: #7f92a6;
+        margin-bottom: 2px;
     }
 }
 
@@ -2585,11 +2691,15 @@ def _record_agent_trace(topic_key: str, step: dict, pipeline: dict):
             "doctor_note": pipeline.get("doctor_note"),
             "clinical_priority": pipeline.get("clinical_priority"),
             "follow_up_goal": pipeline.get("follow_up_goal"),
+            "information_completeness": pipeline.get("information_completeness"),
+            "missing_information": pipeline.get("missing_information"),
+            "candidate_next_step_covers_missing_info": pipeline.get("candidate_next_step_covers_missing_info"),
             "next_step_action": pipeline.get("next_step_action"),
         },
         "agent_5_next_move": {
             "follow_up_triggered": pipeline.get("follow_up", False),
             "follow_up_question": pipeline.get("follow_up_question"),
+            "follow_up_reason": pipeline.get("follow_up_reason"),
         },
         "orchestrator": {
             "assistant_message": pipeline.get("assistant_message"),
@@ -2771,10 +2881,64 @@ def _render_demo_agent_panel(topic_key: Optional[str] = None):
     priority = doctor.get("clinical_priority") or "not specified"
 
     details_html = ""
+    followup_process_html = ""
     agent_count_text = "1 AI helper, using one prompt" if ai_used else "No AI helper used"
     call_count_text = "One AI request" if ai_used else "No AI request"
 
     if ai_used:
+        completeness = str(doctor.get("information_completeness") or "complete").lower()
+        completeness_labels = {
+            "complete": "Complete: enough information to move on",
+            "partial": "Partial: useful answer, but one important detail is missing",
+            "none": "Not usable yet: the answer does not answer this question",
+        }
+        missing_info = str(doctor.get("missing_information") or doctor.get("follow_up_goal") or "").strip()
+        covers_missing = bool(doctor.get("candidate_next_step_covers_missing_info"))
+        if missing_info:
+            next_step_check = (
+                "Yes: the next flowchart question already asks for it"
+                if covers_missing
+                else "No: the next flowchart question does not collect it"
+            )
+        else:
+            next_step_check = "No important missing detail"
+        followup_triggered = bool(next_move.get("follow_up_triggered") and follow_up_question)
+        followup_reason = str(next_move.get("follow_up_reason") or "").strip()
+        if not followup_reason:
+            if followup_triggered:
+                followup_reason = "One important detail was missing and the flowchart would not ask it next."
+            elif missing_info and covers_missing:
+                followup_reason = "No custom follow-up because the next flowchart question will collect the missing detail."
+            elif missing_info:
+                followup_reason = "No custom follow-up was needed after the safety and repetition checks."
+            else:
+                followup_reason = "No follow-up because the answer was clinically usable."
+        followup_result = (
+            f"Ask one follow-up: {follow_up_question}"
+            if followup_triggered
+            else "Do not ask an AI follow-up; continue with the flowchart"
+        )
+        process_items = [
+            ("Answer completeness", completeness_labels.get(completeness, "Complete: enough information to move on")),
+            ("Missing detail", missing_info or "None"),
+            ("Next flowchart check", next_step_check),
+            ("Follow-up decision", followup_result),
+            ("Reason", followup_reason),
+        ]
+        followup_process_html = (
+            '<div class="demo-connector"></div>'
+            '<div class="demo-node">'
+            '<div class="demo-node-index">3</div>'
+            '<div class="demo-node-body">'
+            '<div class="demo-node-label">Follow-up decision process</div>'
+            '<div class="demo-node-subtext">How the single-pass AI decides whether to ask an extra question.</div>'
+            '<div class="demo-mini-grid">'
+            + "".join(
+                f'<div class="demo-mini"><span>{_html.escape(label)}</span><strong>{_html.escape(value)}</strong></div>'
+                for label, value in process_items
+            )
+            + '</div></div></div>'
+        )
         detail_items = []
         if matched:
             detail_items.append(("Answer understood as", str(matched)))
@@ -2829,9 +2993,10 @@ def _render_demo_agent_panel(topic_key: Optional[str] = None):
                     <div class="demo-mini-grid">{details_html}</div>
                 </div>
             </div>
+            {followup_process_html}
             <div class="demo-connector"></div>
             <div class="demo-node">
-                <div class="demo-node-index">3</div>
+                <div class="demo-node-index">{'4' if ai_used else '3'}</div>
                 <div class="demo-node-body">
                     <div class="demo-node-label">Decision</div>
                     <div class="demo-node-text">{_html.escape(decision)}</div>
@@ -2839,7 +3004,7 @@ def _render_demo_agent_panel(topic_key: Optional[str] = None):
             </div>
             <div class="demo-connector"></div>
             <div class="demo-node current">
-                <div class="demo-node-index">4</div>
+                <div class="demo-node-index">{'5' if ai_used else '4'}</div>
                 <div class="demo-node-body">
                     <div class="demo-node-label">Current question now</div>
                     <div class="demo-node-text">{_html.escape(current_text)}</div>
@@ -4081,6 +4246,13 @@ FOLLOW-UP RULES:
 - If the patient already gave detail that answers the immediate next step, use
   next_step_action to skip/carry it forward instead of asking again.
 - Numeric severity questions may need one clarification if no usable number was given.
+- Always explain the follow-up decision in these plain fields:
+  information_completeness: complete, partial, or none.
+  missing_information: the one important missing detail, or null.
+  candidate_next_step_covers_missing_info: true only if the next formal flowchart
+  question already asks for that missing detail.
+  follow_up_reason: one short plain-English reason if follow_up is true, otherwise
+  why no custom follow-up is needed.
 
 Return ONLY valid JSON with this exact shape:
 {{
@@ -4095,7 +4267,11 @@ Return ONLY valid JSON with this exact shape:
   "wants_to_stop": false,
   "doctor_note": null,
   "clinical_priority": "low|medium|high",
+  "information_completeness": "complete|partial|none",
+  "missing_information": null,
+  "candidate_next_step_covers_missing_info": false,
   "follow_up_goal": null,
+  "follow_up_reason": "",
   "change_significance": "critical|notable|stable|no_baseline",
   "change_clinical_note": "",
   "next_step_action": {{
@@ -4385,6 +4561,11 @@ def _pipeline_default() -> dict:
         "urgency_tier": 0, "urgency_message": None,
         "reduce_follow_up": False, "wants_to_stop": False,
         "doctor_note": None, "clinical_priority": "medium",
+        "information_completeness": "complete",
+        "missing_information": None,
+        "candidate_next_step_covers_missing_info": False,
+        "follow_up_goal": None,
+        "follow_up_reason": "",
         "change_significance": "no_baseline", "change_clinical_note": "",
         "next_step_action": None,
         "special_signals": {}, "sentiment_note": None,
@@ -5382,6 +5563,129 @@ def _report_compare_topic(topic_key: str, last_topic_data: dict, current_topic_d
     return "stable", [], []
 
 
+def _report_field_label(topic_key: str, field_id: str) -> str:
+    for fid, label in _SUMMARY_FIELDS.get(topic_key, []):
+        if fid == field_id:
+            return label
+    step = STEP_BY_ID.get(field_id)
+    if step and step.get("text"):
+        text = str(step.get("text"))
+        text = re.sub(r"\s+", " ", text).strip().rstrip("?")
+        if len(text) <= 34:
+            return text
+    return field_id.replace("_", " ").title()
+
+
+def _report_ordered_field_ids(topic_key: str, last_clean: dict, current_clean: dict) -> list[str]:
+    seen = set()
+    ordered = []
+    for field_id, _label in _SUMMARY_FIELDS.get(topic_key, []):
+        if field_id in last_clean or field_id in current_clean:
+            ordered.append(field_id)
+            seen.add(field_id)
+    for step in FLOWS.get(topic_key, []):
+        field_id = step.get("id")
+        if field_id in seen:
+            continue
+        if field_id in last_clean or field_id in current_clean:
+            ordered.append(field_id)
+            seen.add(field_id)
+    for field_id in sorted((set(last_clean) | set(current_clean)) - seen):
+        ordered.append(field_id)
+    return ordered
+
+
+def _report_field_change(field_id: str, last_value: Any, current_value: Any, last_exists: bool, current_exists: bool) -> tuple[str, str]:
+    if not last_exists and current_exists:
+        if _report_value_is_issue(field_id, current_value):
+            return "New issue", "red"
+        return "New info", "gray"
+    if last_exists and not current_exists:
+        if _report_value_is_issue(field_id, last_value):
+            return "Not reported now", "green"
+        return "Not reported now", "gray"
+    if not last_exists and not current_exists:
+        return "No data", "gray"
+
+    if _report_value_norm(last_value) == _report_value_norm(current_value):
+        return "Same", "gray"
+
+    if field_id in _REPORT_HIGHER_IS_WORSE_FIELDS:
+        last_num = _report_numeric_value(last_value)
+        current_num = _report_numeric_value(current_value)
+        if last_num is not None and current_num is not None:
+            if current_num > last_num:
+                return "Worse", "red"
+            if current_num < last_num:
+                return "Improved", "green"
+
+    last_score = _report_ordered_score(field_id, last_value)
+    current_score = _report_ordered_score(field_id, current_value)
+    if last_score is not None and current_score is not None:
+        if current_score > last_score:
+            return "Worse", "red"
+        if current_score < last_score:
+            return "Improved", "green"
+
+    last_issue = _report_value_is_issue(field_id, last_value)
+    current_issue = _report_value_is_issue(field_id, current_value)
+    if current_issue and not last_issue:
+        return "New issue", "red"
+    if last_issue and not current_issue:
+        return "Improved", "green"
+    if current_issue and last_issue:
+        last_tokens = _report_issue_tokens(last_value)
+        current_tokens = _report_issue_tokens(current_value)
+        if current_tokens - last_tokens:
+            return "New detail", "red"
+        if last_tokens - current_tokens and not current_tokens:
+            return "Improved", "green"
+        return "Changed", "gray"
+    return "Changed", "gray"
+
+
+def _report_detail_comparison_table(topic_key: str, last_topic_data: dict, current_topic_data: dict) -> str:
+    last_clean = _report_clean_fields(last_topic_data)
+    current_clean = _report_clean_fields(current_topic_data)
+    field_ids = _report_ordered_field_ids(topic_key, last_clean, current_clean)
+    if not field_ids:
+        return ""
+
+    rows = [
+        '<div class="report-compare-table">',
+        '<div class="report-compare-header">',
+        '<div class="report-compare-cell">Clinical field</div>',
+        '<div class="report-compare-cell">Last check-in</div>',
+        '<div class="report-compare-cell">Current check-in</div>',
+        '<div class="report-compare-cell">Change</div>',
+        '</div>',
+    ]
+    for field_id in field_ids:
+        last_exists = field_id in last_clean
+        current_exists = field_id in current_clean
+        last_value = last_clean.get(field_id)
+        current_value = current_clean.get(field_id)
+        last_text = _report_value_text(last_value) if last_exists else "Not reported"
+        current_text = _report_value_text(current_value) if current_exists else "Not reported"
+        change_label, change_class = _report_field_change(
+            field_id,
+            last_value,
+            current_value,
+            last_exists,
+            current_exists,
+        )
+        rows.extend([
+            '<div class="report-compare-field-row">',
+            f'<div class="report-compare-cell report-compare-field" data-label="Clinical field">{_html.escape(_report_field_label(topic_key, field_id))}</div>',
+            f'<div class="report-compare-cell" data-label="Last check-in">{_html.escape(last_text)}</div>',
+            f'<div class="report-compare-cell" data-label="Current check-in">{_html.escape(current_text)}</div>',
+            f'<div class="report-compare-cell" data-label="Change"><span class="report-change-pill {change_class}">{_html.escape(change_label)}</span></div>',
+            '</div>',
+        ])
+    rows.append('</div>')
+    return "".join(rows)
+
+
 def _report_topic_fallback(topic_key: str, topic_label: str, last_topic_data: dict, current_topic_data: dict) -> dict:
     last_summary = _natural_summary(topic_key, last_topic_data) if last_topic_data else "No prior details recorded."
     current_summary = _natural_summary(topic_key, current_topic_data) if current_topic_data else "Not answered this visit."
@@ -5531,21 +5835,12 @@ def _render_report_topic_detail(insight: dict, all_data: dict):
                 detail_parts.append(f'<li>{_html.escape(str(line))}</li>')
             detail_parts.extend(['</ul>', '</div>'])
 
-        last_html = _checkin_summary_html(topic_key, last_topic_data)
-        now_html = _checkin_summary_html(topic_key, current_topic_data)
-        if last_html or now_html:
+        comparison_html = _report_detail_comparison_table(topic_key, last_topic_data, current_topic_data)
+        if comparison_html:
             detail_parts.extend([
                 '<div class="report-detail-section">',
-                '<div class="report-detail-chip-block">',
-                '<div class="report-detail-chip-panel">',
-                '<div class="report-detail-section-title">Last visit details</div>',
-                last_html or '<div style="color:#7a8ea4;">No prior details recorded.</div>',
-                '</div>',
-                '<div class="report-detail-chip-panel">',
-                '<div class="report-detail-section-title">Current visit details</div>',
-                now_html or '<div style="color:#7a8ea4;">No current details recorded.</div>',
-                '</div>',
-                '</div>',
+                '<div class="report-detail-section-title">Side-by-side comparison</div>',
+                comparison_html,
                 '</div>',
             ])
         detail_parts.append('</div>')
