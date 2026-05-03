@@ -1150,7 +1150,7 @@ div[data-baseweb="select"] > div {
     border-radius: 24px;
     background: linear-gradient(180deg, #ffffff 0%, #f9fbfd 100%);
     box-shadow: var(--shadow-sm);
-    overflow: hidden;
+    overflow: visible;
 }
 
 .report-detail-shell.inline {
@@ -1216,6 +1216,7 @@ div[data-baseweb="select"] > div {
 .report-detail-section {
     border-top: 1px solid #e4edf4;
     padding: 14px 16px;
+    overflow-x: auto;
 }
 
 .report-detail-section-title {
@@ -1253,12 +1254,13 @@ div[data-baseweb="select"] > div {
     border-radius: 14px;
     overflow: hidden;
     background: #ffffff;
+    min-width: 640px;
 }
 
 .report-compare-header,
 .report-compare-field-row {
     display: grid;
-    grid-template-columns: minmax(110px, 0.8fr) minmax(150px, 1.2fr) minmax(150px, 1.2fr) minmax(92px, 0.7fr);
+    grid-template-columns: minmax(110px, 0.8fr) minmax(150px, 1.15fr) minmax(150px, 1.15fr) minmax(86px, 0.62fr);
     gap: 0;
 }
 
@@ -1342,6 +1344,10 @@ div[data-baseweb="select"] > div {
     .report-compare-field-row {
         display: block;
         padding: 10px 12px;
+    }
+
+    .report-compare-table {
+        min-width: 0;
     }
 
     .report-compare-cell {
@@ -7946,10 +7952,10 @@ def screen_report():
     )
     _render_report_summary_banner(topic_insights)
 
-    for row_start in range(0, len(topic_insights), 4):
-        row_items = topic_insights[row_start:row_start + 4]
+    for row_start in range(0, len(topic_insights), 2):
+        row_items = topic_insights[row_start:row_start + 2]
         col_weights = [
-            1.55 if insight.get("status") in {"worsened", "new_issue"} else 1.0
+            1.35 if insight.get("status") in {"worsened", "new_issue"} else 1.0
             for insight in row_items
         ]
         cols = st.columns(col_weights)
