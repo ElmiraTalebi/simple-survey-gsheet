@@ -2565,6 +2565,7 @@ def _record_agent_trace(topic_key: str, step: dict, pipeline: dict):
         "topic": topic_key,
         "question_id": step.get("id"),
         "question": step.get("text"),
+        "question_type": step.get("type", "options"),
         "mode": "single_pass",
         "ai_used": True,
         "source": pipeline.get("source", "typed/free-text/voice"),
@@ -2612,6 +2613,7 @@ def _record_fastpath_trace(
         "topic": topic_key,
         "question_id": step.get("id"),
         "question": step.get("text"),
+        "question_type": step.get("type", "options"),
         "mode": "fast_path",
         "ai_used": False,
         "source": source,
@@ -2717,7 +2719,10 @@ def _render_demo_agent_panel(topic_key: Optional[str] = None):
     next_move = trace.get("agent_5_next_move") or {}
     orchestrator = trace.get("orchestrator") or {}
 
-    if not ai_used:
+    question_type = str(trace.get("question_type") or "")
+    if not ai_used and source != "structured":
+        path_text = "The patient typed a free-text answer. This question has no predefined choices to match, so the app saved the text and continued through the flow."
+    elif not ai_used:
         path_text = "The patient clicked one of the listed answers, so the app followed the flowchart directly."
     else:
         path_text = "The patient used their own words, so the app used one AI review to understand the answer and choose the next step."
@@ -2786,8 +2791,9 @@ def _render_demo_agent_panel(topic_key: Optional[str] = None):
             for label, value in detail_items
         )
     else:
+        interpretation_text = "Free-text answer recorded" if source != "structured" or question_type == "free_text" else "Pre-defined option accepted"
         details_html = (
-            '<div class="demo-mini"><span>Interpretation</span><strong>Pre-defined option accepted</strong></div>'
+            f'<div class="demo-mini"><span>Interpretation</span><strong>{_html.escape(interpretation_text)}</strong></div>'
             f'<div class="demo-mini"><span>AI agents used</span><strong>{_html.escape(agent_count_text)}</strong></div>'
             f'<div class="demo-mini"><span>Model calls</span><strong>{_html.escape(call_count_text)}</strong></div>'
         )
@@ -5812,6 +5818,26 @@ def _resolve_next_step(topic_key: str, state: dict) -> Optional[dict]:
 
 
 def _suggestions_for_prompt_text(prompt_text: str, step: Optional[dict] = None) -> list[str]:
+    step_type = (step or {}).get("type")
+    if step_type == "free_text":
+        text = _norm_text(prompt_text or "")
+        detail_prompt_terms = (
+            "dose",
+            "how often",
+            "how many times",
+            "tell me the dose",
+            "please tell me",
+            "can you please tell me",
+            "what else",
+            "what other",
+            "where exactly",
+            "which body part",
+            "which other",
+            "please describe",
+        )
+        if any(term in text for term in detail_prompt_terms):
+            return []
+
     if step and step.get("opts"):
         opts = []
         for opt in step.get("opts", []):
@@ -6745,7 +6771,6 @@ def handle_answer(
                     fc[step["id"]] = fc.get(step["id"], 0) + 1
                     _store_followup_prompt(
                         topic_key, state, step, fq, ack,
-                        target_step=next_step,
                     )
                     _finalize_demo_trace("Ask one follow-up question.", fq)
                     st.rerun()
