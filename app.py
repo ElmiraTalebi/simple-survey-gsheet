@@ -339,7 +339,10 @@ def _local_option_match(step: dict, user_input: str) -> Optional[str]:
         opt_norm = _norm_text(opt)
         if opt_norm == normalized:
             return opt
-        if opt_norm and (opt_norm in normalized or normalized in opt_norm):
+        opt_tokens = opt_norm.split()
+        if opt_norm and len(opt_tokens) > 1 and (f" {opt_norm} " in f" {normalized} " or f" {normalized} " in f" {opt_norm} "):
+            return opt
+        if opt_norm not in {"yes", "no"} and len(opt_tokens) == 1 and opt_norm in normalized.split():
             return opt
 
     yes_words = {"yes", "yeah", "yep", "yup", "sure", "correct", "right"}
@@ -7306,7 +7309,13 @@ def render_input(topic_key: str, step: dict):
         opts = step.get("opts", [])
         form_key = f"form_{topic_key}_{sid}_options"
         with st.form(form_key, clear_on_submit=False):
-            selected = st.radio("Choose one", opts, key=f"radio_{topic_key}_{sid}", horizontal=(len(opts) <= 3))
+            selected = st.radio(
+                "Choose one",
+                opts,
+                key=f"radio_{topic_key}_{sid}",
+                horizontal=(len(opts) <= 3),
+                index=None,
+            )
             text_col, mic_col = st.columns([20, 1], vertical_alignment="bottom")
             with text_col:
                 typed = st.text_input(
@@ -7325,9 +7334,11 @@ def render_input(topic_key: str, step: dict):
                 st.session_state.pop(f"text_{topic_key}_{sid}_submitted", None)
                 if _process_option_submission(topic_key, step, typed_clean, "typed", f"text_{topic_key}_{sid}_submitted", topic_history):
                     return
-            else:
+            elif selected is not None:
                 handle_answer(topic_key, step, selected, source="structured")
                 return
+            else:
+                st.warning("Please choose an option or type your answer before continuing.")
         if _process_option_submission(topic_key, step, voice_text, "voice", f"voice_{topic_key}_{sid}_submitted", topic_history):
             return
         st.markdown('</div>', unsafe_allow_html=True)
