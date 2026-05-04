@@ -5117,6 +5117,35 @@ _init_state()
 # LOAD PREVIOUS CHECK-IN
 # ══════════════════════════════════════════════════════════════════
 
+_MOJIBAKE_FIXES = {
+    "‚Äî": "—",
+    "‚Äì": "–",
+    "‚Äô": "'",
+    "‚Äú": '"',
+    "‚Äù": '"',
+    "‚Ä¶": "...",
+    "Â°": "°",
+    "Â": "",
+}
+
+
+def _clean_loaded_text(value: str) -> str:
+    cleaned = str(value)
+    for bad, good in _MOJIBAKE_FIXES.items():
+        cleaned = cleaned.replace(bad, good)
+    return cleaned
+
+
+def _normalize_loaded_checkin(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {k: _normalize_loaded_checkin(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_normalize_loaded_checkin(v) for v in value]
+    if isinstance(value, str):
+        return _clean_loaded_text(value)
+    return value
+
+
 def load_last_checkin(name: str) -> dict:
     """
     Fetch the most recent saved check-in for this patient from Google Sheets.
@@ -5128,13 +5157,15 @@ def load_last_checkin(name: str) -> dict:
     try:
         rows = _sheet.get_all_values()
         last_row = None
-        for row in rows[1:]:
-            if len(row) >= 3 and row[1].strip().lower() == name.strip().lower():
+        for row in rows:
+            if len(row) < 3:
+                continue
+            if row[1].strip().lower() == name.strip().lower():
                 last_row = row          # keep iterating — last match wins
         if last_row:
             raw = json.loads(last_row[2])
             # raw is {topic_key: {q_id: answer}}
-            return raw
+            return _normalize_loaded_checkin(raw)
     except Exception:
         pass
     return {}
