@@ -2910,13 +2910,13 @@ def _render_demo_agent_panel(topic_key: Optional[str] = None):
     )
     st.markdown(
         '<div class="demo-reasoning-card">'
-        '<div class="demo-title">Demo Mode</div>'
-        '<div class="demo-subtitle">Decision trace</div>'
+        '<div class="demo-title">Behind the scenes</div>'
+        '<div class="demo-subtitle">How the app handled the latest answer</div>'
         '</div>',
         unsafe_allow_html=True,
     )
     if not trace:
-        st.caption("Demo mode shows what happened after the latest answer.")
+        st.caption("This view explains the app's next step after each answer.")
         if current_prompt:
             st.markdown(f"**Current question now:** {current_prompt}")
         st.info("No answer has been processed yet.")
@@ -2937,19 +2937,19 @@ def _render_demo_agent_panel(topic_key: Optional[str] = None):
 
     question_type = str(trace.get("question_type") or "")
     if not ai_used and source != "structured":
-        path_text = "The patient typed a free-text answer. This question has no predefined choices to match, so the app saved the text and continued through the flow."
+        path_text = "This answer was saved as written, then the clinical flowchart chose the next question."
     elif not ai_used:
-        path_text = "The patient clicked one of the listed answers, so the app followed the flowchart directly."
+        path_text = "No AI was needed. The answer was already a clear button choice, so the app followed the clinical flowchart instantly."
     else:
-        path_text = "The patient used their own words, so one AI review interpreted the answer, compared it with last check-in when useful, checked safety, and decided the next step."
+        path_text = "One controlled AI review read the patient's words like a nurse would: understand the meaning, compare with last visit when useful, check safety, and choose the clearest next step."
 
     decision = orchestrator.get("final_decision") or "Move to the next applicable flowchart question."
     next_question = orchestrator.get("next_question")
     follow_up_question = next_move.get("follow_up_question")
     if next_move.get("follow_up_triggered") and follow_up_question:
-        decision = f"Ask one follow-up: {follow_up_question}"
+        decision = f"Ask one helpful follow-up: {follow_up_question}"
     elif next_question:
-        decision = f"Move to next question: {next_question}"
+        decision = f"Continue to the next question: {next_question}"
 
     def _demo_urgency_label(tier: Any) -> str:
         tier_int = _safe_int_value(tier, 0)
@@ -2988,8 +2988,8 @@ def _render_demo_agent_panel(topic_key: Optional[str] = None):
 
     details_html = ""
     followup_process_html = ""
-    agent_count_text = "1 AI helper, using one prompt" if ai_used else "No AI helper used"
-    call_count_text = "One AI request" if ai_used else "No AI request"
+    agent_count_text = "1 controlled AI review" if ai_used else "No AI review"
+    call_count_text = "One GPT call" if ai_used else "No GPT call"
 
     if ai_used:
         completeness = str(doctor.get("information_completeness") or "complete").lower()
@@ -3041,26 +3041,25 @@ def _render_demo_agent_panel(topic_key: Optional[str] = None):
             else:
                 followup_reason = "No follow-up because the answer was clinically usable."
         followup_result = (
-            f"Ask one follow-up: {follow_up_question}"
+            f"Ask this now: {follow_up_question}"
             if followup_triggered
-            else "Do not ask an AI follow-up; continue with the flowchart"
+            else "No extra question needed; continue with the flowchart"
         )
+        ai_checked_text = "Meaning, safety, missing details, and last-visit changes"
+        found_text = missing_info or "The answer was clear enough for this step"
         process_items = [
-            ("Answer completeness", completeness_labels.get(completeness, "Complete: enough information to move on")),
-            ("AI follow-up type", followup_type),
-            ("Reasons AI checks", "Missing detail, safety, unclear answer, or last-check-in comparison"),
-            ("Missing detail", missing_info or "None"),
-            ("Next flowchart check", next_step_check),
-            ("Follow-up decision", followup_result),
-            ("Reason", followup_reason),
+            ("What AI checked", ai_checked_text),
+            ("What AI found", found_text),
+            ("Why it matters", followup_reason),
+            ("One-more-question rule", followup_result),
         ]
         followup_process_html = (
             '<div class="demo-connector"></div>'
             '<div class="demo-node">'
             '<div class="demo-node-index">3</div>'
             '<div class="demo-node-body">'
-            '<div class="demo-node-label">Follow-up decision process</div>'
-            '<div class="demo-node-subtext">How the single-pass AI decides whether to ask an extra question.</div>'
+            '<div class="demo-node-label">AI reasoning</div>'
+            '<div class="demo-node-subtext">The AI can ask one extra question only when it makes the check-in safer or clearer.</div>'
             '<div class="demo-mini-grid">'
             + "".join(
                 f'<div class="demo-mini"><span>{_html.escape(label)}</span><strong>{_html.escape(value)}</strong></div>'
@@ -3072,12 +3071,11 @@ def _render_demo_agent_panel(topic_key: Optional[str] = None):
         if matched:
             detail_items.append(("Answer understood as", str(matched)))
         detail_items.extend([
-            ("AI agents used", agent_count_text),
-            ("Model calls", call_count_text),
-            ("Urgency result", _demo_urgency_label(urgency_tier)),
-            ("Follow-up depth", _demo_followup_depth_label(bool(reduce_follow_up))),
-            ("Patient asked to stop?", "Yes" if wants_to_stop else "No"),
-            ("Clinical priority", _demo_priority_label(str(priority))),
+            ("AI used", agent_count_text),
+            ("Speed", call_count_text),
+            ("Safety check", _demo_urgency_label(urgency_tier)),
+            ("Patient comfort", _demo_followup_depth_label(bool(reduce_follow_up))),
+            ("Care-team importance", _demo_priority_label(str(priority))),
         ])
         details_html = "".join(
             f'<div class="demo-mini"><span>{_html.escape(label)}</span><strong>{_html.escape(value)}</strong></div>'
@@ -3087,8 +3085,8 @@ def _render_demo_agent_panel(topic_key: Optional[str] = None):
         interpretation_text = "Free-text answer recorded" if source != "structured" or question_type == "free_text" else "Pre-defined option accepted"
         details_html = (
             f'<div class="demo-mini"><span>Interpretation</span><strong>{_html.escape(interpretation_text)}</strong></div>'
-            f'<div class="demo-mini"><span>AI agents used</span><strong>{_html.escape(agent_count_text)}</strong></div>'
-            f'<div class="demo-mini"><span>Model calls</span><strong>{_html.escape(call_count_text)}</strong></div>'
+            f'<div class="demo-mini"><span>AI used</span><strong>{_html.escape(agent_count_text)}</strong></div>'
+            f'<div class="demo-mini"><span>Speed</span><strong>{_html.escape(call_count_text)}</strong></div>'
         )
 
     decision_index = "4" if ai_used else "3"
@@ -3097,7 +3095,7 @@ def _render_demo_agent_panel(topic_key: Optional[str] = None):
         '<div class="demo-flow">'
         '<div class="demo-flow-top">'
         '<div>'
-        '<div class="demo-flow-kicker">Latest answer</div>'
+        '<div class="demo-flow-kicker">Question being answered</div>'
         f'<div class="demo-flow-title">{_html.escape(question_text)}</div>'
         '</div>'
         f'<div class="demo-status {status_class}">{_html.escape(status_label)}</div>'
@@ -3105,7 +3103,7 @@ def _render_demo_agent_panel(topic_key: Optional[str] = None):
         '<div class="demo-node">'
         '<div class="demo-node-index">1</div>'
         '<div class="demo-node-body">'
-        '<div class="demo-node-label">Patient input</div>'
+        '<div class="demo-node-label">What the patient said</div>'
         f'<div class="demo-node-text">{_html.escape(answer_text)}</div>'
         '<div class="demo-chip-row">'
         f'<span class="demo-chip">{_html.escape(source or "unknown")}</span>'
@@ -3116,7 +3114,7 @@ def _render_demo_agent_panel(topic_key: Optional[str] = None):
         '<div class="demo-node">'
         '<div class="demo-node-index">2</div>'
         '<div class="demo-node-body">'
-        '<div class="demo-node-label">Processing path</div>'
+        '<div class="demo-node-label">How the app handled it</div>'
         f'<div class="demo-node-text">{_html.escape(path_label)}</div>'
         f'<div class="demo-node-subtext">{_html.escape(path_text)}</div>'
         f'<div class="demo-mini-grid">{details_html}</div>'
@@ -3127,7 +3125,7 @@ def _render_demo_agent_panel(topic_key: Optional[str] = None):
         '<div class="demo-node">'
         f'<div class="demo-node-index">{decision_index}</div>'
         '<div class="demo-node-body">'
-        '<div class="demo-node-label">Decision</div>'
+        '<div class="demo-node-label">What happens next</div>'
         f'<div class="demo-node-text">{_html.escape(decision)}</div>'
         '</div>'
         '</div>'
@@ -3135,13 +3133,13 @@ def _render_demo_agent_panel(topic_key: Optional[str] = None):
         '<div class="demo-node current">'
         f'<div class="demo-node-index">{current_index}</div>'
         '<div class="demo-node-body">'
-        '<div class="demo-node-label">Current question now</div>'
+        '<div class="demo-node-label">Question on screen now</div>'
         f'<div class="demo-node-text">{_html.escape(current_text)}</div>'
         '</div>'
         '</div>'
         '</div>'
     )
-    st.caption("Demo mode shows the latest processed answer and the next system action.")
+    st.caption("Demo mode is a patient- and clinician-friendly story of the latest decision.")
     st.markdown(demo_html, unsafe_allow_html=True)
 
 
