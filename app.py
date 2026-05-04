@@ -2172,7 +2172,7 @@ def _comparison_aware_step_text(topic_key: Optional[str], step: dict, question_t
     step_id = step.get("id")
     if not step_id or step_id in {"pain_since_last_visit"}:
         return question_text
-    if topic_key == "pain" and step_id == "pain_location":
+    if topic_key == "pain" and step_id in {"has_pain", "pain_location"}:
         return question_text
 
     last_topic_data = st.session_state.get("last_checkin", {}).get(topic_key, {}) or {}
