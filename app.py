@@ -43,8 +43,8 @@ def _load_topic_flows():
 from typing import Optional
 
 TOPICS = [
-    ("🍽️  Nutrition & Fluids", "nutrition"),
     ("🩹 Pain & Medications", "pain"),
+    ("🍽️  Nutrition & Fluids", "nutrition"),
     ("👄 Oral Symptoms", "oral"),
     ("🤢 GI Symptoms", "gi"),
     ("😴 Fatigue & Sleep", "fatigue"),
@@ -2142,6 +2142,60 @@ def render_active_question(question: str, label: str = "Current question"):
     )
 
 
+def _short_answer_text(value: Any, max_len: int = 90) -> str:
+    if isinstance(value, list):
+        text = ", ".join(str(v) for v in value if str(v).strip())
+    else:
+        text = str(value or "")
+    text = re.sub(r"\s+", " ", text).strip()
+    if len(text) > max_len:
+        text = text[: max_len - 3].rstrip() + "..."
+    return text
+
+
+def _field_display_label(topic_key: str, field_id: str) -> str:
+    for fid, label in globals().get("_SUMMARY_FIELDS", {}).get(topic_key, []):
+        if fid == field_id:
+            return label
+    step = STEP_BY_ID.get(field_id)
+    if step and step.get("text"):
+        text = re.sub(r"\s+", " ", str(step.get("text")).strip()).rstrip("?")
+        if len(text) <= 36:
+            return text
+    return field_id.replace("_", " ").title()
+
+
+def _comparison_aware_step_text(topic_key: Optional[str], step: dict, question_text: str) -> str:
+    if not topic_key or not st.session_state.get("has_prev_checkin", False):
+        return question_text
+
+    step_id = step.get("id")
+    if not step_id or step_id in {"pain_since_last_visit"}:
+        return question_text
+    if topic_key == "pain" and step_id in {"has_pain", "pain_location"}:
+        return question_text
+
+    last_topic_data = st.session_state.get("last_checkin", {}).get(topic_key, {}) or {}
+    if step_id not in last_topic_data:
+        return question_text
+
+    last_value = last_topic_data.get(step_id)
+    if last_value in (None, "", [], {}):
+        return question_text
+
+    try:
+        last_value = _value_with_other_detail(step_id, last_value, last_topic_data)
+    except NameError:
+        pass
+
+    last_text = _short_answer_text(last_value)
+    if not last_text:
+        return question_text
+
+    label = _field_display_label(topic_key, step_id)
+    return f"Last check-in, your answer for {label} was: {last_text}. {question_text}"
+
+
 def _dynamic_step_text(topic_key: Optional[str], step: dict, state: Optional[dict] = None) -> str:
     question_text = step["text"]
     if topic_key == "pain" and step.get("id") == "prior_pain_location_followup":
@@ -2159,6 +2213,7 @@ def _dynamic_step_text(topic_key: Optional[str], step: dict, state: Optional[dic
         if location and _norm_text(location) != "somewhere else":
             pain_label = f"{location} pain"
             return f"How has the {pain_label} changed since your last visit?"
+    question_text = _comparison_aware_step_text(topic_key, step, question_text)
     if not ENABLE_DYNAMIC_PROMPT_REWRITE:
         return question_text
     if not state or not topic_key or not openai_client:
@@ -2968,58 +3023,58 @@ def _render_demo_agent_panel(topic_key: Optional[str] = None):
             f'<div class="demo-mini"><span>Model calls</span><strong>{_html.escape(call_count_text)}</strong></div>'
         )
 
-    st.caption("Demo mode shows the latest processed answer and the next system action.")
-    st.markdown(
-        f'''
-        <div class="demo-flow">
-            <div class="demo-flow-top">
-                <div>
-                    <div class="demo-flow-kicker">Latest answer</div>
-                    <div class="demo-flow-title">{_html.escape(question_text)}</div>
-                </div>
-                <div class="demo-status {status_class}">{status_label}</div>
-            </div>
-            <div class="demo-node">
-                <div class="demo-node-index">1</div>
-                <div class="demo-node-body">
-                    <div class="demo-node-label">Patient input</div>
-                    <div class="demo-node-text">{_html.escape(answer_text)}</div>
-                    <div class="demo-chip-row">
-                        <span class="demo-chip">{_html.escape(source or "unknown")}</span>
-                    </div>
-                </div>
-            </div>
-            <div class="demo-connector"></div>
-            <div class="demo-node">
-                <div class="demo-node-index">2</div>
-                <div class="demo-node-body">
-                    <div class="demo-node-label">Processing path</div>
-                    <div class="demo-node-text">{_html.escape(path_label)}</div>
-                    <div class="demo-node-subtext">{_html.escape(path_text)}</div>
-                    <div class="demo-mini-grid">{details_html}</div>
-                </div>
-            </div>
-            {followup_process_html}
-            <div class="demo-connector"></div>
-            <div class="demo-node">
-                <div class="demo-node-index">{'4' if ai_used else '3'}</div>
-                <div class="demo-node-body">
-                    <div class="demo-node-label">Decision</div>
-                    <div class="demo-node-text">{_html.escape(decision)}</div>
-                </div>
-            </div>
-            <div class="demo-connector"></div>
-            <div class="demo-node current">
-                <div class="demo-node-index">{'5' if ai_used else '4'}</div>
-                <div class="demo-node-body">
-                    <div class="demo-node-label">Current question now</div>
-                    <div class="demo-node-text">{_html.escape(current_text)}</div>
-                </div>
-            </div>
-        </div>
-        ''',
-        unsafe_allow_html=True,
+    decision_index = "4" if ai_used else "3"
+    current_index = "5" if ai_used else "4"
+    demo_html = (
+        '<div class="demo-flow">'
+        '<div class="demo-flow-top">'
+        '<div>'
+        '<div class="demo-flow-kicker">Latest answer</div>'
+        f'<div class="demo-flow-title">{_html.escape(question_text)}</div>'
+        '</div>'
+        f'<div class="demo-status {status_class}">{_html.escape(status_label)}</div>'
+        '</div>'
+        '<div class="demo-node">'
+        '<div class="demo-node-index">1</div>'
+        '<div class="demo-node-body">'
+        '<div class="demo-node-label">Patient input</div>'
+        f'<div class="demo-node-text">{_html.escape(answer_text)}</div>'
+        '<div class="demo-chip-row">'
+        f'<span class="demo-chip">{_html.escape(source or "unknown")}</span>'
+        '</div>'
+        '</div>'
+        '</div>'
+        '<div class="demo-connector"></div>'
+        '<div class="demo-node">'
+        '<div class="demo-node-index">2</div>'
+        '<div class="demo-node-body">'
+        '<div class="demo-node-label">Processing path</div>'
+        f'<div class="demo-node-text">{_html.escape(path_label)}</div>'
+        f'<div class="demo-node-subtext">{_html.escape(path_text)}</div>'
+        f'<div class="demo-mini-grid">{details_html}</div>'
+        '</div>'
+        '</div>'
+        f'{followup_process_html}'
+        '<div class="demo-connector"></div>'
+        '<div class="demo-node">'
+        f'<div class="demo-node-index">{decision_index}</div>'
+        '<div class="demo-node-body">'
+        '<div class="demo-node-label">Decision</div>'
+        f'<div class="demo-node-text">{_html.escape(decision)}</div>'
+        '</div>'
+        '</div>'
+        '<div class="demo-connector"></div>'
+        '<div class="demo-node current">'
+        f'<div class="demo-node-index">{current_index}</div>'
+        '<div class="demo-node-body">'
+        '<div class="demo-node-label">Current question now</div>'
+        f'<div class="demo-node-text">{_html.escape(current_text)}</div>'
+        '</div>'
+        '</div>'
+        '</div>'
     )
+    st.caption("Demo mode shows the latest processed answer and the next system action.")
+    st.markdown(demo_html, unsafe_allow_html=True)
 
 
 
@@ -4322,11 +4377,12 @@ def run_single_pass_pipeline_agent(
         "new_urgency_signals": [],
         "new_sentiment_signals": [],
     }
+    prompt_state = {"data": session_answers, "raw_answers": {}}
     result = _call_agent(_ONE_PASS_PIPELINE_SYS, {
         "topic_key": topic_key,
         "current_question": {
             "id": step.get("id"),
-            "text": step.get("text", ""),
+            "text": _dynamic_step_text(topic_key, step, prompt_state),
             "type": step.get("type", "options"),
             "options": step.get("opts", []),
         },
@@ -4340,14 +4396,14 @@ def run_single_pass_pipeline_agent(
         "recent_question_texts": recent_questions,
         "candidate_next_step": {
             "id": candidate_next_step.get("id"),
-            "text": candidate_next_step.get("text"),
+            "text": _dynamic_step_text(topic_key, candidate_next_step, prompt_state),
             "type": candidate_next_step.get("type"),
             "options": candidate_next_step.get("opts", []),
         } if candidate_next_step else None,
         "upcoming_steps": [
             {
                 "id": s.get("id"),
-                "text": s.get("text"),
+                "text": _dynamic_step_text(topic_key, s, prompt_state),
                 "type": s.get("type"),
                 "options": s.get("opts", []),
             }
@@ -7059,8 +7115,12 @@ def handle_answer(
 
             if pipeline.get("follow_up") and pipeline.get("follow_up_question"):
                 fq = pipeline["follow_up_question"]
-                # Reject if semantically redundant with original question
-                if _is_redundant_followup(step["text"], answer, fq):
+                next_step_text = _dynamic_step_text(topic_key, next_step, state) if next_step else ""
+                # Reject if semantically redundant with the current question or the next flowchart question.
+                if (
+                    _is_redundant_followup(step["text"], answer, fq)
+                    or (next_step_text and _is_redundant_followup(next_step_text, answer, fq))
+                ):
                     pass   # Fall through to assistant_message + next question
                 else:
                     next_step_action = pipeline.get("next_step_action")
@@ -7601,7 +7661,7 @@ def render_topic_detail(topic_label: str, topic_key: str):
             pending_target_step = None
             if pending.get("target_step_id"):
                 pending_target_step = STEP_BY_ID.get(pending.get("target_step_id"))
-            elif pending.get("source_step_id"):
+            elif pending.get("retry_current_step") and pending.get("source_step_id"):
                 pending_target_step = STEP_BY_ID.get(pending.get("source_step_id"))
             pending_suggestions = _suggestions_for_prompt_text(
                 pending.get("question", ""),
