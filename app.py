@@ -2198,12 +2198,28 @@ def _comparison_aware_step_text(topic_key: Optional[str], step: dict, question_t
 
 def _dynamic_step_text(topic_key: Optional[str], step: dict, state: Optional[dict] = None) -> str:
     question_text = step["text"]
+    data = (state or {}).get("data", {}) if state else {}
     if topic_key == "pain" and step.get("id") == "prior_pain_location_followup":
         prior_location = _prior_pain_location_text()
         if prior_location:
-            return f"Last time you mentioned {prior_location} pain. Are you still having pain there?"
+            return f"Are you still having {_pain_location_phrase(prior_location)}?"
+    if topic_key == "pain" and _has_multiple_pain_locations(data):
+        location_phrase = _pain_location_phrase(_current_pain_location_text(data))
+        prior_phrase = _pain_location_phrase(_prior_pain_location_text())
+        combined_phrase = f"{location_phrase} or {prior_phrase}" if prior_phrase else location_phrase
+        location_aware_questions = {
+            "pain_change_details": f"How has the {location_phrase} changed since your last visit?",
+            "pain_start": f"When did the {location_phrase} start?",
+            "pain_better_worse": f"Is there anything that makes the {location_phrase} better or worse?",
+            "pain_medications": f"Which medications are you currently taking for the {combined_phrase}?",
+            "med_dose_freq": f"How often are you taking medication for the {combined_phrase}, and at what dose?",
+            "med_side_effects": "Are you having any side effects from those pain medications, such as constipation or anything else?",
+            "pain_severity": f"On a scale of 0-10, how bad is the {location_phrase} at its worst?",
+            "pain_timing": f"Is the {location_phrase} constant, intermittent, or only happening with swallowing or eating?",
+        }
+        if step.get("id") in location_aware_questions:
+            return location_aware_questions[step.get("id")]
     if topic_key == "pain" and step.get("id") == "pain_change_details":
-        data = (state or {}).get("data", {}) if state else {}
         location = str(
             data.get("other_pain_desc")
             or data.get("pain_location_raw")
@@ -2531,12 +2547,41 @@ def _current_pain_location_text(data: dict) -> str:
     ).strip()
 
 
+def _pain_location_phrase(location: str) -> str:
+    location = str(location or "").strip()
+    if not location:
+        return "pain"
+    location = re.sub(r"^somewhere\s+", "", location, flags=re.IGNORECASE).strip()
+    norm = _norm_text(location)
+    simple_sites = {
+        "throat", "tongue", "mouth", "jaw", "ear", "neck", "cheek",
+        "gums", "teeth", "lips",
+    }
+    if norm in simple_sites:
+        return f"{location.lower()} pain"
+    if norm.startswith(("between ", "near ", "around ", "inside ", "outside ", "under ", "over ", "behind ")):
+        return f"pain {location}"
+    if norm.startswith(("my ", "the ")):
+        return f"pain in {location}"
+    return f"pain in {location}"
+
+
 def _pain_location_mentions_prior(data: dict) -> bool:
     prior = _norm_text(_prior_pain_location_text())
     current = _norm_text(_current_pain_location_text(data))
     if not prior or not current or current == "somewhere else":
         return False
     return prior == current or prior in current or current in prior
+
+
+def _has_multiple_pain_locations(data: dict) -> bool:
+    if not st.session_state.get("has_prev_checkin", False):
+        return False
+    if (data or {}).get("has_pain") != "Yes":
+        return False
+    if not _prior_pain_location_text() or not _current_pain_location_text(data):
+        return False
+    return not _pain_location_mentions_prior(data)
 
 
 def _prior_pain_location_needs_followup(data: dict) -> bool:
@@ -2896,7 +2941,7 @@ def _render_demo_agent_panel(topic_key: Optional[str] = None):
     elif not ai_used:
         path_text = "The patient clicked one of the listed answers, so the app followed the flowchart directly."
     else:
-        path_text = "The patient used their own words, so the app used one AI review to understand the answer and choose the next step."
+        path_text = "The patient used their own words, so one AI review interpreted the answer, compared it with last check-in when useful, checked safety, and decided the next step."
 
     decision = orchestrator.get("final_decision") or "Move to the next applicable flowchart question."
     next_question = orchestrator.get("next_question")
@@ -2965,6 +3010,27 @@ def _render_demo_agent_panel(topic_key: Optional[str] = None):
             next_step_check = "No important missing detail"
         followup_triggered = bool(next_move.get("follow_up_triggered") and follow_up_question)
         followup_reason = str(next_move.get("follow_up_reason") or "").strip()
+        reason_text = _norm_text(
+            " ".join([
+                str(followup_reason or ""),
+                str(missing_info or ""),
+                str(follow_up_question or ""),
+                str(doctor.get("follow_up_goal") or ""),
+                str(doctor.get("doctor_note") or ""),
+                str(doctor.get("next_step_action") or ""),
+                str(orchestrator.get("assistant_message") or ""),
+            ])
+        )
+        if not followup_triggered:
+            followup_type = "No extra AI follow-up"
+        elif any(term in reason_text for term in ("last check in", "last visit", "previous", "prior", "still having", "same area", "still have")):
+            followup_type = "Last-check-in comparison"
+        elif _safe_int_value(urgency_tier, 0) >= 2 or any(term in reason_text for term in ("urgent", "emergency", "safety", "red flag")):
+            followup_type = "Safety check"
+        elif completeness == "none":
+            followup_type = "Clarify an unclear answer"
+        else:
+            followup_type = "Missing important detail"
         if not followup_reason:
             if followup_triggered:
                 followup_reason = "One important detail was missing and the flowchart would not ask it next."
@@ -2981,6 +3047,8 @@ def _render_demo_agent_panel(topic_key: Optional[str] = None):
         )
         process_items = [
             ("Answer completeness", completeness_labels.get(completeness, "Complete: enough information to move on")),
+            ("AI follow-up type", followup_type),
+            ("Reasons AI checks", "Missing detail, safety, unclear answer, or last-check-in comparison"),
             ("Missing detail", missing_info or "None"),
             ("Next flowchart check", next_step_check),
             ("Follow-up decision", followup_result),
