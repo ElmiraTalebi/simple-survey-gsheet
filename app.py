@@ -2172,6 +2172,8 @@ def _comparison_aware_step_text(topic_key: Optional[str], step: dict, question_t
     step_id = step.get("id")
     if not step_id or step_id in {"pain_since_last_visit"}:
         return question_text
+    if topic_key == "pain" and step_id == "pain_location":
+        return question_text
 
     last_topic_data = st.session_state.get("last_checkin", {}).get(topic_key, {}) or {}
     if step_id not in last_topic_data:
@@ -7113,8 +7115,12 @@ def handle_answer(
 
             if pipeline.get("follow_up") and pipeline.get("follow_up_question"):
                 fq = pipeline["follow_up_question"]
-                # Reject if semantically redundant with original question
-                if _is_redundant_followup(step["text"], answer, fq):
+                next_step_text = _dynamic_step_text(topic_key, next_step, state) if next_step else ""
+                # Reject if semantically redundant with the current question or the next flowchart question.
+                if (
+                    _is_redundant_followup(step["text"], answer, fq)
+                    or (next_step_text and _is_redundant_followup(next_step_text, answer, fq))
+                ):
                     pass   # Fall through to assistant_message + next question
                 else:
                     next_step_action = pipeline.get("next_step_action")
@@ -7655,7 +7661,7 @@ def render_topic_detail(topic_label: str, topic_key: str):
             pending_target_step = None
             if pending.get("target_step_id"):
                 pending_target_step = STEP_BY_ID.get(pending.get("target_step_id"))
-            elif pending.get("source_step_id"):
+            elif pending.get("retry_current_step") and pending.get("source_step_id"):
                 pending_target_step = STEP_BY_ID.get(pending.get("source_step_id"))
             pending_suggestions = _suggestions_for_prompt_text(
                 pending.get("question", ""),
