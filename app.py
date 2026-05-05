@@ -133,7 +133,8 @@ Prioritize:
 - Keeping the conversation concise but complete
 
 Conversation Completion Rule:
-Once all required information across all clinical topics has been gathered:
+After you are done with all the question, ask the patient if there is any other comment that patient would like to talk about and then end the conversation. 
+Once all required information across all clinical topics has been gathered and you ask the other comment question:
 - Clearly inform the patient that the check-in is complete.
 - Use a warm and reassuring tone.
 - Briefly summarize what will happen next, such as that the information will be shared with the doctor.
@@ -235,9 +236,11 @@ def reset_chat() -> None:
 
 
 def render_completion_banner() -> None:
-    st.success("Check-in complete. Your responses are ready to be shared with your doctor.")
+    st.title("Thank you for submitting your check-in")
+    st.success("Your responses have been received and are ready to be shared with your doctor.")
 
-    with st.expander("Doctor summary", expanded=True):
+    st.subheader("Summary")
+    with st.container(border=True):
         st.write(st.session_state.doctor_summary or "Summary is being prepared.")
 
 
@@ -327,12 +330,11 @@ def main() -> None:
         add_assistant_message(opening_message)
         st.session_state.started = True
 
-    render_chat_history()
-
     if st.session_state.is_complete:
         render_completion_banner()
-        st.chat_input("Check-in is complete.", disabled=True)
         return
+
+    render_chat_history()
 
     patient_input = st.chat_input("Type your response...")
 
@@ -352,9 +354,11 @@ def main() -> None:
                 )
 
             assistant_reply = result["reply"]
-            st.write(assistant_reply)
+            if not result["is_complete"]:
+                st.write(assistant_reply)
 
-        add_assistant_message(assistant_reply)
+        if not result["is_complete"]:
+            add_assistant_message(assistant_reply)
 
         st.session_state.is_complete = result["is_complete"]
         st.session_state.doctor_summary = result["doctor_summary"]
