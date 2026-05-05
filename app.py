@@ -290,7 +290,7 @@ def main() -> None:
 
         model = st.selectbox(
             "OpenAI model",
-            options=["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini"],
+            options=["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1"],
             index=0,
         )
 
