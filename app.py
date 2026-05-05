@@ -44,11 +44,11 @@ Conversational Behavior Rules:
 Clinical Topics To Cover:
 1. Pain
 If pain is reported:
-- Location
+- Location (if the patient did not already mention the location of pain)
 - Severity
 - Onset
 - Timing: constant vs intermittent
-- Medications, with common options if patient is unsure
+- Medications (please provide some options for patient ahead)
 - Medication effectiveness
 - Medication side effects such as constipation
 - Factors that improve or worsen pain
