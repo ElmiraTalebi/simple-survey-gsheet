@@ -190,6 +190,7 @@ def get_nurse_response(
         model=model,
         messages=build_messages(chat_history, prior_history),
         temperature=0.4,
+        response_format={"type": "json_object"},
     )
 
     raw_content = response.choices[0].message.content or ""
@@ -197,11 +198,24 @@ def get_nurse_response(
     try:
         parsed = json.loads(raw_content)
     except json.JSONDecodeError:
-        parsed = {
-            "reply": raw_content,
-            "is_complete": False,
-            "doctor_summary": "",
-        }
+        json_start = raw_content.find("{")
+        json_end = raw_content.rfind("}")
+
+        if json_start != -1 and json_end != -1 and json_end > json_start:
+            try:
+                parsed = json.loads(raw_content[json_start:json_end + 1])
+            except json.JSONDecodeError:
+                parsed = {
+                    "reply": "I’m sorry, I had trouble formatting that response. Could you please repeat that?",
+                    "is_complete": False,
+                    "doctor_summary": "",
+                }
+        else:
+            parsed = {
+                "reply": raw_content,
+                "is_complete": False,
+                "doctor_summary": "",
+            }
 
     return {
         "reply": parsed.get("reply", "").strip(),
