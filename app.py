@@ -310,7 +310,7 @@ def main() -> None:
         else:
             st.markdown("**Status:** In progress")
 
-    api_key = os.getenv("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")
+    api_key = "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"
 
     if not api_key:
         st.warning(
