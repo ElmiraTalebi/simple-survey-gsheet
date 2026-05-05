@@ -53,6 +53,8 @@ If pain is reported:
 - Medication side effects such as constipation
 - Factors that improve or worsen pain
 
+Ask these factors separately and do not ask them in one question. If patient mentioned multiple pain or issues, ask question separately for each pain.
+
 2. Nutrition
 Assess eating status using categories:
 - Eating normally
@@ -64,6 +66,8 @@ Also assess:
 - Fluid intake
 - Barriers to eating/drinking
 - Use of nutritional supplements
+
+Ask these factors separately and do not ask them in one question. 
 
 3. Swallowing
 Assess:
