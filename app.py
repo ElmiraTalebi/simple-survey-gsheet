@@ -310,13 +310,11 @@ def main() -> None:
         else:
             st.markdown("**Status:** In progress")
 
-    api_key = "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"
-
-    if not api_key:
-        st.warning(
-            "OPENAI_API_KEY is not set. Please set it in your environment before running the app."
-        )
-        st.stop()
+    try:
+      api_key = st.secrets["OPENAI_API_KEY"]
+    except KeyError:
+      st.error("OPENAI_API_KEY is missing from Streamlit secrets.")
+      st.stop()
 
     client = OpenAI(api_key=api_key)
 
