@@ -332,6 +332,12 @@ def main() -> None:
         else:
             st.markdown("**Status:** In progress")
 
+        raw_tab = st.tabs(["Raw GPT response"])[0]
+        with raw_tab:
+            raw_response_placeholder = st.empty()
+            with raw_response_placeholder.container():
+                render_raw_responses()
+
     try:
       api_key = st.secrets["OPENAI_API_KEY"]
     except KeyError:
@@ -345,52 +351,48 @@ def main() -> None:
         add_assistant_message(opening_message)
         st.session_state.started = True
 
-    chat_tab, raw_tab = st.tabs(["Chat", "Raw GPT response"])
-
     if st.session_state.is_complete:
-        with chat_tab:
-            render_completion_banner()
-        with raw_tab:
+        render_completion_banner()
+        with raw_response_placeholder.container():
             render_raw_responses()
         return
 
-    with raw_tab:
-        render_raw_responses()
+    render_chat_history()
 
-    with chat_tab:
-        render_chat_history()
+    patient_input = st.chat_input("Type your response...")
 
-        patient_input = st.chat_input("Type your response...")
+    if patient_input:
+        add_user_message(patient_input)
 
-        if patient_input:
-            add_user_message(patient_input)
+        with st.chat_message("user"):
+            st.write(patient_input)
 
-            with st.chat_message("user"):
-                st.write(patient_input)
+        with st.chat_message("assistant"):
+            with st.spinner("Nurse assistant is reviewing your response..."):
+                result = get_nurse_response(
+                    client=client,
+                    chat_history=st.session_state.messages,
+                    prior_history=prior_history,
+                    model=model,
+                )
 
-            with st.chat_message("assistant"):
-                with st.spinner("Nurse assistant is reviewing your response..."):
-                    result = get_nurse_response(
-                        client=client,
-                        chat_history=st.session_state.messages,
-                        prior_history=prior_history,
-                        model=model,
-                    )
-
-                assistant_reply = result["reply"]
-                if not result["is_complete"]:
-                    st.write(assistant_reply)
-
-            st.session_state.raw_responses.append(result["raw_response"])
-
+            assistant_reply = result["reply"]
             if not result["is_complete"]:
-                add_assistant_message(assistant_reply)
+                st.write(assistant_reply)
 
-            st.session_state.is_complete = result["is_complete"]
-            st.session_state.doctor_summary = result["doctor_summary"]
+        st.session_state.raw_responses.append(result["raw_response"])
 
-            if st.session_state.is_complete:
-                st.rerun()
+        with raw_response_placeholder.container():
+            render_raw_responses()
+
+        if not result["is_complete"]:
+            add_assistant_message(assistant_reply)
+
+        st.session_state.is_complete = result["is_complete"]
+        st.session_state.doctor_summary = result["doctor_summary"]
+
+        if st.session_state.is_complete:
+            st.rerun()
 
 
 if __name__ == "__main__":
