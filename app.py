@@ -207,6 +207,7 @@ def get_nurse_response(
         "reply": parsed.get("reply", "").strip(),
         "is_complete": bool(parsed.get("is_complete", False)),
         "doctor_summary": parsed.get("doctor_summary", "").strip(),
+        "raw_response": raw_content.strip(),
     }
 
 
@@ -227,12 +228,16 @@ def initialize_state() -> None:
     if "started" not in st.session_state:
         st.session_state.started = False
 
+    if "raw_responses" not in st.session_state:
+        st.session_state.raw_responses = []
+
 
 def reset_chat() -> None:
     st.session_state.messages = []
     st.session_state.is_complete = False
     st.session_state.doctor_summary = ""
     st.session_state.started = False
+    st.session_state.raw_responses = []
 
 
 def render_completion_banner() -> None:
@@ -252,6 +257,16 @@ def render_chat_history() -> None:
         elif message["role"] == "user":
             with st.chat_message("user"):
                 st.write(message["content"])
+
+
+def render_raw_responses() -> None:
+    if not st.session_state.raw_responses:
+        st.info("No GPT responses yet.")
+        return
+
+    for index, raw_response in enumerate(st.session_state.raw_responses, start=1):
+        st.markdown(f"**Step {index}**")
+        st.code(raw_response, language="json")
 
 
 def add_assistant_message(content: str) -> None:
@@ -330,41 +345,52 @@ def main() -> None:
         add_assistant_message(opening_message)
         st.session_state.started = True
 
+    chat_tab, raw_tab = st.tabs(["Chat", "Raw GPT response"])
+
     if st.session_state.is_complete:
-        render_completion_banner()
+        with chat_tab:
+            render_completion_banner()
+        with raw_tab:
+            render_raw_responses()
         return
 
-    render_chat_history()
+    with raw_tab:
+        render_raw_responses()
 
-    patient_input = st.chat_input("Type your response...")
+    with chat_tab:
+        render_chat_history()
 
-    if patient_input:
-        add_user_message(patient_input)
+        patient_input = st.chat_input("Type your response...")
 
-        with st.chat_message("user"):
-            st.write(patient_input)
+        if patient_input:
+            add_user_message(patient_input)
 
-        with st.chat_message("assistant"):
-            with st.spinner("Nurse assistant is reviewing your response..."):
-                result = get_nurse_response(
-                    client=client,
-                    chat_history=st.session_state.messages,
-                    prior_history=prior_history,
-                    model=model,
-                )
+            with st.chat_message("user"):
+                st.write(patient_input)
 
-            assistant_reply = result["reply"]
+            with st.chat_message("assistant"):
+                with st.spinner("Nurse assistant is reviewing your response..."):
+                    result = get_nurse_response(
+                        client=client,
+                        chat_history=st.session_state.messages,
+                        prior_history=prior_history,
+                        model=model,
+                    )
+
+                assistant_reply = result["reply"]
+                if not result["is_complete"]:
+                    st.write(assistant_reply)
+
+            st.session_state.raw_responses.append(result["raw_response"])
+
             if not result["is_complete"]:
-                st.write(assistant_reply)
+                add_assistant_message(assistant_reply)
 
-        if not result["is_complete"]:
-            add_assistant_message(assistant_reply)
+            st.session_state.is_complete = result["is_complete"]
+            st.session_state.doctor_summary = result["doctor_summary"]
 
-        st.session_state.is_complete = result["is_complete"]
-        st.session_state.doctor_summary = result["doctor_summary"]
-
-        if st.session_state.is_complete:
-            st.rerun()
+            if st.session_state.is_complete:
+                st.rerun()
 
 
 if __name__ == "__main__":
