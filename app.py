@@ -211,6 +211,7 @@ def get_nurse_response(
         "reply": parsed.get("reply", "").strip(),
         "is_complete": bool(parsed.get("is_complete", False)),
         "doctor_summary": parsed.get("doctor_summary", "").strip(),
+        "topic": parsed.get("topic", "").strip(),
         "raw_response": raw_content.strip(),
     }
 
@@ -235,6 +236,9 @@ def initialize_state() -> None:
     if "raw_responses" not in st.session_state:
         st.session_state.raw_responses = []
 
+    if "current_topic" not in st.session_state:
+        st.session_state.current_topic = ""
+
 
 def reset_chat() -> None:
     st.session_state.messages = []
@@ -242,6 +246,56 @@ def reset_chat() -> None:
     st.session_state.doctor_summary = ""
     st.session_state.started = False
     st.session_state.raw_responses = []
+    st.session_state.current_topic = ""
+
+
+def render_topic_boxes() -> None:
+    topics = [
+        "Pain",
+        "Nutrition",
+        "Swallowing",
+        "Feeding Tube",
+        "Oral Symptoms",
+        "GI Symptoms",
+        "Fatigue & Sleep",
+        "Activity & Independence",
+        "Mood & Support",
+    ]
+
+    topic_boxes = "".join(
+        f'<div class="topic-box {"topic-active" if topic == st.session_state.current_topic else ""}">{topic}</div>'
+        for topic in topics
+    )
+
+    st.markdown(
+        f"""
+        <style>
+            .topic-grid {{
+                display: grid;
+                grid-template-columns: repeat(3, minmax(0, 1fr));
+                gap: 0.5rem;
+                margin: 1rem 0 1.25rem 0;
+            }}
+            .topic-box {{
+                border: 1px solid rgba(49, 51, 63, 0.18);
+                border-radius: 0.45rem;
+                padding: 0.55rem 0.65rem;
+                text-align: center;
+                font-size: 0.86rem;
+                font-weight: 600;
+                background: rgba(250, 250, 250, 0.78);
+            }}
+            .topic-active {{
+                border-color: #f59e0b;
+                background: #fff7ed;
+                color: #9a3412;
+                box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.18);
+            }}
+        </style>
+        <div class="topic-grid">{topic_boxes}</div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def render_completion_banner() -> None:
@@ -306,6 +360,9 @@ def main() -> None:
 
     st.title("Nurse Assistant Check-In")
     st.caption("A conversational pre-visit check-in for head and neck cancer care.")
+    topic_boxes_placeholder = st.empty()
+    with topic_boxes_placeholder.container():
+        render_topic_boxes()
 
     with st.sidebar:
         st.header("Settings")
@@ -385,6 +442,10 @@ def main() -> None:
                 st.write(assistant_reply)
 
         st.session_state.raw_responses.append(result["raw_response"])
+        st.session_state.current_topic = result["topic"]
+
+        with topic_boxes_placeholder.container():
+            render_topic_boxes()
 
         with raw_response_placeholder.container():
             render_raw_responses()
