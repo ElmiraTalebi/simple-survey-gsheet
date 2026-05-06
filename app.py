@@ -239,6 +239,9 @@ def initialize_state() -> None:
     if "current_topic" not in st.session_state:
         st.session_state.current_topic = ""
 
+    if "completed_topics" not in st.session_state:
+        st.session_state.completed_topics = []
+
 
 def reset_chat() -> None:
     st.session_state.messages = []
@@ -247,6 +250,7 @@ def reset_chat() -> None:
     st.session_state.started = False
     st.session_state.raw_responses = []
     st.session_state.current_topic = ""
+    st.session_state.completed_topics = []
 
 
 def render_topic_boxes() -> None:
@@ -262,10 +266,14 @@ def render_topic_boxes() -> None:
         "Mood & Support",
     ]
 
-    topic_boxes = "".join(
-        f'<div class="topic-box {"topic-active" if topic == st.session_state.current_topic else ""}">{topic}</div>'
-        for topic in topics
-    )
+    topic_boxes = ""
+    for topic in topics:
+        topic_classes = ["topic-box"]
+        if topic in st.session_state.completed_topics:
+            topic_classes.append("topic-complete")
+        if topic == st.session_state.current_topic:
+            topic_classes.append("topic-active")
+        topic_boxes += f'<div class="{" ".join(topic_classes)}">{topic}</div>'
 
     st.markdown(
         f"""
@@ -284,6 +292,11 @@ def render_topic_boxes() -> None:
                 font-size: 0.86rem;
                 font-weight: 600;
                 background: rgba(250, 250, 250, 0.78);
+            }}
+            .topic-complete {{
+                border-color: #16a34a;
+                background: #f0fdf4;
+                color: #166534;
             }}
             .topic-active {{
                 border-color: #f59e0b;
@@ -437,6 +450,12 @@ def main() -> None:
                 st.write(assistant_reply)
 
         st.session_state.raw_responses.append(result["raw_response"])
+        if (
+            st.session_state.current_topic
+            and st.session_state.current_topic != result["topic"]
+            and st.session_state.current_topic not in st.session_state.completed_topics
+        ):
+            st.session_state.completed_topics.append(st.session_state.current_topic)
         st.session_state.current_topic = result["topic"]
 
         with topic_boxes_placeholder.container():
