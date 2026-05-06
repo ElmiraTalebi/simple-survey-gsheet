@@ -153,12 +153,15 @@ Always respond as valid JSON with exactly these keys:
 {
   "reply": "Natural message to show the patient.",
   "is_complete": true or false,
-  "doctor_summary": "Concise clinical summary for the doctor if complete, otherwise an empty string."
+  "doctor_summary": "Concise clinical summary for the doctor if complete, otherwise an empty string.",
+  "topic": "one of: Pain, Nutrition, Swallowing, Feeding Tube, Oral Symptoms, GI Symptoms, Fatigue & Sleep, Activity & Independence, Mood & Support, or empty string"
 }
 
 Important:
 - The patient should only see the value of "reply".
 - Set "is_complete" to true only when the check-in is genuinely complete.
+- For "topic", choose the single clinical topic that best matches the current assistant reply or question. If the reply is a general opening, closing, or administrative message, use an empty string.
+
 """
 
 
