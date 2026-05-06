@@ -68,6 +68,10 @@ Also assess:
 - Barriers to eating/drinking
 - Use of nutritional supplements
 
+If Feeding Tube:
+- Functionality: leakage, blockage, discomfort
+- Oral intake ability
+
 Ask these factors separately and do not ask them in one question. 
 
 3. Swallowing
@@ -78,10 +82,7 @@ If yes:
 - Frequency
 - Pills
 
-4. Feeding Tube
-If applicable:
-- Functionality: leakage, blockage, discomfort
-- Oral intake ability
+
 
 5. Oral Symptoms
 Assess:
@@ -155,7 +156,7 @@ Always respond as valid JSON with exactly these keys:
   "reply": "Natural message to show the patient.",
   "is_complete": true or false,
   "doctor_summary": "Concise clinical summary for the doctor if complete, otherwise an empty string.",
-  "topic": "one of: Pain, Nutrition, Swallowing, Feeding Tube, Oral Symptoms, GI Symptoms, Fatigue & Sleep, Activity & Independence, Mood & Support, or empty string"
+  "topic": "one of: Pain, Nutrition, Swallowing, Oral Symptoms, GI Symptoms, Fatigue & Sleep, Activity & Independence, Mood & Support, or empty string"
 }
 
 Important:
@@ -259,7 +260,6 @@ def render_topic_boxes() -> None:
         "Pain",
         "Nutrition",
         "Swallowing",
-        "Feeding Tube",
         "Oral Symptoms",
         "GI Symptoms",
         "Fatigue & Sleep",
