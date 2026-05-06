@@ -272,9 +272,9 @@ def render_topic_boxes() -> None:
         <style>
             .topic-grid {{
                 display: grid;
-                grid-template-columns: repeat(3, minmax(0, 1fr));
+                grid-template-columns: 1fr;
                 gap: 0.5rem;
-                margin: 1rem 0 1.25rem 0;
+                margin: 0.75rem 0 1.25rem 0;
             }}
             .topic-box {{
                 border: 1px solid rgba(49, 51, 63, 0.18);
@@ -360,9 +360,6 @@ def main() -> None:
 
     st.title("Nurse Assistant Check-In")
     st.caption("A conversational pre-visit check-in for head and neck cancer care.")
-    topic_boxes_placeholder = st.empty()
-    with topic_boxes_placeholder.container():
-        render_topic_boxes()
 
     with st.sidebar:
         st.header("Settings")
@@ -393,11 +390,11 @@ def main() -> None:
         else:
             st.markdown("**Status:** In progress")
 
-        raw_tab = st.tabs(["Raw GPT response"])[0]
-        with raw_tab:
-            raw_response_placeholder = st.empty()
-            with raw_response_placeholder.container():
-                render_raw_responses()
+        st.divider()
+        st.markdown("**Clinical Topics To Cover**")
+        topic_boxes_placeholder = st.empty()
+        with topic_boxes_placeholder.container():
+            render_topic_boxes()
 
     try:
       api_key = st.secrets["OPENAI_API_KEY"]
@@ -414,8 +411,6 @@ def main() -> None:
 
     if st.session_state.is_complete:
         render_completion_banner()
-        with raw_response_placeholder.container():
-            render_raw_responses()
         return
 
     render_chat_history()
@@ -446,9 +441,6 @@ def main() -> None:
 
         with topic_boxes_placeholder.container():
             render_topic_boxes()
-
-        with raw_response_placeholder.container():
-            render_raw_responses()
 
         if not result["is_complete"]:
             add_assistant_message(assistant_reply)
