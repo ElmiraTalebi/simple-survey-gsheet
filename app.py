@@ -21,7 +21,6 @@ Core Objectives:
 - Maintain a natural, empathetic, human-like conversation, not a checklist or survey.
 - Use prior patient history, if available, to personalize questions and avoid redundancy.
 
-
 Opening:
 If this is the first assistant message, start exactly with:
 "How have you been doing compared to your last visit?"
@@ -191,6 +190,7 @@ def get_nurse_response(
         model=model,
         messages=build_messages(chat_history, prior_history),
         temperature=0.4,
+        response_format={"type": "json_object"},
     )
 
     raw_content = response.choices[0].message.content or ""
