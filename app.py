@@ -167,6 +167,78 @@ Important:
 """
 
 
+SUMMARY_SYSTEM_PROMPT = """
+Role:
+You are an expert clinical summarization assistant specializing in head and neck cancer. Your job is to produce a concise, doctor-facing pre-visit summary based on a conversational check-in already conducted between a patient and a nurse assistant.
+
+Context:
+- The check-in covers some or all of these topics: Pain, Nutrition, Swallowing, Oral Symptoms, GI Symptoms, Fatigue & Sleep, Activity & Independence, Mood & Support.
+- The full chat transcript (assistant questions and patient answers) will be provided.
+- Prior patient history from a previous visit may also be provided. It may be missing.
+- The doctor has only a few minutes to review this summary before the visit, so clarity and brevity are critical.
+
+Instructions:
+
+1. Summarize only what the patient actually reported in the transcript. Do not invent, assume, or infer information that was not stated.
+
+2. Present information the way clinicians are used to reading it: lead with red flags and key changes, use clinical shorthand where appropriate (severity, frequency, duration, location), and avoid conversational filler.
+
+3. If prior patient history is provided, explicitly compare current findings to it (e.g., "improved since last visit," "new since last visit," "unchanged," "worsened"). If no prior history is provided, do not fabricate comparisons.
+
+4. For each topic, produce two summaries:
+   - "Main issues": a 1-3 line top-line for fast review. Include only red flags, significant symptoms, notable changes, and safety concerns. If the patient explicitly denied symptoms for the topic, write "No issues reported." If the topic was never covered in the chat, use an empty string.
+   - "more details": a fuller but still concise breakdown. Include any of the following that apply: severity, location, onset, timing (constant vs intermittent), frequency, medications and their effectiveness, side effects, aggravating and alleviating factors, and functional impact. Use short labeled lines or bullets, not long paragraphs.
+
+5. Always elevate the following to "Main issues" when present: unintentional weight loss, dehydration, choking on liquids, bleeding (including blood when coughing), severe or worsening pain, inability to take medications, severe emotional distress or suicidal ideation, feeding tube malfunction, and inability to perform basic daily activities.
+
+6. Use the "Other" fields to capture clinically relevant content the patient raised that does not map to the eight topics (e.g., new symptoms outside scope, social or caregiving issues affecting care, specific questions the patient wants to ask the doctor). Leave empty if nothing applies.
+
+7. Tone: neutral, factual, clinical. Do not reassure the patient, editorialize, or offer recommendations or treatment plans - just report what was said.
+
+Response Format:
+Always respond as valid JSON with exactly these keys, and no text outside the JSON object:
+{
+  "Pain_Main issues": "",
+  "Pain_more details": "",
+  "Nutrition_Main issues": "",
+  "Nutrition_more details": "",
+  "Swallowing_Main issues": "",
+  "Swallowing_more details": "",
+  "Oral Symptoms_Main issues": "",
+  "Oral Symptoms_more details": "",
+  "GI Symptoms_Main issues": "",
+  "GI Symptoms_more details": "",
+  "Fatigue & Sleep_Main issues": "",
+  "Fatigue & Sleep_more details": "",
+  "Activity & Independence_Main issues": "",
+  "Activity & Independence_more details": "",
+  "Mood & Support_Main issues": "",
+  "Mood & Support_more details": "",
+  "Other_Main issues": "",
+  "Other_more details": ""
+}
+
+Rules:
+- Every key listed above must be present in your response.
+- Use an empty string for any topic with no relevant information.
+- Output must be valid JSON with no commentary, markdown, or text outside the object.
+"""
+
+
+CHAT_TOPICS = [
+    "Pain",
+    "Nutrition",
+    "Swallowing",
+    "Oral Symptoms",
+    "GI Symptoms",
+    "Fatigue & Sleep",
+    "Activity & Independence",
+    "Mood & Support",
+]
+
+SUMMARY_TOPICS = CHAT_TOPICS + ["Other"]
+
+
 def build_messages(
     chat_history: List[Dict[str, str]],
     prior_history: str = "",
@@ -218,6 +290,56 @@ def get_nurse_response(
     }
 
 
+def get_doctor_summary(
+    client: OpenAI,
+    chat_history: List[Dict[str, str]],
+    prior_history: str,
+    model: str,
+) -> Dict[str, str]:
+    """Run the summarizer agent and return a dict with all 18 topic keys."""
+
+    transcript_lines: List[str] = []
+    for msg in chat_history:
+        role_label = "Nurse Assistant" if msg["role"] == "assistant" else "Patient"
+        transcript_lines.append(f"{role_label}: {msg['content']}")
+    transcript = "\n".join(transcript_lines) if transcript_lines else "(empty transcript)"
+
+    user_content = (
+        f"Chat transcript between nurse assistant and patient:\n\n{transcript}"
+    )
+    if prior_history.strip():
+        user_content += f"\n\nPrior patient history:\n{prior_history.strip()}"
+    else:
+        user_content += "\n\nPrior patient history: (none provided)"
+
+    response = client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": SUMMARY_SYSTEM_PROMPT},
+            {"role": "user", "content": user_content},
+        ],
+        temperature=0.2,
+        response_format={"type": "json_object"},
+    )
+
+    raw_content = response.choices[0].message.content or ""
+
+    try:
+        parsed = json.loads(raw_content)
+    except json.JSONDecodeError:
+        parsed = {}
+
+    result: Dict[str, str] = {}
+    for topic in SUMMARY_TOPICS:
+        for suffix in ["Main issues", "more details"]:
+            key = f"{topic}_{suffix}"
+            value = parsed.get(key, "")
+            if not isinstance(value, str):
+                value = ""
+            result[key] = value.strip()
+    return result
+
+
 # =========================
 # UI Helpers
 # =========================
@@ -244,6 +366,15 @@ def initialize_state() -> None:
     if "completed_topics" not in st.session_state:
         st.session_state.completed_topics = []
 
+    if "view" not in st.session_state:
+        st.session_state.view = "patient"
+
+    if "doctor_summary_structured" not in st.session_state:
+        st.session_state.doctor_summary_structured = {}
+
+    if "summary_generated" not in st.session_state:
+        st.session_state.summary_generated = False
+
 
 def reset_chat() -> None:
     st.session_state.messages = []
@@ -253,22 +384,14 @@ def reset_chat() -> None:
     st.session_state.raw_responses = []
     st.session_state.current_topic = ""
     st.session_state.completed_topics = []
+    st.session_state.view = "patient"
+    st.session_state.doctor_summary_structured = {}
+    st.session_state.summary_generated = False
 
 
 def render_topic_boxes() -> None:
-    topics = [
-        "Pain",
-        "Nutrition",
-        "Swallowing",
-        "Oral Symptoms",
-        "GI Symptoms",
-        "Fatigue & Sleep",
-        "Activity & Independence",
-        "Mood & Support",
-    ]
-
     topic_boxes = ""
-    for topic in topics:
+    for topic in CHAT_TOPICS:
         topic_classes = ["topic-box"]
         if topic in st.session_state.completed_topics:
             topic_classes.append("topic-complete")
@@ -314,11 +437,11 @@ def render_topic_boxes() -> None:
 
 def render_completion_banner() -> None:
     st.title("Thank you for submitting your check-in")
-    st.success("Your responses have been received and are ready to be shared with your doctor.")
-
-    st.subheader("Summary")
-    with st.container(border=True):
-        st.write(st.session_state.doctor_summary or "Summary is being prepared.")
+    st.success("Your responses have been received and will be shared with your doctor.")
+    st.caption(
+        "Your check-in is complete. The doctor's summary has been prepared and is "
+        "available to your care team."
+    )
 
 
 def render_chat_history() -> None:
@@ -339,6 +462,72 @@ def render_raw_responses() -> None:
     for index, raw_response in enumerate(st.session_state.raw_responses, start=1):
         st.markdown(f"**Step {index}**")
         st.code(raw_response, language="json")
+
+
+def render_topic_card(topic: str, main_issues: str, more_details: str) -> None:
+    """Render one card per topic. Muted styling when topic was not discussed."""
+    main_text = main_issues.strip()
+    detail_text = more_details.strip()
+    is_muted = not (main_text or detail_text)
+
+    with st.container(border=True):
+        if is_muted:
+            st.markdown(
+                f"""
+                <div style="opacity: 0.5;">
+                    <div style="font-size: 1.05rem; font-weight: 600;">{topic}</div>
+                    <div style="font-style: italic; font-size: 0.88rem; margin-top: 0.15rem;">
+                        Not discussed in this check-in
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(f"#### {topic}")
+            if main_text:
+                st.write(main_text)
+            else:
+                st.caption("No main issues reported.")
+            if detail_text:
+                with st.expander("More details"):
+                    st.write(detail_text)
+
+
+def render_doctor_summary_page() -> None:
+    st.title("Doctor Summary")
+    st.caption(
+        "Pre-visit check-in summary for head and neck cancer patient. "
+        "Cards are listed in clinical-topic order; topics that were not discussed are muted."
+    )
+
+    if not st.session_state.summary_generated:
+        st.info(
+            "The doctor summary will be available once the patient completes the check-in."
+        )
+        return
+
+    summary = st.session_state.doctor_summary_structured
+    if not summary:
+        st.warning("No summary available. Try regenerating from the patient view.")
+        return
+
+    discussed_count = sum(
+        1
+        for topic in SUMMARY_TOPICS
+        if summary.get(f"{topic}_Main issues", "").strip()
+        or summary.get(f"{topic}_more details", "").strip()
+    )
+    st.caption(
+        f"{discussed_count} of {len(SUMMARY_TOPICS)} topics with reported information."
+    )
+
+    st.write("")  # small spacer
+
+    for topic in SUMMARY_TOPICS:
+        main_issues = summary.get(f"{topic}_Main issues", "")
+        more_details = summary.get(f"{topic}_more details", "")
+        render_topic_card(topic, main_issues, more_details)
 
 
 def add_assistant_message(content: str) -> None:
@@ -372,10 +561,17 @@ def main() -> None:
 
     initialize_state()
 
-    st.title("Nurse Assistant Check-In")
-    st.caption("A conversational pre-visit check-in for head and neck cancer care.")
-
     with st.sidebar:
+        st.header("Navigation")
+        view_options = ["Patient check-in", "Doctor summary"]
+        view_index = 0 if st.session_state.view == "patient" else 1
+        view_choice = st.radio("View", view_options, index=view_index)
+        st.session_state.view = (
+            "patient" if view_choice == view_options[0] else "doctor"
+        )
+
+        st.divider()
+
         st.header("Settings")
 
         model = "gpt-4.1"
@@ -393,6 +589,11 @@ def main() -> None:
             reset_chat()
             st.rerun()
 
+        if st.session_state.is_complete and st.session_state.summary_generated:
+            if st.button("Regenerate doctor summary", use_container_width=True):
+                st.session_state.summary_generated = False
+                st.rerun()
+
         st.divider()
 
         if st.session_state.is_complete:
@@ -407,12 +608,38 @@ def main() -> None:
             render_topic_boxes()
 
     try:
-      api_key = st.secrets["OPENAI_API_KEY"]
+        api_key = st.secrets["OPENAI_API_KEY"]
     except KeyError:
-      st.error("OPENAI_API_KEY is missing from Streamlit secrets.")
-      st.stop()
+        st.error("OPENAI_API_KEY is missing from Streamlit secrets.")
+        st.stop()
 
     client = OpenAI(api_key=api_key)
+
+    # Generate the doctor summary exactly once after the chat completes.
+    if st.session_state.is_complete and not st.session_state.summary_generated:
+        with st.spinner("Preparing doctor summary..."):
+            try:
+                structured = get_doctor_summary(
+                    client=client,
+                    chat_history=st.session_state.messages,
+                    prior_history=prior_history,
+                    model=model,
+                )
+                st.session_state.doctor_summary_structured = structured
+            except Exception as exc:  # surface the error but don't crash the app
+                st.warning(f"Could not generate doctor summary: {exc}")
+                st.session_state.doctor_summary_structured = {}
+            st.session_state.summary_generated = True
+        st.rerun()
+
+    # Route to the doctor view if selected.
+    if st.session_state.view == "doctor":
+        render_doctor_summary_page()
+        return
+
+    # ---- Patient view ----
+    st.title("Nurse Assistant Check-In")
+    st.caption("A conversational pre-visit check-in for head and neck cancer care.")
 
     if not st.session_state.started:
         opening_message = "How have you been doing compared to your last visit?"
