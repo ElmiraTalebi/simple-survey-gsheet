@@ -595,6 +595,11 @@ def render_topic_card(
 
 
 def render_doctor_summary_page() -> None:
+    st.markdown(
+        '<div style="color:#16a34a; font-size:0.85rem; font-weight:600; '
+        'margin-bottom:0.3rem;">&#10003; Check-in submitted successfully</div>',
+        unsafe_allow_html=True,
+    )
     st.title("Doctor Summary")
     st.caption(
         "Pre-visit check-in summary for head and neck cancer patient. "
@@ -609,8 +614,26 @@ def render_doctor_summary_page() -> None:
 
     summary = st.session_state.doctor_summary_structured
     if not summary:
-        st.warning("No summary available. Try regenerating from the patient view.")
+        st.warning(
+            "No summary available. Try clicking 'Regenerate doctor summary' in the sidebar."
+        )
         return
+
+    if st.session_state.doctor_summary:
+        overall_html = _basic_md_to_html(st.session_state.doctor_summary)
+        st.markdown(
+            '<div style="border:1.5px solid rgba(49,51,63,0.3); '
+            "background:#f8fafc; padding:0.9rem 1.1rem; "
+            "margin:0.75rem 0 1.1rem 0; border-radius:0.5rem; "
+            'border-left:4px solid #475569;">'
+            '<div style="font-size:0.75rem; font-weight:700; '
+            "letter-spacing:0.06em; color:rgba(49,51,63,0.65); "
+            'margin-bottom:0.45rem; text-transform:uppercase;">'
+            "Overall Summary</div>"
+            f'<div style="font-size:0.95rem; line-height:1.55;">{overall_html}</div>'
+            "</div>",
+            unsafe_allow_html=True,
+        )
 
     discussed_count = sum(
         1
@@ -741,6 +764,14 @@ def main() -> None:
             st.session_state.summary_generated = True
         st.rerun()
 
+    # ---- Routing: doctor summary page after submission, otherwise patient chat ----
+    if st.session_state.is_complete:
+        if st.session_state.summary_generated:
+            render_doctor_summary_page()
+        else:
+            st.info("Preparing your doctor summary...")
+        return
+
     # ---- Patient view ----
     st.title("Nurse Assistant Check-In")
     st.caption("A conversational pre-visit check-in for head and neck cancer care.")
@@ -749,14 +780,6 @@ def main() -> None:
         opening_message = "How have you been doing compared to your last visit?"
         add_assistant_message(opening_message)
         st.session_state.started = True
-
-    if st.session_state.is_complete:
-        render_chat_history()
-        render_completion_banner()
-        if st.session_state.summary_generated:
-            st.divider()
-            render_doctor_summary_page()
-        return
 
     render_chat_history()
 
