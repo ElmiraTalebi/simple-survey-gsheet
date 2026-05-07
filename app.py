@@ -601,10 +601,10 @@ def render_doctor_summary_page() -> None:
         unsafe_allow_html=True,
     )
     st.title("Doctor Summary")
-    st.caption(
-        "Pre-visit check-in summary for head and neck cancer patient. "
-        "Cards are listed in clinical-topic order; topics that were not discussed are muted."
-    )
+    # st.caption(
+    #     "Pre-visit check-in summary for head and neck cancer patient. "
+    #     "Cards are listed in clinical-topic order; topics that were not discussed are muted."
+    # )
 
     if not st.session_state.summary_generated:
         st.info(
