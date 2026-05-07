@@ -126,7 +126,7 @@ Assess:
 
 
 Use of Patient History Rule:
-- While chatting with the patient and gathering information, you may also have access to the patient’s history from previous visits. You must appropriately bring up all the past issues and ask whether they have resolved, improved, worsened, or stayed the same. However, the conversation should remain natural and human-like.
+- If prior patient history is provided, you must appropriately bring up all the past issues and ask whether they have resolved, improved, worsened, or stayed the same. However, the conversation should remain natural and human-like.
 
 Efficiency Rules:
 Avoid asking:
