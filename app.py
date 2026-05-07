@@ -366,9 +366,6 @@ def initialize_state() -> None:
     if "completed_topics" not in st.session_state:
         st.session_state.completed_topics = []
 
-    if "view" not in st.session_state:
-        st.session_state.view = "patient"
-
     if "doctor_summary_structured" not in st.session_state:
         st.session_state.doctor_summary_structured = {}
 
@@ -384,7 +381,6 @@ def reset_chat() -> None:
     st.session_state.raw_responses = []
     st.session_state.current_topic = ""
     st.session_state.completed_topics = []
-    st.session_state.view = "patient"
     st.session_state.doctor_summary_structured = {}
     st.session_state.summary_generated = False
 
@@ -562,16 +558,6 @@ def main() -> None:
     initialize_state()
 
     with st.sidebar:
-        st.header("Navigation")
-        view_options = ["Patient check-in", "Doctor summary"]
-        view_index = 0 if st.session_state.view == "patient" else 1
-        view_choice = st.radio("View", view_options, index=view_index)
-        st.session_state.view = (
-            "patient" if view_choice == view_options[0] else "doctor"
-        )
-
-        st.divider()
-
         st.header("Settings")
 
         model = "gpt-4.1"
@@ -632,11 +618,6 @@ def main() -> None:
             st.session_state.summary_generated = True
         st.rerun()
 
-    # Route to the doctor view if selected.
-    if st.session_state.view == "doctor":
-        render_doctor_summary_page()
-        return
-
     # ---- Patient view ----
     st.title("Nurse Assistant Check-In")
     st.caption("A conversational pre-visit check-in for head and neck cancer care.")
@@ -648,6 +629,9 @@ def main() -> None:
 
     if st.session_state.is_complete:
         render_completion_banner()
+        if st.session_state.summary_generated:
+            st.divider()
+            render_doctor_summary_page()
         return
 
     render_chat_history()
