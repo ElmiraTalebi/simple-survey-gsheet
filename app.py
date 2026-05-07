@@ -679,6 +679,13 @@ def main() -> None:
     initialize_state()
 
     with st.sidebar:
+        st.markdown("**Clinical Topics To Cover**")
+        topic_boxes_placeholder = st.empty()
+        with topic_boxes_placeholder.container():
+            render_topic_boxes()
+
+        st.divider()
+
         st.header("Settings")
 
         model = "gpt-4.1"
@@ -707,12 +714,6 @@ def main() -> None:
             st.markdown("**Status:** Complete")
         else:
             st.markdown("**Status:** In progress")
-
-        st.divider()
-        st.markdown("**Clinical Topics To Cover**")
-        topic_boxes_placeholder = st.empty()
-        with topic_boxes_placeholder.container():
-            render_topic_boxes()
 
     try:
         api_key = st.secrets["OPENAI_API_KEY"]
