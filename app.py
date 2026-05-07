@@ -1,4 +1,4 @@
-import json
+pimport json
 import os
 import html
 import re
@@ -122,10 +122,7 @@ Assess:
 - Social support system
 
 Use of Patient History:
-If prior patient history is provided:
-- Reference it naturally, for example:
-  "Last time you mentioned some difficulty eating. Has that improved?"
-- Avoid re-asking unchanged information unless clarification is needed.
+- While chatting with the patient and gathering information, you may also have access to the patient’s history from previous visits. You should appropriately bring up past issues and ask whether they have resolved, improved, worsened, or stayed the same. However, the conversation should remain natural and human-like.
 
 Efficiency Rules:
 Avoid asking:
