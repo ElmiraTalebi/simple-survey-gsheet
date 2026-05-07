@@ -1,5 +1,7 @@
 import json
 import os
+import html
+import re
 from typing import Dict, List, Any
 
 import streamlit as st
@@ -38,7 +40,7 @@ Conversational Behavior Rules:
 - Expand only where details are missing.
 - Use conditional logic:
 - You should cover all the topics and do not skip any of them. If a patient says no to a topic, do not ask follow-ups for that topic.
-- After you are done with all the topic, you must ask the patient if there is any other comment that patient would like to talk about and then end the conversation. Do not forget this.  
+- After all topics are covered, follow the strict Final Closing Sequence below. Never combine the "anything else" question and the completion into a single turn.
 - Occasionally offer guided options when helpful, especially for medications or symptoms patients may not recall precisely.
 - Keep tone warm, reassuring, and professional.
 
@@ -134,13 +136,24 @@ Prioritize:
 - Symptoms impacting safety, such as weight loss, swallowing issues, bleeding
 - Keeping the conversation concise but complete
 
-Conversation Completion Rule:
-After you are done with all the question, ask the patient if there is any other comment that patient would like to talk about and then end the conversation. 
-Once all required information across all clinical topics has been gathered and you ask the other comment question:
-- Clearly inform the patient that the check-in is complete.
+Final Closing Sequence (STRICT - TWO TURNS, NO EXCEPTIONS):
+
+Once all 8 clinical topics have been covered, end the conversation with this exact two-turn sequence. Never collapse it into one turn.
+
+Turn 1 - The "Anything Else" Turn:
+- The message must be a single open-ended question, e.g.:
+  "Before we wrap up, is there anything else you'd like to share with me - anything I haven't asked about?"
+- On this turn, is_complete MUST be false.
+- Do NOT include closing language, "thank you," or any indication the check-in is ending.
+- "topic" should be an empty string.
+
+Turn 2 - The Closing Turn (only after the patient has responded to Turn 1):
+- Briefly acknowledge what the patient said. If they raised a new concern, note it warmly; if they said no, simply acknowledge.
+- Inform them the check-in is complete and the information will be shared with their doctor.
 - Use a warm and reassuring tone.
-- Briefly summarize what will happen next, such as that the information will be shared with the doctor.
-- Do not continue asking questions once complete.
+- On this turn, is_complete = true.
+
+Critical: is_complete must NEVER be true on the same turn where you ask "anything else." That question and the completion must always be separated by the patient's response.
 
 Internal Output Requirement:
 While chatting naturally, internally ensure you can produce a structured summary for the doctor including:
@@ -185,9 +198,13 @@ Instructions:
 
 3. If prior patient history is provided, explicitly compare current findings to it (e.g., "improved since last visit," "new since last visit," "unchanged," "worsened"). If no prior history is provided, do not fabricate comparisons.
 
-4. For each topic, produce two summaries:
+4. For each topic, produce two summaries and a status:
    - "Main issues": a 1-3 line top-line for fast review. Include only red flags, significant symptoms, notable changes, and safety concerns. If the patient explicitly denied symptoms for the topic, write "No issues reported." If the topic was never covered in the chat, use an empty string.
    - "more details": a fuller but still concise breakdown. Include any of the following that apply: severity, location, onset, timing (constant vs intermittent), frequency, medications and their effectiveness, side effects, aggravating and alleviating factors, and functional impact. Use short labeled lines or bullets, not long paragraphs.
+   - "status": one of "worse", "better", or "" (empty string).
+     * "worse" - the topic represents a NEW symptom OR a WORSENING symptom compared to prior history. If no prior history is available, use "worse" only when the patient describes the symptom as new or recent.
+     * "better" - the topic shows IMPROVEMENT compared to prior history.
+     * "" (empty) - everything else, including unchanged/stable symptoms, topics with no prior history to compare against, and topics that were not discussed.
 
 5. Always elevate the following to "Main issues" when present: unintentional weight loss, dehydration, choking on liquids, bleeding (including blood when coughing), severe or worsening pain, inability to take medications, severe emotional distress or suicidal ideation, feeding tube malfunction, and inability to perform basic daily activities.
 
@@ -200,22 +217,31 @@ Always respond as valid JSON with exactly these keys, and no text outside the JS
 {
   "Pain_Main issues": "",
   "Pain_more details": "",
+  "Pain_status": "",
   "Nutrition_Main issues": "",
   "Nutrition_more details": "",
+  "Nutrition_status": "",
   "Swallowing_Main issues": "",
   "Swallowing_more details": "",
+  "Swallowing_status": "",
   "Oral Symptoms_Main issues": "",
   "Oral Symptoms_more details": "",
+  "Oral Symptoms_status": "",
   "GI Symptoms_Main issues": "",
   "GI Symptoms_more details": "",
+  "GI Symptoms_status": "",
   "Fatigue & Sleep_Main issues": "",
   "Fatigue & Sleep_more details": "",
+  "Fatigue & Sleep_status": "",
   "Activity & Independence_Main issues": "",
   "Activity & Independence_more details": "",
+  "Activity & Independence_status": "",
   "Mood & Support_Main issues": "",
   "Mood & Support_more details": "",
+  "Mood & Support_status": "",
   "Other_Main issues": "",
-  "Other_more details": ""
+  "Other_more details": "",
+  "Other_status": ""
 }
 
 Rules:
@@ -331,7 +357,7 @@ def get_doctor_summary(
 
     result: Dict[str, str] = {}
     for topic in SUMMARY_TOPICS:
-        for suffix in ["Main issues", "more details"]:
+        for suffix in ["Main issues", "more details", "status"]:
             key = f"{topic}_{suffix}"
             value = parsed.get(key, "")
             if not isinstance(value, str):
@@ -460,34 +486,111 @@ def render_raw_responses() -> None:
         st.code(raw_response, language="json")
 
 
-def render_topic_card(topic: str, main_issues: str, more_details: str) -> None:
-    """Render one card per topic. Muted styling when topic was not discussed."""
+def _basic_md_to_html(text: str) -> str:
+    """Minimal markdown -> HTML for content rendered inside our HTML cards.
+    Handles HTML escaping, **bold**, *italic*, and bullet lines (- or *)."""
+    if not text:
+        return ""
+
+    text = html.escape(text)
+    text = re.sub(r"\*\*([^*\n]+?)\*\*", r"<strong>\1</strong>", text)
+    text = re.sub(r"(?<!\*)\*([^*\n]+?)\*(?!\*)", r"<em>\1</em>", text)
+
+    out_lines: List[str] = []
+    in_list = False
+    for raw_line in text.split("\n"):
+        line = raw_line.strip()
+        bullet_match = re.match(r"^[-*]\s+(.+)$", line)
+        if bullet_match:
+            if not in_list:
+                out_lines.append('<ul style="margin:0.25rem 0 0.25rem 0; padding-left:1.25rem;">')
+                in_list = True
+            out_lines.append(f"<li>{bullet_match.group(1)}</li>")
+        else:
+            if in_list:
+                out_lines.append("</ul>")
+                in_list = False
+            if line:
+                out_lines.append(f'<div style="margin-bottom:0.25rem;">{line}</div>')
+    if in_list:
+        out_lines.append("</ul>")
+    return "\n".join(out_lines)
+
+
+def render_topic_card(
+    topic: str,
+    main_issues: str,
+    more_details: str,
+    status: str = "",
+) -> None:
+    """Render one card per topic. Colored by status; muted when undiscussed."""
     main_text = main_issues.strip()
     detail_text = more_details.strip()
     is_muted = not (main_text or detail_text)
 
-    with st.container(border=True):
-        if is_muted:
-            st.markdown(
-                f"""
-                <div style="opacity: 0.5;">
-                    <div style="font-size: 1.05rem; font-weight: 600;">{topic}</div>
-                    <div style="font-style: italic; font-size: 0.88rem; margin-top: 0.15rem;">
-                        Not discussed in this check-in
-                    </div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-        else:
-            st.markdown(f"#### {topic}")
-            if main_text:
-                st.write(main_text)
-            else:
-                st.caption("No main issues reported.")
-            if detail_text:
-                with st.expander("More details"):
-                    st.write(detail_text)
+    if is_muted:
+        st.markdown(
+            f'<div style="border:1px solid rgba(49,51,63,0.18); border-radius:0.5rem; '
+            f'padding:0.85rem 1rem; margin-bottom:0.6rem; opacity:0.5;">'
+            f"<strong>{html.escape(topic)}</strong> &mdash; "
+            f"<em>Not discussed in this check-in</em></div>",
+            unsafe_allow_html=True,
+        )
+        return
+
+    if status == "worse":
+        border_color = "#dc2626"
+        bg_color = "#fef2f2"
+        badge_color = "#dc2626"
+        badge_text = "NEW / WORSENING"
+    elif status == "better":
+        border_color = "#16a34a"
+        bg_color = "#f0fdf4"
+        badge_color = "#16a34a"
+        badge_text = "IMPROVING"
+    else:
+        border_color = "rgba(49,51,63,0.22)"
+        bg_color = "transparent"
+        badge_color = ""
+        badge_text = ""
+
+    badge_html = ""
+    if badge_text:
+        badge_html = (
+            f'<span style="float:right; background:{badge_color}; color:white; '
+            f"padding:0.2rem 0.55rem; border-radius:0.3rem; font-size:0.7rem; "
+            f'font-weight:700; letter-spacing:0.04em; margin-top:0.15rem;">'
+            f"{badge_text}</span>"
+        )
+
+    if main_text:
+        main_html = _basic_md_to_html(main_text)
+    else:
+        main_html = (
+            '<div style="color:rgba(49,51,63,0.6); font-style:italic;">'
+            "No main issues reported.</div>"
+        )
+
+    details_html = ""
+    if detail_text:
+        details_inner = _basic_md_to_html(detail_text)
+        details_html = (
+            '<details style="margin-top:0.7rem;">'
+            '<summary style="cursor:pointer; font-size:0.88rem; font-weight:500; '
+            'color:rgba(49,51,63,0.75);">More details</summary>'
+            '<div style="margin-top:0.5rem; font-size:0.92rem;">'
+            f"{details_inner}</div></details>"
+        )
+
+    st.markdown(
+        f'<div style="border:1.5px solid {border_color}; border-radius:0.5rem; '
+        f"background:{bg_color}; padding:0.85rem 1rem; margin-bottom:0.6rem;\">"
+        f'<div style="font-size:1.05rem; font-weight:700; margin-bottom:0.5rem; '
+        f'overflow:hidden;">{html.escape(topic)}{badge_html}</div>'
+        f'<div style="font-size:0.95rem; line-height:1.55;">{main_html}</div>'
+        f"{details_html}</div>",
+        unsafe_allow_html=True,
+    )
 
 
 def render_doctor_summary_page() -> None:
@@ -518,12 +621,30 @@ def render_doctor_summary_page() -> None:
         f"{discussed_count} of {len(SUMMARY_TOPICS)} topics with reported information."
     )
 
+    st.markdown(
+        '<div style="display:flex; gap:1rem; font-size:0.78rem; '
+        'color:rgba(49,51,63,0.7); margin:0.25rem 0 0.5rem 0;">'
+        '<span><span style="display:inline-block; width:0.65rem; height:0.65rem; '
+        'background:#dc2626; border-radius:0.15rem; margin-right:0.3rem;"></span>'
+        "New / worsening</span>"
+        '<span><span style="display:inline-block; width:0.65rem; height:0.65rem; '
+        'background:#16a34a; border-radius:0.15rem; margin-right:0.3rem;"></span>'
+        "Improving</span>"
+        '<span><span style="display:inline-block; width:0.65rem; height:0.65rem; '
+        'background:transparent; border:1px solid rgba(49,51,63,0.3); '
+        'border-radius:0.15rem; margin-right:0.3rem;"></span>'
+        "Unchanged or no comparison</span>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
     st.write("")  # small spacer
 
     for topic in SUMMARY_TOPICS:
         main_issues = summary.get(f"{topic}_Main issues", "")
         more_details = summary.get(f"{topic}_more details", "")
-        render_topic_card(topic, main_issues, more_details)
+        status = summary.get(f"{topic}_status", "")
+        render_topic_card(topic, main_issues, more_details, status)
 
 
 def add_assistant_message(content: str) -> None:
@@ -628,6 +749,7 @@ def main() -> None:
         st.session_state.started = True
 
     if st.session_state.is_complete:
+        render_chat_history()
         render_completion_banner()
         if st.session_state.summary_generated:
             st.divider()
@@ -654,8 +776,7 @@ def main() -> None:
                 )
 
             assistant_reply = result["reply"]
-            if not result["is_complete"]:
-                st.write(assistant_reply)
+            st.write(assistant_reply)
 
         st.session_state.raw_responses.append(result["raw_response"])
         if (
@@ -669,8 +790,7 @@ def main() -> None:
         with topic_boxes_placeholder.container():
             render_topic_boxes()
 
-        if not result["is_complete"]:
-            add_assistant_message(assistant_reply)
+        add_assistant_message(assistant_reply)
 
         st.session_state.is_complete = result["is_complete"]
         st.session_state.doctor_summary = result["doctor_summary"]
