@@ -384,6 +384,9 @@ def initialize_state() -> None:
     if "started" not in st.session_state:
         st.session_state.started = False
 
+    if "check_in_started" not in st.session_state:
+        st.session_state.check_in_started = False
+
     if "raw_responses" not in st.session_state:
         st.session_state.raw_responses = []
 
@@ -405,6 +408,7 @@ def reset_chat() -> None:
     st.session_state.is_complete = False
     st.session_state.doctor_summary = ""
     st.session_state.started = False
+    st.session_state.check_in_started = False
     st.session_state.raw_responses = []
     st.session_state.current_topic = ""
     st.session_state.completed_topics = []
@@ -725,6 +729,7 @@ def main() -> None:
 
         if st.button("Start new check-in", use_container_width=True):
             reset_chat()
+            st.session_state.check_in_started = True
             st.rerun()
 
         if st.session_state.is_complete and st.session_state.summary_generated:
@@ -776,8 +781,15 @@ def main() -> None:
     st.title("Nurse Assistant Check-In")
     st.caption("A conversational pre-visit check-in for head and neck cancer care.")
 
+    if not st.session_state.check_in_started:
+        st.info("Enter prior patient history (optional) in the sidebar, then click **Start new check-in** to begin.")
+        return
+
     if not st.session_state.started:
-        opening_message = "How have you been doing compared to your last visit?"
+        if prior_history.strip():
+            opening_message = "How have you been doing compared to your last visit?"
+        else:
+            opening_message = "How have you been doing recently?"
         add_assistant_message(opening_message)
         st.session_state.started = True
 
