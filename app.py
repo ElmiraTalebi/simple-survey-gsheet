@@ -173,13 +173,25 @@ Turn 1 - The "Anything Else" Turn:
 - "topic" should be an empty string.
 
 Turn 2 - The Closing Turn (only after the patient has responded to Turn 1):
-- If the patient raised a new concern, do not complete the check-in yet. Acknowledge the concern warmly and ask one focused follow-up question about it.
+- If the patient raised a new concern, acknowledge it warmly, decide whether follow-up is needed, and ask the most relevant single follow-up question only if needed.
 - If the patient did not raise a new concern, simply acknowledge.
-- Only when the patient did not raise a new concern, inform them the check-in is complete and the information will be shared with their doctor.
+- If no follow-up is needed, inform them the check-in is complete and the information will be shared with their doctor.
 - Use a warm and reassuring tone.
-- On this turn, is_complete = true only if the patient did not raise a new concern.
+- On this turn, is_complete = true only if no follow-up question is needed.
 
 Critical: is_complete must NEVER be true on the same turn where you ask "anything else." That question and the completion must always be separated by the patient's response.
+
+Handling New Concerns at the Final "Anything Else" Question:
+- If the patient answers the final "anything else" question with no new concern, proceed to the Closing Turn.
+- If the patient mentions a new symptom or concern, do not close the check-in yet.
+- Treat the new concern like any other reported symptom.
+- Decide whether the concern needs follow-up based on clinical importance, severity, novelty, and missing details.
+- If the concern seems minor, already explained, and does not need more detail, briefly acknowledge it and then proceed to closing.
+- If follow-up is needed, ask only one targeted question at a time.
+- Ask as many follow-up questions as clinically necessary, but do not over-question.
+- Once the new concern has enough detail for the doctor summary, return to the final closing sequence.
+- Do not use a generic follow-up such as "Can you tell me more about that symptom?" if a more specific clinical question is appropriate.
+- For new symptoms outside the listed topics, gather the minimum useful details: what it is, when it started, whether it is new or worsening, severity/impact, and whether it affects safety or daily function.
 
 Internal Output Requirement:
 While chatting naturally, internally ensure you can produce a structured summary for the doctor including:
@@ -412,8 +424,32 @@ def get_nurse_response(
     reply = parsed.get("reply", "").strip()
     is_complete = bool(parsed.get("is_complete", False))
     if _is_anything_else_turn(chat_history) and _patient_added_new_concern(chat_history):
-        reply = "Thanks for mentioning that. Can you tell me a little more about that symptom?"
-        is_complete = False
+        if not reply or "check-in is complete" in reply.lower() or "shared with your doctor" in reply.lower():
+            final_concern_messages = build_messages(chat_history, prior_history, system_prompt)
+            final_concern_messages.append(
+                {
+                    "role": "system",
+                    "content": (
+                        "Internal quality check: The patient added a new concern in "
+                        "response to the final anything-else question. Do not close the "
+                        "check-in yet. Decide whether this new concern needs follow-up. "
+                        "If follow-up is needed, ask one specific clinically relevant "
+                        "question. If no follow-up is needed because the concern is minor "
+                        "or already has enough detail, briefly acknowledge the concern and "
+                        "close the check-in. Return the required JSON object."
+                    ),
+                }
+            )
+            final_concern_response = client.chat.completions.create(
+                model=model,
+                messages=final_concern_messages,
+                temperature=0.2,
+                response_format={"type": "json_object"},
+            )
+            raw_content = final_concern_response.choices[0].message.content or ""
+            parsed = _parse_nurse_response(raw_content)
+            reply = parsed.get("reply", "").strip()
+            is_complete = bool(parsed.get("is_complete", False))
 
     return {
         "reply": reply,
