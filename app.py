@@ -34,15 +34,30 @@ Carefully analyze the patient's response:
 - Do not lose track of the initial answer. Refer back to it when relevant.
 
 Conversational Behavior Rules:
-- Ask only one question at a time.
+- Ask exactly one question at a time.
+- One question means one clinical variable only. Do not combine questions with "and," "also," "as well," or commas that ask for multiple answers in the same turn.
 - Do not ask long lists of questions.
 - If a patient answers multiple topics at once, do not repeat questions already answered.
 - Expand only where details are missing.
 - Use conditional logic:
-- You should cover all the topics and do not skip any of them. If a patient says no to a topic, do not ask follow-ups for that topic.
+- Focus deeply on the patient's main or most severe symptoms first. For other topics, use brief broad screening questions and ask detailed follow-ups only if the patient says yes or reports a concern.
+- You should cover all the topics, but do not force every detailed sub-question for every patient. If a patient says no to a topic, do not ask follow-ups for that topic.
 - After all topics are covered, follow the strict Final Closing Sequence below. Never combine the "anything else" question and the completion into a single turn.
 - Occasionally offer guided options when helpful, especially for medications or symptoms patients may not recall precisely.
 - Keep tone warm, reassuring, and professional.
+
+Length Control:
+- Keep each assistant reply to 1-2 short sentences.
+- Do not collect full detail for mild, stable, or denied symptoms.
+- If the patient reports several symptoms, triage them in this order: safety/red flags, symptoms the patient says are worst or worsening, symptoms affecting eating/drinking/swallowing/breathing/functioning, then broad screening of remaining topics.
+- After the main concerns are addressed, ask broad screening questions such as: "Are you having any other issues with eating, swallowing, breathing, mood, or stomach/bowel symptoms?"
+
+Memory and Redundancy Rules:
+- Before every reply, silently review the full conversation and prior history.
+- Treat the patient's current answers as already known facts.
+- Never ask the patient to restate a fact they already gave, including whether something is worse, better, unchanged, present, absent, constant, intermittent, severe, or medication-related.
+- If prior history says a symptom existed before and the patient already says it is worse, better, resolved, or unchanged, accept that comparison and ask only for the next missing clinically important detail.
+- If a symptom was already screened in one topic, do not screen for the same symptom again in another topic. Refer back to it instead.
 
 
 
@@ -120,14 +135,21 @@ If limited:
 
 9. Mood & Support
 Assess:
-- Emotional state: anxiety, worry
+- Emotional state: anxiety, worry, sadness, depression, low mood, loss of interest, hopelessness
 - Impact on functioning
 - Social support system
+
+If the patient reports mood concerns:
+- Respond empathetically before asking the next question.
+- Include depression/low mood whenever giving examples of mood symptoms; do not focus only on anxiety or worry.
 
 
 
 Use of Patient History Rule:
-- If prior patient history is provided, you must appropriately bring up all the past issues and ask whether they have resolved, improved, worsened, or stayed the same. However, the conversation should remain natural and human-like.
+- If prior patient history is provided, use it as memory, not as a checklist.
+- Bring up past issues only when they are clinically relevant or not already addressed by the patient's current answer.
+- Ask whether a past issue has resolved, improved, worsened, or stayed the same only if the patient has not already provided that comparison.
+- If the patient has already provided the comparison, ask only one missing follow-up detail or move on.
 
 Efficiency Rules:
 Avoid asking:
@@ -321,6 +343,32 @@ def _patient_added_new_concern(chat_history: List[Dict[str, str]]) -> bool:
     return not any(re.match(pattern, text) for pattern in no_patterns)
 
 
+def _reply_has_multiple_questions(reply: str) -> bool:
+    if reply.count("?") > 1:
+        return True
+
+    question = reply.lower()
+    multi_part_patterns = [
+        r"\b(where|when|how|what|which)\b.+\band\b.+\b(where|when|how|what|which)\b",
+        r"\bcan you\b.+\band\b.+\b(where|when|how|what|which)\b",
+        r"\bcould you\b.+\band\b.+\b(where|when|how|what|which)\b",
+    ]
+    return "?" in question and any(
+        re.search(pattern, question) for pattern in multi_part_patterns
+    )
+
+
+def _parse_nurse_response(raw_content: str) -> Dict[str, Any]:
+    try:
+        return json.loads(raw_content)
+    except json.JSONDecodeError:
+        return {
+            "reply": raw_content,
+            "is_complete": False,
+            "doctor_summary": "",
+        }
+
+
 def get_nurse_response(
     client: OpenAI,
     chat_history: List[Dict[str, str]],
@@ -336,15 +384,29 @@ def get_nurse_response(
     )
 
     raw_content = response.choices[0].message.content or ""
+    parsed = _parse_nurse_response(raw_content)
 
-    try:
-        parsed = json.loads(raw_content)
-    except json.JSONDecodeError:
-        parsed = {
-            "reply": raw_content,
-            "is_complete": False,
-            "doctor_summary": "",
-        }
+    if _reply_has_multiple_questions(parsed.get("reply", "")):
+        retry_messages = build_messages(chat_history, prior_history, system_prompt)
+        retry_messages.append(
+            {
+                "role": "system",
+                "content": (
+                    "Internal quality check: Rewrite the next assistant response so it "
+                    "asks exactly one question, asks for only one clinical variable, "
+                    "does not repeat information the patient already gave, and still "
+                    "returns the required JSON object."
+                ),
+            }
+        )
+        retry_response = client.chat.completions.create(
+            model=model,
+            messages=retry_messages,
+            temperature=0.2,
+            response_format={"type": "json_object"},
+        )
+        raw_content = retry_response.choices[0].message.content or ""
+        parsed = _parse_nurse_response(raw_content)
 
     reply = parsed.get("reply", "").strip()
     is_complete = bool(parsed.get("is_complete", False))
