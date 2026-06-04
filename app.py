@@ -25,7 +25,7 @@ Core Objectives:
 
 Opening:
 If this is the first assistant message, start exactly with:
-"How have you been doing compared to your last visit?"
+"What symptoms have been bothering you most since your last visit?"
 
 Carefully analyze the patient's response:
 - Extract any already-answered topics.
@@ -68,6 +68,7 @@ Assess eating status using categories:
 - Feeding tube only
 Ask only relevant follow-ups based on category.
 Also assess:
+- Weight change or unintentional weight loss
 - Fluid intake
 - Barriers to eating/drinking
 - Use of nutritional supplements
@@ -149,10 +150,11 @@ Turn 1 - The "Anything Else" Turn:
 - "topic" should be an empty string.
 
 Turn 2 - The Closing Turn (only after the patient has responded to Turn 1):
-- Briefly acknowledge what the patient said. If they raised a new concern, note it warmly; if they said no, simply acknowledge.
-- Inform them the check-in is complete and the information will be shared with their doctor.
+- If the patient raised a new concern, do not complete the check-in yet. Acknowledge the concern warmly and ask one focused follow-up question about it.
+- If the patient did not raise a new concern, simply acknowledge.
+- Only when the patient did not raise a new concern, inform them the check-in is complete and the information will be shared with their doctor.
 - Use a warm and reassuring tone.
-- On this turn, is_complete = true.
+- On this turn, is_complete = true only if the patient did not raise a new concern.
 
 Critical: is_complete must NEVER be true on the same turn where you ask "anything else." That question and the completion must always be separated by the patient's response.
 
@@ -169,7 +171,7 @@ Always respond as valid JSON with exactly these keys:
 {
   "reply": "Natural message to show the patient.",
   "is_complete": true or false,
-  "doctor_summary": "Concise clinical summary for the doctor if complete, otherwise an empty string.",
+  "doctor_summary": "A concise 2-3 sentence clinical summary for the doctor if complete, otherwise an empty string.",
   "topic": "one of: Pain, Nutrition, Swallowing, Oral Symptoms, GI Symptoms, Fatigue & Sleep, Activity & Independence, Mood & Support, or empty string"
 }
 
@@ -200,7 +202,7 @@ Instructions:
 3. If prior patient history is provided, explicitly compare current findings to it (e.g., "improved since last visit," "new since last visit," "unchanged," "worsened"). If no prior history is provided, do not fabricate comparisons.
 
 4. For each topic, produce two summaries and a status:
-   - "Main issues": a 1-3 line top-line for fast review. Include only red flags, significant symptoms, notable changes, and safety concerns. If the patient explicitly denied symptoms for the topic, write "No issues reported." If the topic was never covered in the chat, use an empty string.
+   - "Main issues": a 1-2 sentence top-line for fast review. Include only red flags, significant symptoms, notable changes, and safety concerns. If the patient explicitly denied symptoms for the topic, write "No issues reported." If the topic was never covered in the chat, use an empty string.
    - "more details": a fuller but still concise breakdown. Include any of the following that apply: severity, location, onset, timing (constant vs intermittent), frequency, medications and their effectiveness, side effects, aggravating and alleviating factors, and functional impact. Use short labeled lines or bullets, not long paragraphs.
    - "status": one of "worse", "better", or "" (empty string).
      * "worse" - the topic represents a NEW symptom OR a WORSENING symptom compared to prior history. If no prior history is available, use "worse" only when the patient describes the symptom as new or recent.
@@ -269,8 +271,9 @@ SUMMARY_TOPICS = CHAT_TOPICS + ["Other"]
 def build_messages(
     chat_history: List[Dict[str, str]],
     prior_history: str = "",
+    system_prompt: str = SYSTEM_PROMPT,
 ) -> List[Dict[str, str]]:
-    system_content = SYSTEM_PROMPT
+    system_content = system_prompt
 
     if prior_history.strip():
         system_content += f"""
@@ -284,15 +287,50 @@ Prior Patient History:
     return messages
 
 
+def _is_anything_else_turn(chat_history: List[Dict[str, str]]) -> bool:
+    if len(chat_history) < 2:
+        return False
+
+    previous_message = chat_history[-2]
+    if previous_message.get("role") != "assistant":
+        return False
+
+    content = previous_message.get("content", "").lower()
+    return "anything else" in content and ("wrap up" in content or "haven't asked" in content)
+
+
+def _patient_added_new_concern(chat_history: List[Dict[str, str]]) -> bool:
+    if not chat_history or chat_history[-1].get("role") != "user":
+        return False
+
+    text = chat_history[-1].get("content", "").strip().lower()
+    if not text:
+        return False
+
+    no_patterns = [
+        r"^no[\s.!?]*$",
+        r"^nope[\s.!?]*$",
+        r"^nothing[\s.!?]*$",
+        r"^none[\s.!?]*$",
+        r"^not really[\s.!?]*$",
+        r"^that's all[\s.!?]*$",
+        r"^that is all[\s.!?]*$",
+        r"^i think that's all[\s.!?]*$",
+        r"^i think that is all[\s.!?]*$",
+    ]
+    return not any(re.match(pattern, text) for pattern in no_patterns)
+
+
 def get_nurse_response(
     client: OpenAI,
     chat_history: List[Dict[str, str]],
     prior_history: str,
     model: str,
+    system_prompt: str = SYSTEM_PROMPT,
 ) -> Dict[str, Any]:
     response = client.chat.completions.create(
         model=model,
-        messages=build_messages(chat_history, prior_history),
+        messages=build_messages(chat_history, prior_history, system_prompt),
         temperature=0.4,
         response_format={"type": "json_object"},
     )
@@ -308,9 +346,15 @@ def get_nurse_response(
             "doctor_summary": "",
         }
 
+    reply = parsed.get("reply", "").strip()
+    is_complete = bool(parsed.get("is_complete", False))
+    if _is_anything_else_turn(chat_history) and _patient_added_new_concern(chat_history):
+        reply = "Thanks for mentioning that. Can you tell me a little more about that symptom?"
+        is_complete = False
+
     return {
-        "reply": parsed.get("reply", "").strip(),
-        "is_complete": bool(parsed.get("is_complete", False)),
+        "reply": reply,
+        "is_complete": is_complete,
         "doctor_summary": parsed.get("doctor_summary", "").strip(),
         "topic": parsed.get("topic", "").strip(),
         "raw_response": raw_content.strip(),
@@ -522,6 +566,11 @@ def _basic_md_to_html(text: str) -> str:
     return "\n".join(out_lines)
 
 
+def _limit_to_three_sentences(text: str) -> str:
+    sentences = re.split(r"(?<=[.!?])\s+", text.strip())
+    return " ".join(sentence for sentence in sentences[:3] if sentence).strip()
+
+
 def render_topic_card(
     topic: str,
     main_issues: str,
@@ -624,7 +673,9 @@ def render_doctor_summary_page() -> None:
         return
 
     if st.session_state.doctor_summary:
-        overall_html = _basic_md_to_html(st.session_state.doctor_summary)
+        overall_html = _basic_md_to_html(
+            _limit_to_three_sentences(st.session_state.doctor_summary)
+        )
         st.markdown(
             '<div style="border:1.5px solid rgba(49,51,63,0.3); '
             "background:#f8fafc; padding:0.9rem 1.1rem; "
@@ -718,6 +769,12 @@ def main() -> None:
 
         model = "gpt-4.1"
 
+        system_prompt = st.text_area(
+            "Editable chatbot instructions",
+            value=SYSTEM_PROMPT,
+            height=260,
+        )
+
         prior_history = st.text_area(
             "Prior patient history",
             placeholder=(
@@ -786,10 +843,7 @@ def main() -> None:
         return
 
     if not st.session_state.started:
-        if prior_history.strip():
-            opening_message = "How have you been doing compared to your last visit?"
-        else:
-            opening_message = "How have you been doing recently?"
+        opening_message = "What symptoms have been bothering you most since your last visit?"
         add_assistant_message(opening_message)
         st.session_state.started = True
 
@@ -810,6 +864,7 @@ def main() -> None:
                     chat_history=st.session_state.messages,
                     prior_history=prior_history,
                     model=model,
+                    system_prompt=system_prompt,
                 )
 
             assistant_reply = result["reply"]
