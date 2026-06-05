@@ -3,6 +3,7 @@ import os
 import html
 import re
 from typing import Dict, List, Any
+
 import streamlit as st
 from openai import OpenAI
 
@@ -380,22 +381,6 @@ def _parse_nurse_response(raw_content: str) -> Dict[str, Any]:
             "doctor_summary": "",
         }
 
-def _is_gpt5_model(model: str) -> bool:
-    return model.lower().startswith("gpt-5")
-
-
-def create_json_chat_completion(client, model, messages, temperature):
-    kwargs = {
-        "model": model,
-        "messages": messages,
-        "response_format": {"type": "json_object"},
-    }
-
-    # For gpt-5-mini, do not send temperature or reasoning_effort.
-    if not _is_gpt5_model(model):
-        kwargs["temperature"] = temperature
-
-    return client.chat.completions.create(**kwargs)
 
 def get_nurse_response(
     client: OpenAI,
@@ -404,15 +389,13 @@ def get_nurse_response(
     model: str,
     system_prompt: str = SYSTEM_PROMPT,
 ) -> Dict[str, Any]:
-  
-
-    response = create_json_chat_completion(
-      client=client,
-      model=model,
-      messages=...,
-      temperature=0.4,
-   )
-
+    response = client.chat.completions.create(
+        model=model,
+        messages=build_messages(chat_history, prior_history, system_prompt),
+        temperature=0.4,
+        reasoning_effort="none",
+        response_format={"type": "json_object"},
+    )
 
     raw_content = response.choices[0].message.content or ""
     parsed = _parse_nurse_response(raw_content)
@@ -434,6 +417,7 @@ def get_nurse_response(
             model=model,
             messages=retry_messages,
             temperature=0.2,
+            reasoning_effort="none",
             response_format={"type": "json_object"},
         )
         raw_content = retry_response.choices[0].message.content or ""
@@ -462,6 +446,7 @@ def get_nurse_response(
                 model=model,
                 messages=final_concern_messages,
                 temperature=0.2,
+                reasoning_effort="none",
                 response_format={"type": "json_object"},
             )
             raw_content = final_concern_response.choices[0].message.content or ""
@@ -507,6 +492,7 @@ def get_doctor_summary(
             {"role": "user", "content": user_content},
         ],
         temperature=0.2,
+        reasoning_effort="none",
         response_format={"type": "json_object"},
     )
 
