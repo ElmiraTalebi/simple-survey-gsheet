@@ -392,8 +392,7 @@ def get_nurse_response(
     response = client.chat.completions.create(
         model=model,
         messages=build_messages(chat_history, prior_history, system_prompt),
-        temperature=0.4,
-        reasoning_effort="none",
+        reasoning_effort="minimal",
         response_format={"type": "json_object"},
     )
 
@@ -416,8 +415,7 @@ def get_nurse_response(
         retry_response = client.chat.completions.create(
             model=model,
             messages=retry_messages,
-            temperature=0.2,
-            reasoning_effort="none",
+            reasoning_effort="minimal",
             response_format={"type": "json_object"},
         )
         raw_content = retry_response.choices[0].message.content or ""
@@ -445,8 +443,7 @@ def get_nurse_response(
             final_concern_response = client.chat.completions.create(
                 model=model,
                 messages=final_concern_messages,
-                temperature=0.2,
-                reasoning_effort="none",
+                reasoning_effort="minimal",
                 response_format={"type": "json_object"},
             )
             raw_content = final_concern_response.choices[0].message.content or ""
@@ -491,8 +488,7 @@ def get_doctor_summary(
             {"role": "system", "content": SUMMARY_SYSTEM_PROMPT},
             {"role": "user", "content": user_content},
         ],
-        temperature=0.2,
-        reasoning_effort="none",
+        reasoning_effort="minimal",
         response_format={"type": "json_object"},
     )
 
