@@ -64,6 +64,8 @@ Length Control:
 Memory and Redundancy Rules:
 - Before every reply, silently review the full conversation and prior history.
 - Treat the patient's current answers as already known facts.
+- Only answers from the current conversation count as answered for the current visit.
+- Prior history does not count as an answered topic for the current visit.
 - Never ask the patient to restate a fact they already gave, including whether something is worse, better, unchanged, present, absent, constant, intermittent, severe, or medication-related.
 - If prior history says a symptom existed before and the patient already says it is worse, better, resolved, or unchanged, accept that comparison and ask only for the next missing clinically important detail.
 - If a symptom was already screened in one topic, do not screen for the same symptom again in another topic. Refer back to it instead.
@@ -164,6 +166,13 @@ If fever is reported:
 
 Use of Patient History Rule:
 - If prior patient history is provided, use it as memory, not as a checklist.
+- Prior patient history is background context only. Do not treat prior history as the patient's current answer.
+- Prior positive symptoms are mandatory to re-check in the current visit unless the patient has already discussed them in the current conversation.
+- Prior negative findings do not count as current denials. Re-screen clinically relevant topics in the current conversation.
+- If a symptom was present in prior history, briefly check its current status unless the patient has already discussed it in the current conversation.
+- Ask whether the prior symptom has improved, worsened, resolved, or stayed the same.
+- Do not skip a clinical topic only because it appears in prior history. Prior history should personalize the question, not replace asking about the patient's current condition.
+- When prior history lists specific symptoms, ask about those prior symptoms by name at an appropriate point in the conversation, for example: "Last time you mentioned mouth sores. Are those better, worse, resolved, or about the same now?"
 - Bring up past issues only when they are clinically relevant or not already addressed by the patient's current answer.
 - Ask whether a past issue has resolved, improved, worsened, or stayed the same only if the patient has not already provided that comparison.
 - If the patient has already provided the comparison, ask only one missing follow-up detail or move on.
@@ -376,6 +385,9 @@ Patient Context:
 
 Prior Patient History:
 {prior_history.strip()}
+
+Current Visit Reassessment Requirement:
+Prior history is not the patient's current answer. Re-check prior positive symptoms by name during this current visit unless the patient already discussed them in this current conversation. Do not treat prior negative findings as current denials.
 """
 
     messages = [{"role": "system", "content": system_content}]
