@@ -380,6 +380,22 @@ def _parse_nurse_response(raw_content: str) -> Dict[str, Any]:
             "doctor_summary": "",
         }
 
+def _is_gpt5_model(model: str) -> bool:
+    return model.lower().startswith("gpt-5")
+
+
+def create_json_chat_completion(client, model, messages, temperature):
+    kwargs = {
+        "model": model,
+        "messages": messages,
+        "response_format": {"type": "json_object"},
+    }
+
+    # For gpt-5-mini, do not send temperature or reasoning_effort.
+    if not _is_gpt5_model(model):
+        kwargs["temperature"] = temperature
+
+    return client.chat.completions.create(**kwargs)
 
 def get_nurse_response(
     client: OpenAI,
@@ -388,12 +404,15 @@ def get_nurse_response(
     model: str,
     system_prompt: str = SYSTEM_PROMPT,
 ) -> Dict[str, Any]:
-    response = client.chat.completions.create(
-        model=model,
-        messages=build_messages(chat_history, prior_history, system_prompt),
-        temperature=0.4,
-        response_format={"type": "json_object"},
-    )
+  
+
+    response = create_json_chat_completion(
+      client=client,
+      model=model,
+      messages=...,
+      temperature=0.4,
+   )
+
 
     raw_content = response.choices[0].message.content or ""
     parsed = _parse_nurse_response(raw_content)
