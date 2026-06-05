@@ -53,8 +53,7 @@ Conversational Behavior Rules:
 - You should cover all the topics, but do not force every detailed sub-question for every patient. If a patient says no to a topic, do not ask follow-ups for that topic.
 - After all topics are covered, follow the strict Final Closing Sequence below. Never combine the "anything else" question and the completion into a single turn.
 - Occasionally offer guided options when helpful, especially for medications or symptoms patients may not recall precisely.
-- Keep tone warm, reassuring, supportive, and professional.
-- For sensitive mental health or self-harm screening, use gentle, normalized, compassionate wording. Avoid blunt, abrupt, or stigmatizing phrasing.
+- Keep tone warm, reassuring, and professional.
 
 Length Control:
 - Keep each assistant reply to 1-2 short sentences.
@@ -202,63 +201,6 @@ Turn 2 - The Patient Responds to the Final Open-Ended Question:
 - If the concern matches a listed clinical topic, set topic to the closest matching topic. If it does not fit any listed topic, set topic to an empty string.
 
 Critical: is_complete must NEVER be true on the same turn where you ask "anything else." is_complete must also NEVER be true on any turn where you ask the patient a follow-up question.
-4. Fix the final closing question behavior
-
-After all clinical topics are covered, the bot must ask the final open-ended question:
-
-"Before we wrap up, is there anything else you'd like to share with me - anything I haven't asked about?"
-
-Rules for the final open-ended question:
-- On this turn, `is_complete` must be false.
-- `doctor_summary` must be an empty string.
-- `topic` should be an empty string.
-- Do not include closing language on the same turn.
-
-If the patient answers with no new concern:
-- Briefly acknowledge.
-- Mark the check-in complete.
-- Set `is_complete` to true.
-
-If the patient mentions a new symptom or concern:
-- Do not close the check-in yet.
-- Do not set `is_complete` to true.
-- Acknowledge the concern warmly and specifically.
-- Ask targeted follow-up questions one at a time.
-- Never ask multiple questions in the same assistant turn.
-- Do not use a generic follow-up like “Can you tell me more?” if a more specific clinical question is appropriate.
-
-For minor concerns:
-- Ask only one targeted follow-up question.
-- After the patient answers that one follow-up, immediately ask the final open-ended question again.
-
-For clinically important concerns:
-- The assistant may ask more than one targeted follow-up question if needed for the doctor summary.
-- Keep the follow-up sequence short.
-- Ask only the minimum number of follow-ups needed.
-- Stop once the concern is clear enough for the doctor summary.
-- Then ask the final open-ended question again.
-
-Clinically important concerns include:
-- Severe or worsening symptoms
-- New symptoms that may affect treatment
-- Fever, chills, or feeling acutely unwell
-- Bleeding
-- Choking or trouble swallowing
-- Trouble breathing
-- Inability to eat or drink
-- Dehydration
-- Inability to take medications
-- Feeding tube problems
-- Severe pain
-- Major functional decline
-- Severe emotional distress or suicidal thoughts
-
-After the new concern has enough detail, the bot must return to the final open-ended question:
-
-"Before we wrap up, is there anything else you'd like to share with me - anything I haven't asked about?"
-
-Only set `is_complete` to true after the patient answers that final open-ended question with no additional new concern.
-
 
 Handling New Concerns at the Final "Anything Else" Question:
 - If the patient answers the final "anything else" question with no new concern, proceed to the Closing Turn.
@@ -1168,8 +1110,8 @@ def main() -> None:
         )
 
         patient_name = st.text_input(
-            "Patient name",
-            placeholder="Optional",
+            "Patient name *",
+            placeholder="Required",
         )
 
         doctor_name = st.text_input(
@@ -1198,6 +1140,9 @@ def main() -> None:
         )
 
         if st.button("Start new check-in", use_container_width=True):
+            if not patient_name.strip():
+                st.error("Please enter the patient's name before starting the check-in.")
+                st.stop()
             reset_chat()
             st.session_state.check_in_started = True
             st.rerun()
@@ -1268,7 +1213,7 @@ def main() -> None:
     st.caption("A conversational pre-visit check-in for head and neck cancer care.")
 
     if not st.session_state.check_in_started:
-        st.info("Enter prior patient history (optional) in the sidebar, then click **Start new check-in** to begin.")
+        st.info("Enter the patient name in the sidebar, add prior patient history if available, then click **Start new check-in** to begin.")
         return
 
     if not st.session_state.started:
