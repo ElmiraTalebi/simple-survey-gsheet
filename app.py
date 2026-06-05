@@ -159,6 +159,9 @@ Use of Patient History Rule:
 - Bring up past issues only when they are clinically relevant or not already addressed by the patient's current answer.
 - Ask whether a past issue has resolved, improved, worsened, or stayed the same only if the patient has not already provided that comparison.
 - If the patient has already provided the comparison, ask only one missing follow-up detail or move on.
+- If patient context is provided, use the patient's name, doctor's name, and current week of therapy as clinical context.
+- Consider the current week of therapy when deciding which symptoms are clinically relevant and how to interpret changes from prior history.
+- If prior history is from an earlier week of therapy, compare the current check-in to that earlier point when the patient provides enough information.
 
 Efficiency Rules:
 Avoid asking:
@@ -173,35 +176,44 @@ Final Closing Sequence (STRICT - DO NOT SKIP):
 
 Once all 9 clinical topics have been covered, ask one final open-ended question before completing the check-in.
 
-If the patient adds a new symptom or concern in response to the final "anything else" question, do not close the check-in yet.
+Turn 1 - The Final Open-Ended Question:
+- The message must be a single open-ended question, e.g.:
+  "Before we wrap up, is there anything else you'd like to share with me - anything I haven't asked about?"
+- On this turn, is_complete MUST be false.
+- doctor_summary MUST be an empty string.
+- Do NOT include closing language, "thank you," or any indication the check-in is ending.
+- "topic" should be an empty string.
 
-The assistant must respond to the new concern and gather enough clinically useful information for the doctor summary before ending the check-in.
+Turn 2 - The Patient Responds to the Final Open-Ended Question:
+- Carefully determine whether the patient added a new symptom, concern, question, or care-related issue.
+- If the patient did not add a new concern, briefly acknowledge their response, inform them the check-in is complete and the information will be shared with their doctor, and set is_complete to true.
+- If the patient added a new symptom or concern, do not close the check-in yet.
+- If the patient added a new symptom or concern, acknowledge it warmly and specifically, treat it like any other reported symptom, and ask the most relevant single follow-up question needed for that concern.
+- If the patient added a new symptom or concern, is_complete MUST be false and doctor_summary MUST be an empty string.
+- If the concern matches a listed clinical topic, set topic to the closest matching topic. If it does not fit any listed topic, set topic to an empty string.
 
-Do not limit the assistant to only one follow-up question if the new concern needs more detail, but ask only one question per assistant turn.
+Critical: is_complete must NEVER be true on the same turn where you ask "anything else." is_complete must also NEVER be true on any turn where you ask the patient a follow-up question.
 
-Do not over-question. Stop once the minimum useful clinical details have been gathered.
-
-For a new symptom, gather the minimum useful details:
-- What the symptom is
-- When it started
-- Whether it is new, worsening, improving, or unchanged
-- Severity or impact on daily life
-- Any safety-related impact, such as trouble eating, drinking, swallowing, breathing, sleeping, walking, or taking medications
-
-After enough detail has been gathered about the new concern, return to the final open-ended question:
-"Before we wrap up, is there anything else you'd like to share with me - anything I haven't asked about?"
-
-Only set is_complete to true after the patient answers that final open-ended question with no additional new concern.
+Handling New Concerns at the Final "Anything Else" Question:
+- If the patient answers the final "anything else" question with no new concern, proceed to the Closing Turn.
+- If the patient mentions a new symptom or concern, do not close the check-in yet.
+- The assistant must respond to the new concern before ending the check-in.
+- Treat the new concern like any other reported symptom.
+- Ask exactly one targeted follow-up question about the new concern.
+- Do not ask multiple follow-up questions about a new concern raised at the final "anything else" question.
+- After the patient answers that one follow-up question, return immediately to the final open-ended question.
+- Do not use a generic follow-up such as "Can you tell me more about that symptom?" if a more specific clinical question is appropriate.
+- Choose the single most useful follow-up question based on the concern. Prefer onset, severity/impact, or safety relevance.
+- For new symptoms outside the listed topics, gather only the single most important missing detail needed for the doctor summary.
+- After the patient answers the one follow-up question, return to the final open-ended question:
+  "Before we wrap up, is there anything else you'd like to share with me - anything I haven't asked about?"
+- Only set is_complete to true after the patient answers that final open-ended question with no additional new concern.
 
 Example:
 - If the patient answers the final open-ended question with "I also have ringing in my ears," do not close the check-in.
 - Acknowledge it and ask a targeted follow-up such as: "I'm sorry you're dealing with that. When did the ringing in your ears start?"
-- Continue with any needed follow-up questions one at a time.
-- Once enough detail is gathered, ask the final open-ended question again.
+- After the patient answers that one follow-up question, ask the final open-ended question again.
 
-Critical:
-If the assistant asks any follow-up question, is_complete must be false.
-is_complete must never be true on a turn where the assistant is asking the patient a question.
 Internal Output Requirement:
 While chatting naturally, internally ensure you can produce a structured summary for the doctor including:
 - Key symptoms
@@ -236,6 +248,7 @@ Context:
 - The check-in covers some or all of these topics: Pain, Nutrition, Swallowing, Oral Symptoms, GI Symptoms, Fatigue & Sleep, Activity & Independence, Mood & Support, Other.
 - The full chat transcript (assistant questions and patient answers) will be provided.
 - Prior patient history from a previous visit may also be provided. It may be missing.
+- Patient context may include patient name, doctor name, and current week of therapy.
 - The doctor has only a few minutes to review this summary before the visit, so clarity and brevity are critical.
 
 Instructions:
@@ -246,7 +259,9 @@ Instructions:
 
 3. If prior patient history is provided, explicitly compare current findings to it (e.g., "improved since last visit," "new since last visit," "unchanged," "worsened"). If no prior history is provided, do not fabricate comparisons.
 
-4. For each topic, produce two summaries and a status:
+4. If patient context is provided, use the patient name, doctor name, and current week of therapy as clinical context. Include the week of therapy when it helps clarify symptom timing or changes.
+
+5. For each topic, produce two summaries and a status:
    - "Main issues": a 1-2 sentence top-line for fast review. Include only red flags, significant symptoms, notable changes, and safety concerns. If the patient explicitly denied symptoms for the topic, write "No issues reported." If the topic was never covered in the chat, use an empty string.
    - "more details": a fuller but still concise breakdown. Include any of the following that apply: severity, location, onset, timing (constant vs intermittent), frequency, medications and their effectiveness, side effects, aggravating and alleviating factors, and functional impact. Use short labeled lines or bullets, not long paragraphs.
    - "status": one of "worse", "better", or "" (empty string).
@@ -254,13 +269,13 @@ Instructions:
      * "better" - the topic shows IMPROVEMENT compared to prior history.
      * "" (empty) - everything else, including unchanged/stable symptoms, topics with no prior history to compare against, and topics that were not discussed.
 
-5. Always elevate the following to "Main issues" when present: unintentional weight loss, dehydration, choking on liquids, bleeding (including blood when coughing), severe or worsening pain, inability to take medications, severe emotional distress or suicidal ideation, feeding tube malfunction, and inability to perform basic daily activities.
+6. Always elevate the following to "Main issues" when present: unintentional weight loss, dehydration, choking on liquids, bleeding (including blood when coughing), severe or worsening pain, inability to take medications, severe emotional distress or suicidal ideation, feeding tube malfunction, and inability to perform basic daily activities.
 
-6. Use **bold** markdown sparingly to highlight the most important clinical information doctors need to see quickly. Bold only short phrases or key findings, not entire paragraphs. Prioritize bolding red flags, new or worsening symptoms, severe symptoms, safety concerns, major functional impact, weight loss/dehydration, bleeding, choking, fever/chills or feeling acutely unwell, inability to take medications, feeding tube problems, and severe emotional distress or suicidal ideation.
+7. Use **bold** markdown sparingly to highlight the most important clinical information doctors need to see quickly. Bold only short phrases or key findings, not entire paragraphs. Prioritize bolding red flags, new or worsening symptoms, severe symptoms, safety concerns, major functional impact, weight loss/dehydration, bleeding, choking, fever/chills or feeling acutely unwell, inability to take medications, feeding tube problems, and severe emotional distress or suicidal ideation.
 
-7. Use the "Other" fields to capture clinically relevant content the patient raised that does not map to the listed topics (e.g., new symptoms outside scope, social or caregiving issues affecting care, specific questions the patient wants to ask the doctor). Leave empty if nothing applies.
+8. Use the "Other" fields to capture clinically relevant content the patient raised that does not map to the listed topics (e.g., new symptoms outside scope, social or caregiving issues affecting care, specific questions the patient wants to ask the doctor). Leave empty if nothing applies.
 
-8. Tone: neutral, factual, clinical. Do not reassure the patient, editorialize, or offer recommendations or treatment plans - just report what was said.
+9. Tone: neutral, factual, clinical. Do not reassure the patient, editorialize, or offer recommendations or treatment plans - just report what was said.
 
 Response Format:
 Always respond as valid JSON with exactly these keys, and no text outside the JSON object:
@@ -316,12 +331,37 @@ CHAT_TOPICS = [
 SUMMARY_TOPICS = CHAT_TOPICS
 
 
+def build_patient_context(
+    patient_name: str = "",
+    doctor_name: str = "",
+    therapy_week: str = "",
+) -> str:
+    context_lines = []
+
+    if patient_name.strip():
+        context_lines.append(f"Patient name: {patient_name.strip()}")
+    if doctor_name.strip():
+        context_lines.append(f"Doctor name: {doctor_name.strip()}")
+    if therapy_week.strip():
+        context_lines.append(f"Current week of therapy: {therapy_week.strip()}")
+
+    return "\n".join(context_lines)
+
+
 def build_messages(
     chat_history: List[Dict[str, str]],
     prior_history: str = "",
+    patient_context: str = "",
     system_prompt: str = SYSTEM_PROMPT,
 ) -> List[Dict[str, str]]:
     system_content = system_prompt
+
+    if patient_context.strip():
+        system_content += f"""
+
+Patient Context:
+{patient_context.strip()}
+"""
 
     if prior_history.strip():
         system_content += f"""
@@ -369,6 +409,44 @@ def _patient_added_new_concern(chat_history: List[Dict[str, str]]) -> bool:
     return not any(re.match(pattern, text) for pattern in no_patterns)
 
 
+def _should_return_to_anything_else(chat_history: List[Dict[str, str]]) -> bool:
+    if not chat_history or chat_history[-1].get("role") != "user":
+        return False
+
+    for index in range(len(chat_history) - 2, -1, -1):
+        message = chat_history[index]
+        if message.get("role") != "assistant":
+            continue
+
+        content = message.get("content", "").lower()
+        is_anything_else = (
+            "anything else" in content
+            and ("wrap up" in content or "haven't asked" in content)
+        )
+        if not is_anything_else:
+            continue
+
+        if index + 1 >= len(chat_history):
+            return False
+
+        patient_reply = chat_history[index + 1]
+        if patient_reply.get("role") != "user":
+            return False
+
+        messages_after_final_question = chat_history[index + 2:]
+        assistant_followups = [
+            later_message
+            for later_message in messages_after_final_question
+            if later_message.get("role") == "assistant"
+        ]
+        return (
+            _patient_added_new_concern(chat_history[: index + 2])
+            and len(assistant_followups) >= 1
+        )
+
+    return False
+
+
 def _reply_has_multiple_questions(reply: str) -> bool:
     if reply.count("?") > 1:
         return True
@@ -399,12 +477,31 @@ def get_nurse_response(
     client: OpenAI,
     chat_history: List[Dict[str, str]],
     prior_history: str,
+    patient_context: str,
     model: str,
     system_prompt: str = SYSTEM_PROMPT,
 ) -> Dict[str, Any]:
+    if _should_return_to_anything_else(chat_history):
+        reply = "Before we wrap up, is there anything else you'd like to share with me - anything I haven't asked about?"
+        raw_content = json.dumps(
+            {
+                "reply": reply,
+                "is_complete": False,
+                "doctor_summary": "",
+                "topic": "",
+            }
+        )
+        return {
+            "reply": reply,
+            "is_complete": False,
+            "doctor_summary": "",
+            "topic": "",
+            "raw_response": raw_content,
+        }
+
     response = client.chat.completions.create(
         model=model,
-        messages=build_messages(chat_history, prior_history, system_prompt),
+        messages=build_messages(chat_history, prior_history, patient_context, system_prompt),
         reasoning_effort="minimal",
         response_format={"type": "json_object"},
     )
@@ -413,7 +510,7 @@ def get_nurse_response(
     parsed = _parse_nurse_response(raw_content)
 
     if _reply_has_multiple_questions(parsed.get("reply", "")):
-        retry_messages = build_messages(chat_history, prior_history, system_prompt)
+        retry_messages = build_messages(chat_history, prior_history, patient_context, system_prompt)
         retry_messages.append(
             {
                 "role": "system",
@@ -438,18 +535,17 @@ def get_nurse_response(
     is_complete = bool(parsed.get("is_complete", False))
     if _is_anything_else_turn(chat_history) and _patient_added_new_concern(chat_history):
         if not reply or "check-in is complete" in reply.lower() or "shared with your doctor" in reply.lower():
-            final_concern_messages = build_messages(chat_history, prior_history, system_prompt)
+            final_concern_messages = build_messages(chat_history, prior_history, patient_context, system_prompt)
             final_concern_messages.append(
                 {
                     "role": "system",
                     "content": (
                         "Internal quality check: The patient added a new concern in "
                         "response to the final anything-else question. Do not close the "
-                        "check-in yet. Decide whether this new concern needs follow-up. "
-                        "If follow-up is needed, ask one specific clinically relevant "
-                        "question. If no follow-up is needed because the concern is minor "
-                        "or already has enough detail, briefly acknowledge the concern and "
-                        "close the check-in. Return the required JSON object."
+                        "check-in yet. Ask exactly one specific clinically relevant "
+                        "follow-up question about the new concern. is_complete must be "
+                        "false and doctor_summary must be an empty string. Return the "
+                        "required JSON object."
                     ),
                 }
             )
@@ -477,6 +573,7 @@ def get_doctor_summary(
     client: OpenAI,
     chat_history: List[Dict[str, str]],
     prior_history: str,
+    patient_context: str,
     model: str,
 ) -> Dict[str, str]:
     """Run the summarizer agent and return a dict with all 18 topic keys."""
@@ -490,6 +587,11 @@ def get_doctor_summary(
     user_content = (
         f"Chat transcript between nurse assistant and patient:\n\n{transcript}"
     )
+    if patient_context.strip():
+        user_content += f"\n\nPatient context:\n{patient_context.strip()}"
+    else:
+        user_content += "\n\nPatient context: (none provided)"
+
     if prior_history.strip():
         user_content += f"\n\nPrior patient history:\n{prior_history.strip()}"
     else:
@@ -887,6 +989,21 @@ def main() -> None:
             height=260,
         )
 
+        patient_name = st.text_input(
+            "Patient name",
+            placeholder="Optional",
+        )
+
+        doctor_name = st.text_input(
+            "Doctor name",
+            placeholder="Optional",
+        )
+
+        therapy_week = st.text_input(
+            "Week of therapy",
+            placeholder="Example: Week 3",
+        )
+
         prior_history = st.text_area(
             "Prior patient history",
             placeholder=(
@@ -894,6 +1011,12 @@ def main() -> None:
                 "difficulty and reduced appetite."
             ),
             height=160,
+        )
+
+        patient_context = build_patient_context(
+            patient_name=patient_name,
+            doctor_name=doctor_name,
+            therapy_week=therapy_week,
         )
 
         if st.button("Start new check-in", use_container_width=True):
@@ -929,6 +1052,7 @@ def main() -> None:
                     client=client,
                     chat_history=st.session_state.messages,
                     prior_history=prior_history,
+                    patient_context=patient_context,
                     model=model,
                 )
                 st.session_state.doctor_summary_structured = structured
@@ -975,6 +1099,7 @@ def main() -> None:
                     client=client,
                     chat_history=st.session_state.messages,
                     prior_history=prior_history,
+                    patient_context=patient_context,
                     model=model,
                     system_prompt=system_prompt,
                 )
