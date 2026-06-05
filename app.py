@@ -2,6 +2,10 @@ import json
 import os
 import html
 import re
+import csv
+import urllib.error
+import urllib.request
+from datetime import datetime
 from typing import Dict, List, Any
 
 import streamlit as st
@@ -302,6 +306,204 @@ CHAT_TOPICS = [
 
 SUMMARY_TOPICS = CHAT_TOPICS + ["Other"]
 
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
+VISIT_LOG_JSONL = os.path.join(APP_DIR, "chatbot_visit_logs.jsonl")
+VISIT_LOG_CSV = os.path.join(APP_DIR, "chatbot_visit_logs.csv")
+VISIT_LOG_FIELDS = [
+    "timestamp",
+    "doctor_name",
+    "patient_name",
+    "patient_id",
+    "therapy_week",
+    "interview_notes",
+    "manual_prior_history",
+    "doctor_summary",
+    "structured_summary_json",
+    "transcript_json",
+]
+
+
+def _safe_json_dumps(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False)
+
+
+def load_visit_logs() -> List[Dict[str, Any]]:
+    if not os.path.exists(VISIT_LOG_JSONL):
+        return []
+
+    logs: List[Dict[str, Any]] = []
+    with open(VISIT_LOG_JSONL, "r", encoding="utf-8") as log_file:
+        for line in log_file:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                logs.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    return logs
+
+
+def _matches_patient(log: Dict[str, Any], patient_name: str, patient_id: str) -> bool:
+    patient_name = patient_name.strip().lower()
+    patient_id = patient_id.strip().lower()
+    log_name = str(log.get("patient_name", "")).strip().lower()
+    log_id = str(log.get("patient_id", "")).strip().lower()
+
+    if patient_id and log_id and patient_id == log_id:
+        return True
+    if patient_name and log_name and patient_name == log_name:
+        return True
+    return False
+
+
+def get_previous_visits(patient_name: str, patient_id: str) -> List[Dict[str, Any]]:
+    return [
+        log
+        for log in load_visit_logs()
+        if _matches_patient(log, patient_name, patient_id)
+    ]
+
+
+def format_previous_visits_for_prompt(previous_visits: List[Dict[str, Any]]) -> str:
+    if not previous_visits:
+        return ""
+
+    sections: List[str] = []
+    for index, visit in enumerate(previous_visits, start=1):
+        summary = str(visit.get("doctor_summary", "")).strip()
+        if not summary:
+            structured = visit.get("structured_summary", {})
+            summary_parts = []
+            for topic in SUMMARY_TOPICS:
+                main_issue = str(structured.get(f"{topic}_Main issues", "")).strip()
+                if main_issue:
+                    summary_parts.append(f"{topic}: {main_issue}")
+            summary = "\n".join(summary_parts)
+
+        sections.append(
+            "\n".join(
+                [
+                    f"Previous Visit {index}",
+                    f"Date/time: {visit.get('timestamp', '')}",
+                    f"Doctor: {visit.get('doctor_name', '')}",
+                    f"Patient: {visit.get('patient_name', '')}",
+                    f"Patient ID: {visit.get('patient_id', '')}",
+                    f"Therapy week: {visit.get('therapy_week', '')}",
+                    f"Notes: {visit.get('interview_notes', '')}",
+                    f"Summary: {summary or '(no summary saved)'}",
+                ]
+            )
+        )
+    return "\n\n".join(sections)
+
+
+def combine_prior_history(
+    manual_prior_history: str,
+    previous_visits: List[Dict[str, Any]],
+) -> str:
+    parts: List[str] = []
+    if manual_prior_history.strip():
+        parts.append(f"Manually entered prior history:\n{manual_prior_history.strip()}")
+
+    previous_visit_text = format_previous_visits_for_prompt(previous_visits)
+    if previous_visit_text:
+        parts.append(f"Prior saved visits for this patient:\n{previous_visit_text}")
+
+    return "\n\n".join(parts)
+
+
+def save_visit_log(
+    *,
+    doctor_name: str,
+    patient_name: str,
+    patient_id: str,
+    therapy_week: str,
+    interview_notes: str,
+    manual_prior_history: str,
+    messages: List[Dict[str, str]],
+    doctor_summary: str,
+    structured_summary: Dict[str, str],
+) -> None:
+    record = {
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "doctor_name": doctor_name.strip(),
+        "patient_name": patient_name.strip(),
+        "patient_id": patient_id.strip(),
+        "therapy_week": therapy_week.strip(),
+        "interview_notes": interview_notes.strip(),
+        "manual_prior_history": manual_prior_history.strip(),
+        "doctor_summary": doctor_summary.strip(),
+        "structured_summary": structured_summary,
+        "transcript": messages,
+    }
+
+    with open(VISIT_LOG_JSONL, "a", encoding="utf-8") as jsonl_file:
+        jsonl_file.write(_safe_json_dumps(record) + "\n")
+
+    csv_exists = os.path.exists(VISIT_LOG_CSV)
+    with open(VISIT_LOG_CSV, "a", encoding="utf-8", newline="") as csv_file:
+        writer = csv.DictWriter(csv_file, fieldnames=VISIT_LOG_FIELDS)
+        if not csv_exists:
+            writer.writeheader()
+        writer.writerow(
+            {
+                "timestamp": record["timestamp"],
+                "doctor_name": record["doctor_name"],
+                "patient_name": record["patient_name"],
+                "patient_id": record["patient_id"],
+                "therapy_week": record["therapy_week"],
+                "interview_notes": record["interview_notes"],
+                "manual_prior_history": record["manual_prior_history"],
+                "doctor_summary": record["doctor_summary"],
+                "structured_summary_json": _safe_json_dumps(structured_summary),
+                "transcript_json": _safe_json_dumps(messages),
+            }
+        )
+
+
+def send_visit_log_to_google_sheet(
+    webhook_url: str,
+    *,
+    doctor_name: str,
+    patient_name: str,
+    patient_id: str,
+    therapy_week: str,
+    interview_notes: str,
+    manual_prior_history: str,
+    messages: List[Dict[str, str]],
+    doctor_summary: str,
+    structured_summary: Dict[str, str],
+) -> None:
+    if not webhook_url.strip():
+        return
+
+    payload = {
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "doctor_name": doctor_name.strip(),
+        "patient_name": patient_name.strip(),
+        "patient_id": patient_id.strip(),
+        "therapy_week": therapy_week.strip(),
+        "interview_notes": interview_notes.strip(),
+        "manual_prior_history": manual_prior_history.strip(),
+        "doctor_summary": doctor_summary.strip(),
+        "structured_summary_json": _safe_json_dumps(structured_summary),
+        "transcript_json": _safe_json_dumps(messages),
+    }
+    data = _safe_json_dumps(payload).encode("utf-8")
+    request = urllib.request.Request(
+        webhook_url.strip(),
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            response.read()
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Google Sheet save failed: {exc}") from exc
+
 
 def build_messages(
     chat_history: List[Dict[str, str]],
@@ -545,6 +747,12 @@ def initialize_state() -> None:
     if "summary_generated" not in st.session_state:
         st.session_state.summary_generated = False
 
+    if "visit_saved" not in st.session_state:
+        st.session_state.visit_saved = False
+
+    if "google_sheet_saved" not in st.session_state:
+        st.session_state.google_sheet_saved = False
+
 
 def reset_chat() -> None:
     st.session_state.messages = []
@@ -557,6 +765,8 @@ def reset_chat() -> None:
     st.session_state.completed_topics = []
     st.session_state.doctor_summary_structured = {}
     st.session_state.summary_generated = False
+    st.session_state.visit_saved = False
+    st.session_state.google_sheet_saved = False
 
 
 def render_topic_boxes() -> None:
@@ -874,14 +1084,55 @@ def main() -> None:
             height=260,
         )
 
+        st.markdown("**Visit information**")
+        doctor_name = st.text_input("Doctor name")
+        patient_name = st.text_input("Patient name")
+        patient_id = st.text_input("Patient ID")
+        therapy_week = st.text_input("Week of therapy")
+        interview_notes = st.text_area("Interview notes", height=90)
+        google_sheet_webhook_url = st.text_input(
+            "Google Sheets webhook URL",
+            type="password",
+            help="Optional. If provided, completed visits are also saved to the connected Google Sheet.",
+        )
+
+        previous_visits = get_previous_visits(patient_name, patient_id)
+        if previous_visits:
+            st.success(f"Found {len(previous_visits)} previous visit(s) for this patient.")
+            with st.expander("Preview loaded prior visits"):
+                st.text(format_previous_visits_for_prompt(previous_visits))
+        elif patient_name.strip() or patient_id.strip():
+            st.info("No saved previous visits found for this patient yet.")
+
         prior_history = st.text_area(
-            "Prior patient history",
+            "Additional prior patient history",
             placeholder=(
                 "Optional example: Last visit, patient reported mild swallowing "
                 "difficulty and reduced appetite."
             ),
             height=160,
         )
+        combined_prior_history = combine_prior_history(prior_history, previous_visits)
+        current_visit_context = "\n".join(
+            line
+            for line in [
+                f"Doctor: {doctor_name.strip()}" if doctor_name.strip() else "",
+                f"Patient name: {patient_name.strip()}" if patient_name.strip() else "",
+                f"Patient ID: {patient_id.strip()}" if patient_id.strip() else "",
+                f"Current therapy week: {therapy_week.strip()}" if therapy_week.strip() else "",
+                f"Interview notes: {interview_notes.strip()}" if interview_notes.strip() else "",
+            ]
+            if line
+        )
+        if current_visit_context:
+            combined_prior_history = "\n\n".join(
+                part
+                for part in [
+                    f"Current visit context:\n{current_visit_context}",
+                    combined_prior_history,
+                ]
+                if part
+            )
 
         if st.button("Start new check-in", use_container_width=True):
             reset_chat()
@@ -900,6 +1151,26 @@ def main() -> None:
         else:
             st.markdown("**Status:** In progress")
 
+        if os.path.exists(VISIT_LOG_CSV):
+            with open(VISIT_LOG_CSV, "rb") as csv_file:
+                st.download_button(
+                    "Download visit log CSV",
+                    data=csv_file,
+                    file_name="chatbot_visit_logs.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                )
+
+        if os.path.exists(VISIT_LOG_JSONL):
+            with open(VISIT_LOG_JSONL, "rb") as jsonl_file:
+                st.download_button(
+                    "Download visit log JSONL",
+                    data=jsonl_file,
+                    file_name="chatbot_visit_logs.jsonl",
+                    mime="application/json",
+                    use_container_width=True,
+                )
+
     try:
         api_key = st.secrets["OPENAI_API_KEY"]
     except KeyError:
@@ -915,7 +1186,7 @@ def main() -> None:
                 structured = get_doctor_summary(
                     client=client,
                     chat_history=st.session_state.messages,
-                    prior_history=prior_history,
+                    prior_history=combined_prior_history,
                     model=model,
                 )
                 st.session_state.doctor_summary_structured = structured
@@ -924,6 +1195,49 @@ def main() -> None:
                 st.session_state.doctor_summary_structured = {}
             st.session_state.summary_generated = True
         st.rerun()
+
+    if (
+        st.session_state.is_complete
+        and st.session_state.summary_generated
+        and not st.session_state.visit_saved
+    ):
+        try:
+            save_visit_log(
+                doctor_name=doctor_name,
+                patient_name=patient_name,
+                patient_id=patient_id,
+                therapy_week=therapy_week,
+                interview_notes=interview_notes,
+                manual_prior_history=prior_history,
+                messages=st.session_state.messages,
+                doctor_summary=st.session_state.doctor_summary,
+                structured_summary=st.session_state.doctor_summary_structured,
+            )
+            st.session_state.visit_saved = True
+        except Exception as exc:
+            st.warning(f"Could not save visit log: {exc}")
+
+        if (
+            st.session_state.visit_saved
+            and google_sheet_webhook_url.strip()
+            and not st.session_state.google_sheet_saved
+        ):
+            try:
+                send_visit_log_to_google_sheet(
+                    google_sheet_webhook_url,
+                    doctor_name=doctor_name,
+                    patient_name=patient_name,
+                    patient_id=patient_id,
+                    therapy_week=therapy_week,
+                    interview_notes=interview_notes,
+                    manual_prior_history=prior_history,
+                    messages=st.session_state.messages,
+                    doctor_summary=st.session_state.doctor_summary,
+                    structured_summary=st.session_state.doctor_summary_structured,
+                )
+                st.session_state.google_sheet_saved = True
+            except Exception as exc:
+                st.warning(f"Saved locally, but could not save to Google Sheet: {exc}")
 
     # ---- Routing: doctor summary page after submission, otherwise patient chat ----
     if st.session_state.is_complete:
@@ -961,7 +1275,7 @@ def main() -> None:
                 result = get_nurse_response(
                     client=client,
                     chat_history=st.session_state.messages,
-                    prior_history=prior_history,
+                    prior_history=combined_prior_history,
                     model=model,
                     system_prompt=system_prompt,
                 )
