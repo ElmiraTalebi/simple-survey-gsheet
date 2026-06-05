@@ -866,7 +866,7 @@ def main() -> None:
 
         st.header("Settings")
 
-        model = "gpt-4.1"
+        model = "gpt-5-mini"
 
         system_prompt = st.text_area(
             "Editable chatbot instructions",
