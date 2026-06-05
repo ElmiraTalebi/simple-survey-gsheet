@@ -169,6 +169,8 @@ Use of Patient History Rule:
 - Prior patient history is background context only. Do not treat prior history as the patient's current answer.
 - Prior positive symptoms are mandatory to re-check in the current visit unless the patient has already discussed them in the current conversation.
 - Prior negative findings do not count as current denials. Re-screen clinically relevant topics in the current conversation.
+- A broad answer such as "no," "nothing," "no symptoms," or "no symptoms today" does not count as reassessing prior reported symptoms by name.
+- If the patient gives a broad denial and prior history includes reported symptoms, still ask about one prior reported symptom by name.
 - If a symptom was present in prior history, briefly check its current status unless the patient has already discussed it in the current conversation.
 - Ask whether the prior symptom has improved, worsened, resolved, or stayed the same.
 - Do not skip a clinical topic only because it appears in prior history. Prior history should personalize the question, not replace asking about the patient's current condition.
@@ -387,7 +389,7 @@ Prior Patient History:
 {prior_history.strip()}
 
 Current Visit Reassessment Requirement:
-Prior history is not the patient's current answer. Re-check prior positive symptoms by name during this current visit unless the patient already discussed them in this current conversation. Do not treat prior negative findings as current denials.
+Prior history is not the patient's current answer. Re-check prior reported symptoms by name during this current visit unless the patient already discussed them in this current conversation. Do not treat prior negative findings as current denials. A broad current denial such as "no symptoms today" does not count as reassessing prior reported symptoms by name.
 """
 
     messages = [{"role": "system", "content": system_content}]
@@ -493,6 +495,32 @@ def _parse_nurse_response(raw_content: str) -> Dict[str, Any]:
         }
 
 
+def _retry_nurse_response(
+    client: OpenAI,
+    chat_history: List[Dict[str, str]],
+    prior_history: str,
+    patient_context: str,
+    model: str,
+    system_prompt: str,
+    quality_message: str,
+) -> tuple[Dict[str, Any], str]:
+    retry_messages = build_messages(chat_history, prior_history, patient_context, system_prompt)
+    retry_messages.append(
+        {
+            "role": "system",
+            "content": quality_message,
+        }
+    )
+    retry_response = client.chat.completions.create(
+        model=model,
+        messages=retry_messages,
+        reasoning_effort="minimal",
+        response_format={"type": "json_object"},
+    )
+    raw_content = retry_response.choices[0].message.content or ""
+    return _parse_nurse_response(raw_content), raw_content
+
+
 def get_nurse_response(
     client: OpenAI,
     chat_history: List[Dict[str, str]],
@@ -529,29 +557,54 @@ def get_nurse_response(
     raw_content = response.choices[0].message.content or ""
     parsed = _parse_nurse_response(raw_content)
 
-    if _reply_has_multiple_questions(parsed.get("reply", "")):
-        retry_messages = build_messages(chat_history, prior_history, patient_context, system_prompt)
-        retry_messages.append(
-            {
-                "role": "system",
-                "content": (
-                    "Internal quality check: Rewrite the next assistant response so it "
-                    "asks exactly one question, asks for only one clinical variable, "
-                    "does not repeat information the patient already gave, and still "
-                    "returns the required JSON object."
-                ),
-            }
-        )
-        retry_response = client.chat.completions.create(
+    if not parsed.get("reply", "").strip():
+        parsed, raw_content = _retry_nurse_response(
+            client=client,
+            chat_history=chat_history,
+            prior_history=prior_history,
+            patient_context=patient_context,
             model=model,
-            messages=retry_messages,
-            reasoning_effort="minimal",
-            response_format={"type": "json_object"},
+            system_prompt=system_prompt,
+            quality_message=(
+                "Internal quality check: The previous JSON had an empty reply. "
+                "Return a non-empty, warm assistant reply that asks exactly one "
+                "clinically relevant next question, does not repeat information "
+                "the patient already gave, and still returns the required JSON object."
+            ),
         )
-        raw_content = retry_response.choices[0].message.content or ""
-        parsed = _parse_nurse_response(raw_content)
+
+    if _reply_has_multiple_questions(parsed.get("reply", "")):
+        parsed, raw_content = _retry_nurse_response(
+            client=client,
+            chat_history=chat_history,
+            prior_history=prior_history,
+            patient_context=patient_context,
+            model=model,
+            system_prompt=system_prompt,
+            quality_message=(
+                "Internal quality check: Rewrite the next assistant response so it "
+                "asks exactly one question, asks for only one clinical variable, "
+                "does not repeat information the patient already gave, and still "
+                "returns the required JSON object."
+            ),
+        )
 
     reply = parsed.get("reply", "").strip()
+    if not reply:
+        reply = "Thank you for sharing that. What is the most important detail about that for your doctor to know?"
+        parsed["reply"] = reply
+        parsed["is_complete"] = False
+        parsed["doctor_summary"] = ""
+        parsed["topic"] = parsed.get("topic", "")
+        raw_content = json.dumps(
+            {
+                "reply": reply,
+                "is_complete": False,
+                "doctor_summary": "",
+                "topic": parsed["topic"],
+            }
+        )
+
     is_complete = bool(parsed.get("is_complete", False))
     if _is_anything_else_turn(chat_history) and _patient_added_new_concern(chat_history):
         if not reply or "check-in is complete" in reply.lower() or "shared with your doctor" in reply.lower():
@@ -579,6 +632,22 @@ def get_nurse_response(
             parsed = _parse_nurse_response(raw_content)
             reply = parsed.get("reply", "").strip()
             is_complete = bool(parsed.get("is_complete", False))
+
+    if not reply:
+        reply = "Thank you for sharing that. What is the most important detail about that for your doctor to know?"
+        parsed["reply"] = reply
+        parsed["is_complete"] = False
+        parsed["doctor_summary"] = ""
+        parsed["topic"] = parsed.get("topic", "")
+        is_complete = False
+        raw_content = json.dumps(
+            {
+                "reply": reply,
+                "is_complete": False,
+                "doctor_summary": "",
+                "topic": parsed["topic"],
+            }
+        )
 
     return {
         "reply": reply,
