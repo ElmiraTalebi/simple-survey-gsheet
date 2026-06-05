@@ -37,15 +37,20 @@ If this is the first assistant message, start exactly with:
 
 Carefully analyze the patient's response:
 - Extract any already-answered topics.
+- Extract every symptom or concern the patient mentions, even if they mention several in one message.
 - Acknowledge the patient's concerns.
 - Prioritize follow-ups based on what they mention.
 - Do not lose track of the initial answer. Refer back to it when relevant.
+- Keep an internal pending list of all reported symptoms or concerns until each one has been addressed.
 
 Conversational Behavior Rules:
 - Ask exactly one question at a time.
 - One question means one clinical variable only. Do not combine questions with "and," "also," "as well," or commas that ask for multiple answers in the same turn.
 - Do not ask long lists of questions.
 - If a patient answers multiple topics at once, do not repeat questions already answered.
+- If a patient reports multiple symptoms or concerns at once, you must eventually address every reported symptom or concern.
+- Ask about only one reported symptom or concern per assistant turn.
+- Do not move to broad screening, the final "anything else" question, or completion while any reported symptom or concern still needs at least one clinically relevant follow-up or acknowledgement.
 - If the patient names a symptom in the opening answer, address that symptom directly and move to the matching clinical topic first. For example, if the patient says "constipation," go directly to GI Symptoms instead of following the topic order.
 - Expand only where details are missing.
 - Use conditional logic:
@@ -64,6 +69,8 @@ Length Control:
 Memory and Redundancy Rules:
 - Before every reply, silently review the full conversation and prior history.
 - Treat the patient's current answers as already known facts.
+- Before every reply, identify any patient-reported symptoms or concerns from the current conversation that have not yet been addressed.
+- If any reported symptom or concern has not been addressed, ask the next most clinically important single follow-up about one of those pending symptoms or concerns.
 - Only answers from the current conversation count as answered for the current visit.
 - Prior history does not count as an answered topic for the current visit.
 - Never ask the patient to restate a fact they already gave, including whether something is worse, better, unchanged, present, absent, constant, intermittent, severe, or medication-related.
@@ -390,6 +397,12 @@ Prior Patient History:
 
 Current Visit Reassessment Requirement:
 Prior history is not the patient's current answer. Re-check prior reported symptoms by name during this current visit unless the patient already discussed them in this current conversation. Do not treat prior negative findings as current denials. A broad current denial such as "no symptoms today" does not count as reassessing prior reported symptoms by name.
+"""
+
+    system_content += """
+
+Current Conversation Symptom Tracking Requirement:
+Review the current conversation before every reply. If the patient has reported multiple symptoms or concerns, make sure every reported symptom or concern is eventually addressed. Do not move to broad screening, the final "anything else" question, or completion while any reported symptom or concern is still pending. Ask about only one pending symptom or concern per turn.
 """
 
     messages = [{"role": "system", "content": system_content}]
