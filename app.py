@@ -2,10 +2,18 @@ import json
 import os
 import html
 import re
-from typing import Dict, List, Any
+from datetime import datetime
+from typing import Dict, List, Any, Optional
 
 import streamlit as st
 from openai import OpenAI
+
+try:
+    import gspread
+    from google.oauth2.service_account import Credentials
+except ImportError:
+    gspread = None
+    Credentials = None
 
 
 # =========================
@@ -626,6 +634,114 @@ def get_doctor_summary(
 
 
 # =========================
+# Google Sheets
+# =========================
+
+_sheet = None
+_sheet_error: Optional[str] = None
+
+
+def _secret(name: str, default: Any = None) -> Any:
+    try:
+        return st.secrets[name]
+    except KeyError:
+        return default
+
+
+def _extract_spreadsheet_id(value: str) -> str:
+    value = value.strip()
+    match = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", value)
+    if match:
+        return match.group(1)
+    return value
+
+
+def _init_sheets() -> None:
+    global _sheet, _sheet_error
+    if _sheet is not None or _sheet_error is not None:
+        return
+
+    if gspread is None or Credentials is None:
+        _sheet_error = (
+            "Google Sheets libraries are not installed. Add gspread and "
+            "google-auth to your app dependencies."
+        )
+        return
+
+    try:
+        spreadsheet_secret = (
+            _secret("gsheet_id")
+            or _secret("gsheet_url")
+            or _secret("google_sheet_url")
+            or _secret("google_sheet_link")
+        )
+        if not spreadsheet_secret:
+            raise ValueError(
+                "Missing Google Sheet secret. Add gsheet_id or gsheet_url to Streamlit secrets."
+            )
+
+        creds = Credentials.from_service_account_info(
+            _secret("gcp_service_account"),
+            scopes=["https://www.googleapis.com/auth/spreadsheets"],
+        )
+        spreadsheet_id = _extract_spreadsheet_id(str(spreadsheet_secret))
+        book = gspread.authorize(creds).open_by_key(spreadsheet_id)
+        try:
+            ws = book.worksheet("ChatReport")
+        except Exception:
+            ws = book.add_worksheet(title="ChatReport", rows=2000, cols=5)
+            ws.append_row(["timestamp", "name", "all_data_json", "report"])
+        _sheet = ws
+    except Exception as exc:
+        _sheet_error = str(exc)
+
+
+def save_to_sheet(name: str, all_data: dict, report: str = "") -> bool:
+    """
+    Append one row to the Google Sheet.
+    Columns: timestamp | name | all_data_json | report
+    Returns True on success, False on failure.
+    """
+    _init_sheets()
+    if _sheet is None:
+        st.error(f"Could not connect to Google Sheets: {_sheet_error}")
+        return False
+    try:
+        _sheet.append_row(
+            [
+                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                name,
+                json.dumps(all_data, ensure_ascii=False),
+                report,
+            ]
+        )
+        return True
+    except Exception as exc:
+        st.error(f"Failed to save to Google Sheets: {exc}")
+        return False
+
+
+def build_sheet_payload(
+    patient_name: str,
+    doctor_name: str,
+    therapy_week: str,
+    prior_history: str,
+    messages: List[Dict[str, str]],
+    doctor_summary: str,
+    structured_summary: Dict[str, str],
+) -> Dict[str, Any]:
+    return {
+        "patient_name": patient_name.strip(),
+        "doctor_name": doctor_name.strip(),
+        "therapy_week": therapy_week.strip(),
+        "prior_history": prior_history.strip(),
+        "transcript": messages,
+        "doctor_summary": doctor_summary.strip(),
+        "structured_summary": structured_summary,
+    }
+
+
+# =========================
 # UI Helpers
 # =========================
 
@@ -660,6 +776,9 @@ def initialize_state() -> None:
     if "summary_generated" not in st.session_state:
         st.session_state.summary_generated = False
 
+    if "sheet_saved" not in st.session_state:
+        st.session_state.sheet_saved = False
+
 
 def reset_chat() -> None:
     st.session_state.messages = []
@@ -672,6 +791,7 @@ def reset_chat() -> None:
     st.session_state.completed_topics = []
     st.session_state.doctor_summary_structured = {}
     st.session_state.summary_generated = False
+    st.session_state.sheet_saved = False
 
 
 def render_topic_boxes() -> None:
@@ -1056,6 +1176,21 @@ def main() -> None:
                     model=model,
                 )
                 st.session_state.doctor_summary_structured = structured
+                if not st.session_state.sheet_saved:
+                    sheet_payload = build_sheet_payload(
+                        patient_name=patient_name,
+                        doctor_name=doctor_name,
+                        therapy_week=therapy_week,
+                        prior_history=prior_history,
+                        messages=st.session_state.messages,
+                        doctor_summary=st.session_state.doctor_summary,
+                        structured_summary=structured,
+                    )
+                    st.session_state.sheet_saved = save_to_sheet(
+                        name=patient_name.strip() or "Unknown patient",
+                        all_data=sheet_payload,
+                        report=st.session_state.doctor_summary,
+                    )
             except Exception as exc:  # surface the error but don't crash the app
                 st.warning(f"Could not generate doctor summary: {exc}")
                 st.session_state.doctor_summary_structured = {}
