@@ -1719,6 +1719,98 @@ def save_to_local_csv(
         return False
 
 
+def _load_prior_summary_from_sheet(patient_name: str) -> str:
+    """Read this patient's most recent completed check-in from the Google Sheet and
+    build a prior-history note from that visit - the overview, the urgent items, AND the
+    non-major reported issues per topic - so the next check-in (and the doctor
+    dashboard's Prior history) shows the full picture from last time.
+
+    Returns an empty string when there is no prior record, no name, or the sheet is
+    unavailable - so it can never break a check-in that has no history."""
+    name = (patient_name or "").strip().lower()
+    if not name:
+        return ""
+    _init_sheets()
+    if _sheet is None:
+        return ""
+    try:
+        records = _sheet.get_all_records()
+    except Exception:
+        return ""
+
+    # Rows are appended chronologically, so the last matching row is the latest visit.
+    match = None
+    for row in records:
+        if str(row.get("patient_name", "")).strip().lower() == name:
+            match = row
+    if not match:
+        return ""
+
+    # Prefer the full structured summary; fall back to the flat columns if missing.
+    try:
+        summary = json.loads(match.get("structured_summary_json") or "{}")
+    except Exception:
+        summary = {}
+    if not isinstance(summary, dict):
+        summary = {}
+
+    date_text = ""
+    stamp = str(match.get("timestamp", "")).strip()
+    if stamp:
+        try:
+            date_text = datetime.fromisoformat(stamp).strftime("%b %d, %Y")
+        except (TypeError, ValueError):
+            date_text = stamp[:10]
+
+    sections: List[str] = [
+        "Summary of last check-in" + (f" ({date_text})" if date_text else "") + ":"
+    ]
+
+    overview = str(summary.get("Overview", "")).strip() or str(match.get("overview", "")).strip()
+    if overview:
+        sections.append("Overview: " + overview.replace("**", ""))
+
+    # Urgent items (the safety-relevant flags).
+    urgent_lines: List[str] = []
+    flags = summary.get("Urgent_flags")
+    if not isinstance(flags, list):
+        try:
+            flags = json.loads(match.get("urgent_flags_json") or "[]")
+        except Exception:
+            flags = []
+    for flag in flags if isinstance(flags, list) else []:
+        if isinstance(flag, dict):
+            label = str(flag.get("label", "")).strip()
+            reason = str(flag.get("reason", "")).strip()
+            topic = str(flag.get("topic", "")).strip()
+            piece = f"{label}: {reason}" if (label and reason) else (label or reason)
+            if not piece:
+                continue
+            if topic:
+                piece = f"{piece} ({topic})"
+            urgent_lines.append(f"- {piece}")
+        elif str(flag).strip():
+            urgent_lines.append(f"- {str(flag).strip()}")
+    if urgent_lines:
+        sections.append("Urgent items:\n" + "\n".join(urgent_lines))
+
+    # Non-major reported issues, per topic, from the structured summary.
+    issue_lines: List[str] = []
+    for topic in SUMMARY_TOPICS:
+        main = str(summary.get(f"{topic}_Main issues", "")).strip()
+        if not main or main.lower().rstrip(".") in ("no issues reported", "none reported"):
+            continue
+        status = str(summary.get(f"{topic}_status", "")).strip()
+        tag = f" [{status}]" if status in ("worse", "better") else ""
+        issue_lines.append(f"- {topic}{tag}: {main.replace('**', '')}")
+    if issue_lines:
+        sections.append("Reported issues by topic:\n" + "\n".join(issue_lines))
+
+    if len(sections) == 1:  # header only - nothing was captured
+        sections.append("No issues were reported at the last check-in.")
+    return "\n".join(sections)
+
+
 def build_sheet_payload(
     patient_name: str,
     doctor_name: str,
@@ -3660,31 +3752,6 @@ def main() -> None:
         )
         st.caption(f"Status: {status}")
 
-        # Pacing debug readout - lets you watch the enforcement work during testing.
-        if st.session_state.started and not st.session_state.is_complete:
-            sym = len(
-                [l for l in st.session_state.selected_symptom_labels if l != CHECKLIST_NONE_LABEL]
-            )
-            soft_b, wrap_b, hard_b, abs_b = _effective_budget(sym)
-            asked = _questions_asked(st.session_state.messages)
-            worst_lab = st.session_state.worst_label
-            sel_labs = st.session_state.selected_symptom_labels
-            target, counts, met = _quota_state(
-                st.session_state.messages, st.session_state.selected_topics, worst_lab, sel_labs
-            )
-            planned = sum(
-                _topic_quota(t, worst_lab, sel_labs) for t in st.session_state.selected_topics
-            )
-            quota_bits = " · ".join(
-                f"{t} {counts.get(t, 0)}/{_topic_quota(t, worst_lab, sel_labs)}"
-                for t in st.session_state.selected_topics
-            )
-            st.caption(
-                f"Quota · {asked}/{planned} questions · next: {target or 'DONE → close'}\n\n"
-                f"{quota_bits or '—'}  (* = worst)\n\n"
-                f"Backstops · soft {soft_b}/wrap {wrap_b}/hard {hard_b}/stop {abs_b}"
-            )
-
         patient_name = st.text_input(
             "Patient name *",
             placeholder="Required",
@@ -3728,6 +3795,12 @@ def main() -> None:
                 st.stop()
             reset_chat()
             st.session_state.saved_prior_history = prior_history
+            # If the prior-history field was left blank, auto-load last visit's urgent
+            # summary from the Google Sheet by patient name (added feature).
+            if not prior_history.strip():
+                st.session_state.saved_prior_history = _load_prior_summary_from_sheet(
+                    patient_name
+                )
             st.session_state.saved_system_prompt = system_prompt
             st.session_state.saved_patient_name = patient_name
             st.session_state.saved_doctor_name = doctor_name
