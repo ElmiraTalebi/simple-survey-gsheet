@@ -5,8 +5,9 @@ import re
 import hashlib
 import csv
 import textwrap
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional
 
 import streamlit as st
@@ -24,13 +25,59 @@ except ImportError:
 # Prompt / System Logic
 # =========================
 
-PROMPT_VERSION = "virtual-doctor-2026-07-16-v5-clinician-dashboard"
+PROMPT_VERSION = "virtual-doctor-2026-07-21-v7-agency-adaptive"
 
-PATIENT_DISCLAIMER = (
-    "🤖 You're chatting with an automated assistant — not a person. "
-    "This check-in is not monitored in real time. If you have urgent symptoms, "
-    "call your nurse triage line. In an emergency, call 911 or go to the nearest ER."
+# --- Checkbox-first opening (per the June 5 clinical-team decision) ---
+# Wording is a starting point; the clinicians asked to wordsmith the question.
+CHECKLIST_QUESTION_FIRST = (
+    "Please check everything you are experiencing today."
 )
+CHECKLIST_QUESTION_RETURNING = (
+    "Which of these are new or worse since your last check-in? Check all that apply."
+)
+CHECKLIST_NONE_LABEL = "None of these — I'm doing okay today"
+CHECKLIST_ITEMS = [
+    ("Pain", "Pain"),
+    ("Mouth sores", "Oral Symptoms"),
+    ("Difficulty swallowing", "Swallowing"),
+    ("Trouble eating or drinking", "Nutrition"),
+    ("Weight loss", "Nutrition"),
+    ("Nausea, vomiting, or constipation", "GI Symptoms"),
+    ("Fatigue or poor sleep", "Fatigue & Sleep"),
+    ("Trouble with daily activities", "Activity & Independence"),
+    ("Feeling down, anxious, or depressed", "Mood & Support"),
+    ("Breathing problems", "Other"),
+    ("Fever or chills", "Other"),
+    ("Something else", "Other"),
+]
+CHECKLIST_PREFIX = "I selected these symptoms on the checklist:"
+
+# --- Patient-facing disclosure (June 5 clinical-team requirement) ---
+# The patient must never believe a human is on the other side of the chat, or
+# that anyone is watching the answers in real time.
+TRIAGE_PHONE = "[TRIAGE PHONE NUMBER]"
+
+WELCOME_TITLE = "Hi {patient_name} 👋"
+
+WELCOME_BODY = (
+    "Before your visit, your care team would like a quick check-in about how "
+    "you're feeling. It takes about 3–5 minutes, and your answers are "
+    "summarized for your doctor to review before you arrive."
+)
+
+DISCLAIMER_FULL = (
+    "🤖 **Disclaimer: You are chatting with an automated assistant, not a person.** "
+    "This check-in is **not monitored in real time**. If you have urgent "
+    f"symptoms, call your nurse triage line at **{TRIAGE_PHONE}**. "
+    "For emergencies, call 911 or go to the nearest ER."
+)
+
+DISCLAIMER_BANNER = (
+    f"🤖 Automated assistant · not monitored in real time · "
+    f"urgent symptoms → call nurse triage {TRIAGE_PHONE}"
+)
+
+WELCOME_BUTTON_LABEL = "I understand — start my check-in"
 
 # --- Conversation length budget (tune freely) ---
 # soft: start prioritizing; wrap: no new topics, move to close; hard: force-close
@@ -38,9 +85,63 @@ PATIENT_DISCLAIMER = (
 QUESTION_BUDGET_SOFT = 12
 QUESTION_BUDGET_WRAP = 16
 QUESTION_BUDGET_HARD = 22
+# At the wrap (16) and hard (22) thresholds the patient is OFFERED a choice - nothing
+# closes silently. This absolute ceiling, a few questions beyond the hard threshold,
+# is the final backstop that guarantees the check-in closes and a doctor summary is
+# generated even if the patient keeps choosing to continue.
+QUESTION_BUDGET_ABSOLUTE_MARGIN = 6
+
+# --- Helper agents (advisor's architecture for the rule-forgetting problem) ---
+# As the conversation grows, the single interview agent loses sight of the system
+# prompt and over-questions (the fever/vomiting loops). Two lightweight helpers fix
+# this without bloating the main prompt:
+#   * JUDGE  - a parallel supervisor that reads the conversation with ONLY the pacing
+#              rules as its prompt and, one turn later, injects a short "move on"
+#              directive into the interview agent. Runs concurrently, so no latency.
+#   * SUMMARY - a running per-topic summarizer that compresses each closed topic so the
+#              interview agent carries "summary so far + current topic" instead of the
+#              whole transcript. Distinct from (and much lighter than) the dashboard
+#              summarizer, which is intentionally rich.
+# Both are feature-flagged so they can be A/B'd during stress testing.
+ENABLE_JUDGE_AGENT = True
+ENABLE_ROLLING_SUMMARY = True
+# The judge only needs the recent exchange to catch over-questioning; feeding it the
+# whole transcript would make it slower than the (compressed) interview call and add
+# latency as the chat grows. This caps how many recent messages it reads.
+JUDGE_CONTEXT_TAIL = 14
+# The judge is best-effort and one-turn-lagged: after the interview reply is ready we
+# wait at most this long for the judge's nudge, then move on without it (it will be
+# skipped for this turn). This guarantees the judge can never hold up a patient's turn.
+# Usually it has already finished during the interview call, so the wait is ~0.
+JUDGE_GRACE_SECONDS = 0.75
+# Only compress once enough new turns have accumulated to be worth an extra API call,
+# so short early topics don't add a blocking summarizer call to every close.
+SUMMARY_MIN_NEW_MESSAGES = 12
+# Deterministic backstop for the per-symptom follow-up limit the model tends to forget
+# (the "billion fever questions" loop). After this many questions in a row on ONE
+# topic, code - not the prompt or the judge - forces the interviewer to move on. Set to
+# the worst-symptom allowance (4) so a legitimate deep-dive is never cut short, while
+# true loops (5+) are stopped for certain.
+PER_TOPIC_QUESTION_CAP = 4
+# --- Deterministic question quotas (the QDA finding, enforced in code) ---
+# The patient's worst symptom gets WORST_SYMPTOM_QUOTA questions, every other selected
+# symptom gets OTHER_SYMPTOM_QUOTA. Code - not the model - decides which topic is asked
+# next and when the check-in ends, so length is exact rather than emergent:
+#   total = 4 + 3*(n-1)  ->  1 symptom: 4, 2: 7, 3: 10, 5: 16
+# The patient designates the worst symptom by tapping it; the model never guesses.
+# Set per the advisor's request that the check-in was "too short" - he asked for about
+# 3 questions per topic (4 on the worst), with 4 as the ceiling.
+WORST_SYMPTOM_QUOTA = 4
+OTHER_SYMPTOM_QUOTA = 3
 # Maximum number of times the final "anything else" question is asked before the
 # check-in closes with a note that remaining items go to the care team.
 ANYTHING_ELSE_MAX_ASKS = 2
+# Used when the patient declines the final "anything else" question but the model
+# does not close cleanly on its own.
+FINAL_CLOSING_REPLY = (
+    "Thank you for sharing all of that with me. Your check-in is complete, and "
+    "everything you told me will be shared with your doctor before your visit."
+)
 DEFAULT_MODEL = "gpt-5-mini"
 MODEL_PARAMETERS = {
     "reasoning_effort": "minimal",
@@ -59,8 +160,12 @@ Core Objectives:
 - Use prior patient history, if available, to personalize questions and avoid redundancy.
 
 Opening:
-If this is the first assistant message, start exactly with:
-"Are there any symptoms you would like to report to your medical team?"
+The check-in normally begins with a symptom CHECKLIST that the patient fills in before the chat. When the first user message starts with "I selected these symptoms on the checklist:", the listed symptoms are the ONLY topics to cover:
+- Ask follow-up questions one at a time about the selected symptoms, starting with the most severe or most safety-relevant.
+- If the patient selected more than one symptom, do NOT assume on your own which one is worst. Ask them briefly which symptom is bothering them the most right now, and start with that one.
+- Do NOT ask about, screen, or mention topics the patient did not select. No broad screening questions. Unselected areas are shown to the provider automatically, so skipping them is safe and expected.
+- If the first user message says the patient checked "None of these", acknowledge warmly (do not question their answer) and go directly to the final anything-else question.
+- If the patient MENTIONS a symptom they did not select (for example while answering a question about something else), do NOT open it as a new topic and do NOT ask any follow-up questions about it. Briefly acknowledge what they said and continue with the selected topics. Everything they mention is recorded for the doctor automatically. Only topics the patient explicitly selects - on the opening checklist or by adding one during the check-in - may be asked about.
 
 Carefully analyze the patient's response:
 - Extract any already-answered topics.
@@ -82,7 +187,7 @@ Conversational Behavior Rules:
 - Expand only where details are missing.
 - Use conditional logic:
 - Focus deeply on the patient's main or most severe symptoms first. For other topics, use brief broad screening questions and ask detailed follow-ups only if the patient says yes or reports a concern.
-- You should cover all the topics, but do not force every detailed sub-question for every patient. If a patient says no to a topic, do not ask follow-ups for that topic.
+- Cover ONLY the symptoms the patient selected on the checklist or raised themselves. Do not force every detailed sub-question. If a patient says no to something, do not ask follow-ups about it.
 - After all topics are covered, follow the strict Final Closing Sequence below. Never combine the "anything else" question and the completion into a single turn.
 - Occasionally offer guided options when helpful, especially for medications or symptoms patients may not recall precisely.
 - Keep tone warm, reassuring, and professional.
@@ -91,7 +196,7 @@ Length Control:
 - Keep each assistant reply to 1-2 short sentences.
 - Do not collect full detail for mild, stable, or denied symptoms.
 - If the patient reports several symptoms, triage them in this order: safety/red flags, symptoms the patient says are worst or worsening, symptoms affecting eating/drinking/swallowing/breathing/functioning, then broad screening of remaining topics.
-- After the main concerns are addressed, ask broad screening questions such as: "Are you having any other issues with eating, swallowing, breathing, mood, or stomach/bowel symptoms?"
+- Once the selected symptoms are addressed, move directly to the final anything-else question - no broad screening.
 
 Question Budget and Scope (IMPORTANT):
 - You are collecting information FOR the doctor, not performing a clinical workup. Do not pursue diagnostic lines of questioning (for example: orthostatic-testing patterns for dizziness, sleep-apnea style workups for night breathing, or extended medication-history interrogations).
@@ -219,14 +324,10 @@ When a red flag is reported:
 Use of Patient History Rule:
 - If prior patient history is provided, use it as memory, not as a checklist.
 - Prior patient history is background context only. Do not treat prior history as the patient's current answer.
-- Prior positive symptoms are mandatory to re-check in the current visit unless the patient has already discussed them in the current conversation.
-- Prior negative findings do not count as current denials. Re-screen clinically relevant topics in the current conversation.
-- A broad answer such as "no," "nothing," "no symptoms," or "no symptoms today" does not count as reassessing prior reported symptoms by name.
-- If the patient gives a broad denial and prior history includes reported symptoms, still ask about one prior reported symptom by name.
-- If a symptom was present in prior history, briefly check its current status unless the patient has already discussed it in the current conversation.
-- Ask whether the prior symptom has improved, worsened, resolved, or stayed the same.
-- Do not skip a clinical topic only because it appears in prior history. Prior history should personalize the question, not replace asking about the patient's current condition.
-- When prior history lists specific symptoms, ask about those prior symptoms by name at an appropriate point in the conversation, for example: "Last time you mentioned mouth sores. Are those better, worse, resolved, or about the same now?"
+- Do NOT re-ask about prior symptoms that the patient did not select at this check-in. They are shown to the provider automatically; re-discuss a prior symptom only if the patient selects or mentions it again.
+- When a symptom the patient DID select also appears in prior history, personalize the follow-up with the prior value, for example: "Last time you rated your throat pain 6 out of 10 - what is it now at its worst?"
+- Prior negative findings do not count as current denials.
+- Never treat prior history as the patient's current answer.
 - Bring up past issues only when they are clinically relevant or not already addressed by the patient's current answer.
 - Ask whether a past issue has resolved, improved, worsened, or stayed the same only if the patient has not already provided that comparison.
 - If the patient has already provided the comparison, ask only one missing follow-up detail or move on.
@@ -245,11 +346,12 @@ Prioritize:
 
 Final Closing Sequence (STRICT - DO NOT SKIP):
 
-Once all 9 clinical topics have been covered, ask one final open-ended question before completing the check-in.
+Once every selected symptom (and anything else the patient raised) has been addressed, ask one final open-ended question before completing the check-in.
 
 Turn 1 - The Final Open-Ended Question:
 - The message must be a single open-ended question, e.g.:
   "Before we wrap up, is there anything else you'd like to share with me - anything I haven't asked about?"
+- Begin the message by briefly naming, in just a few words, the main topics you have already covered together, then ask the open-ended question. For example: "We've talked about your pain and how you've been eating. Before we wrap up, is there anything else you'd like to share with me - anything I haven't asked about?"
 - On this turn, is_complete MUST be false.
 - doctor_summary MUST be an empty string.
 - Do NOT include closing language, "thank you," or any indication the check-in is ending.
@@ -330,7 +432,7 @@ Instructions:
 
 1. Summarize only what the patient actually reported in the transcript. Do not invent, assume, or infer information that was not stated.
 
-If the transcript says "Patient selected Finish check-in.", treat it as a UI event rather than a symptom or clinical statement. Do not infer denials for topics that were not covered. Add significant reported concerns that still lacked follow-up to Unresolved_concerns.
+If the transcript contains a wrap-up action such as "Patient asked to wrap up the check-in." or "Patient selected Finish check-in.", treat it as a UI event rather than a symptom or clinical statement. Do not infer denials for topics that were not covered. Add significant reported concerns that still lacked follow-up to Unresolved_concerns.
 
 2. Present information the way clinicians are used to reading it: lead with red flags and key changes, use clinical shorthand where appropriate (severity, frequency, duration, location), and avoid conversational filler.
 
@@ -430,6 +532,45 @@ Rules:
 """
 
 
+JUDGE_SYSTEM_PROMPT = """
+You are a silent supervisor for a pre-visit nurse check-in chatbot. You do NOT talk to the patient and you never see your output shown to them. You read the recent conversation and decide whether the interviewer's NEXT question is worth asking, then issue a short directive that will be handed to the interviewer.
+
+Do NOT try to count the questions yourself from the transcript, and do NOT enforce numeric limits - a separate system counts reliably and caps how many questions are asked per topic and overall. Instead, you are GIVEN the exact counts and remaining budget (see "Pacing status" at the end of the input). Trust those numbers and use them to prioritize: when little budget remains, be stricter - allow only the single most clinically essential follow-up and otherwise say to move on; when there is plenty of room, a genuinely useful follow-up is fine.
+
+Your job is the judgment that counting cannot make: whether the interviewer is about to ask something that adds little value. Flag ONLY these problems:
+
+- Redundancy: the interviewer is re-asking, or is about to re-ask, something the patient has already answered (including whether a symptom is worse/better, present/absent, constant/intermittent, or medication-related).
+- Diminishing returns: the essential clinical detail for the current symptom (roughly onset, severity, and functional impact) is already captured, so a further follow-up would add little for the doctor - it is time to move to the next selected symptom or toward wrap-up.
+- Scope drift: the interviewer is heading into diagnostic-workup territory that is not this tool's job (for example orthostatic-testing patterns for dizziness, sleep-apnea style workups, or extended medication-history interrogations).
+
+The interviewer collects information FOR the doctor; it is not doing a clinical workup, and anything left uncollected is simply listed for the doctor as unresolved.
+
+Respond ONLY as valid JSON:
+{
+  "intervene": true or false,
+  "directive": "A short imperative addressed to the interviewer when intervene is true, e.g. 'You already have onset, severity, and how eating is affected for swallowing - that is enough for the doctor; move to the next selected symptom.' Empty string when intervene is false."
+}
+
+Intervene ONLY when there is a real quality problem right now. When the interviewer is asking a genuinely useful new question, return {"intervene": false, "directive": ""}. Keep directives specific, one or two sentences, and never invent clinical facts.
+"""
+
+
+ROLLING_SUMMARY_SYSTEM_PROMPT = """
+You maintain a very short running summary of a nurse check-in so the interviewer can safely forget the older message-by-message detail. This is NOT a clinical dashboard summary - keep it minimal. The only goal is to let the interviewer know, in one compact line per topic, what has already been established so it does not re-ask.
+
+You are given the previous running summary and the new conversation since then. Return an UPDATED running summary that folds the new conversation into the old one.
+
+Rules:
+- One short line per topic already discussed, in the form "Topic: key facts the patient stated".
+- Use compact clinical shorthand (severity, onset, frequency, medication + effect). Only facts the patient actually stated.
+- Do not add follow-up suggestions, red-flag analysis, formatting, or commentary.
+- Do not drop facts that were already in the previous summary; carry them forward.
+- Keep the whole thing short.
+
+Respond ONLY as valid JSON: {"summary": "the updated running summary as plain text"}.
+"""
+
+
 CHAT_TOPICS = [
     "Pain",
     "Nutrition",
@@ -467,6 +608,8 @@ def build_messages(
     prior_history: str = "",
     patient_context: str = "",
     system_prompt: str = SYSTEM_PROMPT,
+    rolling_summary: str = "",
+    summary_tail_start: int = 0,
 ) -> List[Dict[str, str]]:
     system_content = system_prompt
 
@@ -483,8 +626,21 @@ Patient Context:
 Prior Patient History:
 {prior_history.strip()}
 
-Current Visit Reassessment Requirement:
-Prior history is not the patient's current answer. Re-check prior reported symptoms by name during this current visit unless the patient already discussed them in this current conversation. Do not treat prior negative findings as current denials. A broad current denial such as "no symptoms today" does not count as reassessing prior reported symptoms by name.
+Prior History Usage Requirement:
+Prior history is background context, not the patient's current answer. Do not re-ask prior symptoms the patient did not select or mention at this check-in - they are shown to the provider automatically. When a selected symptom also appears in prior history, compare to the prior value in your follow-up (for example "last time it was 6/10 - what is it now?").
+"""
+
+    # When a running summary is available, the earlier part of the transcript is
+    # replaced by this compact block so the system prompt keeps its influence and the
+    # context stays small. Only the messages from summary_tail_start onward are sent
+    # verbatim (the current, not-yet-summarized topic).
+    use_summary = bool(rolling_summary.strip()) and summary_tail_start > 0
+    if use_summary:
+        system_content += f"""
+
+Conversation So Far (compressed):
+The earlier part of this check-in has been summarized below to keep you focused. Treat every line as an already-known fact the patient reported - do NOT re-ask any of it. Continue naturally from the recent messages that follow.
+{rolling_summary.strip()}
 """
 
     system_content += """
@@ -495,10 +651,12 @@ Review the current conversation before every reply. If the patient has reported 
 
     messages = [{"role": "system", "content": system_content}]
     # Session messages contain UI/evaluation metadata. Only API-supported fields
-    # are sent to the model.
+    # are sent to the model. With a running summary, only the recent tail is sent
+    # verbatim; the rest lives in the compressed block above.
+    history_to_send = chat_history[summary_tail_start:] if use_summary else chat_history
     messages.extend(
         {"role": message["role"], "content": message.get("content", "")}
-        for message in chat_history
+        for message in history_to_send
     )
     return messages
 
@@ -507,6 +665,10 @@ def _is_final_open_question(content: str) -> bool:
     """Detect the final open-ended 'anything else' question, tolerating paraphrases."""
     text = content.lower()
     if "anything else" not in text:
+        return False
+    # "anything else about your pain" scopes to one topic; it is a follow-up, not the
+    # closing question. Treating it as final would end the check-in with topics unasked.
+    if re.search(r"anything else\s+(?:about|regarding|on|with|for|related to)\b", text):
         return False
     context_markers = (
         "wrap up", "wrap-up", "wrapping up", "haven't asked", "havent asked",
@@ -536,6 +698,7 @@ _CLOSING_CLAUSE = re.compile(
     r"nothing(?: else| more| new)?|none|not really|"
     r"that(?:'?s| is) (?:all|it|everything)|"
     r"(?:i'?m|i am) (?:good|fine|done|ok(?:ay)?|all set)|all set|"
+    r"(?:(?:i'?m|i am)\s+)?ready(?: to (?:finish|wrap up|be done|go|stop))?|"
     r"no thanks?|no thank you|thanks?|thank you|thanks a lot|"
     r"i don'?t think so|all good|"
     r"no more(?: symptoms| questions| concerns)?|"
@@ -556,7 +719,9 @@ def _patient_added_new_concern(chat_history: List[Dict[str, str]]) -> bool:
         return False
 
     text = re.sub(r"[.!?\s]+$", "", text).strip()
-    clauses = [c.strip() for c in re.split(r"[,;.!?]+|\band\b", text) if c.strip()]
+    # Split on punctuation, "and", AND spaced dashes so "No - I'm ready to finish"
+    # separates into closing clauses instead of reading as one unmatched concern.
+    clauses = [c.strip() for c in re.split(r"[,;.!?]+|\s[-–—]\s|\band\b", text) if c.strip()]
     if clauses and all(_CLOSING_CLAUSE.match(clause) for clause in clauses):
         return False
     return True
@@ -618,6 +783,97 @@ def _reply_has_multiple_questions(reply: str) -> bool:
         r",?\s+\band\s+(is|are|am|do|does|did|have|has|was|were|can|could|will|would|should)\s+(it|you|they|there|your|the)\b",
     ]
     return any(re.search(pattern, question) for pattern in multi_part_patterns)
+
+
+# A second question tacked on with "and": "..., and is it helping?" / "... and when
+# did it start?". Matched on the original reply so the cut point maps back to it.
+_TRAILING_QUESTION = re.compile(
+    r"[,;]?\s+\band\b\s+(?:where|when|how|what|which|why|is|are|am|do|does|did|have|"
+    r"has|was|were|can|could|will|would|should)\b",
+    re.IGNORECASE,
+)
+
+
+def _repair_multiple_questions(reply: str) -> str:
+    """Keep only the first question when the model asks several in one turn. Used as
+    a last resort after the corrective retry also came back with a compound question:
+    one clinical variable per turn matters more than the dropped half."""
+    first_mark = reply.find("?")
+    if first_mark != -1 and "?" in reply[first_mark + 1:]:
+        return reply[: first_mark + 1].strip()
+    match = _TRAILING_QUESTION.search(reply)
+    if not match:
+        return reply
+    kept = reply[: match.start()].rstrip(" ,;")
+    if not kept:
+        return reply
+    return kept if kept.endswith("?") else kept + "?"
+
+
+# Words that carry no topical meaning, so they must not make two questions look alike.
+_QUESTION_STOPWORDS = {
+    "what", "when", "where", "which", "would", "could", "should", "have", "has", "had",
+    "does", "did", "do", "you", "your", "yours", "are", "is", "was", "were", "been",
+    "the", "this", "that", "these", "those", "there", "here", "with", "without",
+    "about", "from", "into", "than", "then", "them", "they", "and", "but", "for",
+    "any", "some", "more", "most", "much", "many", "just", "also", "still", "been",
+    "like", "feel", "feels", "felt", "tell", "know", "sorry", "thanks", "thank",
+    "please", "right", "now", "today", "since", "both", "either", "over", "under",
+    "can", "cannot", "able", "been", "will", "may", "might", "one", "other",
+}
+
+
+def _stem(word: str) -> str:
+    """Crude suffix stripper so "swallow" and "swallowing" compare equal."""
+    for suffix in ("ing", "ies", "ied", "ed", "es", "s"):
+        if word.endswith(suffix) and len(word) - len(suffix) >= 4:
+            return word[: -len(suffix)]
+    return word
+
+
+def _question_keywords(text: str) -> set:
+    """Stemmed content words of the QUESTION itself. The empathy preamble ("I'm sorry
+    that's bothering you - ...") is dropped, otherwise its words dilute the comparison
+    and a genuine re-ask stops looking like one."""
+    segments = re.split(r"(?<=[.!?])\s+|\s[—–-]\s", text)
+    question_text = " ".join(seg for seg in segments if "?" in seg) or text
+    return {
+        _stem(word)
+        for word in re.findall(r"[a-z]+", question_text.lower())
+        if len(word) > 3 and word not in _QUESTION_STOPWORDS
+    }
+
+
+def _looks_redundant(reply: str, chat_history: List[Dict[str, str]], threshold: float = 0.5) -> bool:
+    """True when the new question closely repeats one already asked. The judge cannot
+    catch this - it runs in parallel and is a turn behind - so redundancy is detected
+    here, in the same turn, where the corrective retry can still replace the question.
+    Wasting a question matters now that each topic has a fixed quota."""
+    if "?" not in reply:
+        return False
+    new_words = _question_keywords(reply)
+    if len(new_words) < 3:
+        return False
+    for message in chat_history:
+        if message.get("role") != "assistant":
+            continue
+        previous = message.get("content", "")
+        if "?" not in previous:
+            continue
+        old_words = _question_keywords(previous)
+        if len(old_words) < 3:
+            continue
+        # Jaccard (shared / total distinct). Using min() instead made short questions
+        # look like repeats purely because they share the topic name.
+        union = len(new_words | old_words)
+        if union and len(new_words & old_words) / union >= threshold:
+            return True
+    return False
+
+
+def _has_closing_language(reply: str) -> bool:
+    lower = reply.lower()
+    return "check-in is complete" in lower or "shared with your doctor" in lower
 
 
 def _parse_nurse_response(raw_content: str) -> Dict[str, Any]:
@@ -722,21 +978,26 @@ def _normalize_nurse_response(parsed: Dict[str, Any]) -> tuple[Dict[str, Any], L
     return normalized, errors
 
 
+def _model_parameters(model: str) -> Dict[str, Any]:
+    """API parameters a given model actually accepts. Only the reasoning models
+    support reasoning_effort, so switching DEFAULT_MODEL cannot 400 every call."""
+    parameters: Dict[str, Any] = {
+        "response_format": dict(MODEL_PARAMETERS["response_format"]),
+    }
+    if model.startswith(("gpt-5", "o1", "o3", "o4")):
+        parameters["reasoning_effort"] = MODEL_PARAMETERS["reasoning_effort"]
+    return parameters
+
+
 def _create_chat_completion(
     client: OpenAI,
     model: str,
     messages: List[Dict[str, str]],
 ) -> str:
-    """Single place that talks to the API. Only sends reasoning_effort to models
-    that support it, so switching DEFAULT_MODEL cannot 400 every call."""
-    kwargs: Dict[str, Any] = {
-        "model": model,
-        "messages": messages,
-        "response_format": dict(MODEL_PARAMETERS["response_format"]),
-    }
-    if model.startswith(("gpt-5", "o1", "o3", "o4")):
-        kwargs["reasoning_effort"] = MODEL_PARAMETERS["reasoning_effort"]
-    response = client.chat.completions.create(**kwargs)
+    """Single place that talks to the API."""
+    response = client.chat.completions.create(
+        model=model, messages=messages, **_model_parameters(model)
+    )
     return response.choices[0].message.content or ""
 
 
@@ -756,19 +1017,143 @@ def _find_response_issues(
     if reply and "?" in reply:
         _, suggestion_errors = _validate_suggested_answers(parsed.get("suggested_answers", []))
         issues.extend(suggestion_errors)
+    if reply and _looks_redundant(reply, chat_history):
+        issues.append(
+            "the reply re-asks a question the patient has already answered; ask a DIFFERENT "
+            "question that gathers new information about the assigned topic instead"
+        )
+
+    # The patient is told the check-in ended while the app keeps the chat open.
+    if reply and _has_closing_language(reply) and not parsed.get("is_complete"):
+        issues.append(
+            "the reply told the patient the check-in was complete but is_complete was false"
+        )
 
     if _is_anything_else_turn(chat_history) and _patient_added_new_concern(chat_history):
-        closing_language = (
-            "check-in is complete" in reply.lower()
-            or "shared with your doctor" in reply.lower()
-        )
-        if parsed.get("is_complete") or closing_language:
+        if parsed.get("is_complete") or _has_closing_language(reply):
             issues.append(
                 "the check-in was closed although the patient raised a new concern at the "
                 "final anything-else question; acknowledge the concern and ask exactly one "
                 "targeted follow-up question instead"
             )
     return issues
+
+
+def _questions_asked(chat_history: List[Dict[str, str]]) -> int:
+    """Number of questions the assistant has asked so far (used for pacing)."""
+    return sum(
+        1
+        for message in chat_history
+        if message.get("role") == "assistant" and "?" in message.get("content", "")
+    )
+
+
+def _questions_per_topic(chat_history: List[Dict[str, str]]) -> Dict[str, int]:
+    """How many questions have been asked about each topic across the whole check-in.
+    Used to decide, in code, when every selected topic has been covered."""
+    counts: Dict[str, int] = {}
+    for message in chat_history:
+        if message.get("role") != "assistant":
+            continue
+        if "?" not in message.get("content", ""):
+            continue
+        topic = (message.get("topic") or "").strip()
+        if topic:
+            counts[topic] = counts.get(topic, 0) + 1
+    return counts
+
+
+def _labels_for_topic(topic: str, selected_labels: List[str]) -> List[str]:
+    """The patient's selected symptom labels that map to this clinical topic. Several
+    can share one topic (e.g. "Breathing problems" and "Fever or chills" are both
+    "Other"), which is exactly why quotas must be counted per SYMPTOM, not per topic."""
+    label_to_topic = dict(CHECKLIST_ITEMS)
+    return [
+        label
+        for label in selected_labels
+        if label != CHECKLIST_NONE_LABEL and label_to_topic.get(label) == topic
+    ]
+
+
+def _topic_quota(topic: str, worst_label: str, selected_labels: List[str]) -> int:
+    """Questions allotted to a topic = the sum of its selected symptoms' quotas (QDA:
+    4 for the patient's worst symptom, 2 for each other). So a topic covering two of
+    the patient's symptoms gets enough questions for both."""
+    labels = _labels_for_topic(topic, selected_labels)
+    if not labels:
+        return OTHER_SYMPTOM_QUOTA
+    return sum(
+        WORST_SYMPTOM_QUOTA if label == worst_label else OTHER_SYMPTOM_QUOTA
+        for label in labels
+    )
+
+
+def _quota_state(
+    chat_history: List[Dict[str, str]],
+    selected_topics: List[str],
+    worst_label: str,
+    selected_labels: List[str],
+) -> tuple[str, Dict[str, int], bool]:
+    """(next_target_topic, per_topic_counts, all_quotas_met).
+
+    The next target is the first selected topic whose quota is not yet filled, so code -
+    not the model - controls topic order, depth, and when the interview is finished."""
+    counts = _questions_per_topic(chat_history)
+    target = ""
+    for topic in selected_topics:
+        if counts.get(topic, 0) < _topic_quota(topic, worst_label, selected_labels):
+            target = topic
+            break
+    return target, counts, (target == "")
+
+
+def _current_topic_question_run(chat_history: List[Dict[str, str]]) -> tuple[str, int]:
+    """(topic, count) of the unbroken run of questions the interviewer has just asked
+    about the same topic, walking backwards from the latest assistant question. Used to
+    deterministically stop a single topic from being over-questioned, regardless of what
+    the model remembers. A non-question assistant turn (e.g. a pure acknowledgement)
+    does not break the run; a question on a different topic does.
+
+    An UNLABELLED question (the model returned an empty topic, which the prompt permits)
+    must NOT end the run - otherwise a single missing label silently switches the cap off
+    and lets a topic be over-questioned. It is treated as a continuation of the run."""
+    run_topic = None
+    count = 0
+    for message in reversed(chat_history):
+        if message.get("role") != "assistant":
+            continue
+        if "?" not in message.get("content", ""):
+            continue
+        topic = (message.get("topic") or "").strip()
+        if not topic:
+            # Unlabelled question: counts toward whatever run we are in, and if we have
+            # not identified the run's topic yet, keep looking further back for it.
+            count += 1
+            continue
+        if run_topic is None:
+            # First labelled question found - keep any unlabelled ones already counted.
+            run_topic = topic
+            count += 1
+        elif topic == run_topic:
+            count += 1
+        else:
+            break
+    return (run_topic or "", count)
+
+
+def _effective_budget(symptom_count: int) -> tuple[int, int, int, int]:
+    """Adaptive (soft, wrap, hard, absolute) question budget based on how many
+    symptoms the patient chose. Per the advisor's formula: about +2 questions per
+    extra symptom, anchored so the reference case of 3 symptoms reproduces the fixed
+    12/16/22. `soft` = silent speed-up, `wrap` = first agency offer, `hard` = second
+    agency offer, `absolute` = the final backstop that force-closes. symptom_count <= 0
+    ("none of these" selected, so no symptom count) falls back to the fixed defaults."""
+    if not symptom_count or symptom_count <= 0:
+        soft, wrap, hard = QUESTION_BUDGET_SOFT, QUESTION_BUDGET_WRAP, QUESTION_BUDGET_HARD
+    else:
+        soft = max(8, 6 + 2 * symptom_count)
+        wrap, hard = soft + 4, soft + 10
+    return soft, wrap, hard, hard + QUESTION_BUDGET_ABSOLUTE_MARGIN
 
 
 def get_nurse_response(
@@ -778,19 +1163,27 @@ def get_nurse_response(
     patient_context: str,
     model: str,
     system_prompt: str = SYSTEM_PROMPT,
+    symptom_count: int = 0,
+    extra_steering: str = "",
+    rolling_summary: str = "",
+    summary_tail_start: int = 0,
 ) -> Dict[str, Any]:
     def call_model(extra_system: str = "") -> tuple[Dict[str, Any], str]:
-        messages = build_messages(chat_history, prior_history, patient_context, system_prompt)
+        messages = build_messages(
+            chat_history,
+            prior_history,
+            patient_context,
+            system_prompt,
+            rolling_summary,
+            summary_tail_start,
+        )
         if extra_system:
             messages.append({"role": "system", "content": extra_system})
         raw = _create_chat_completion(client, model, messages)
         return _parse_nurse_response(raw), raw
 
-    questions_asked = sum(
-        1
-        for message in chat_history
-        if message.get("role") == "assistant" and "?" in message.get("content", "")
-    )
+    questions_asked = _questions_asked(chat_history)
+    soft_budget, wrap_budget, hard_budget, absolute_budget = _effective_budget(symptom_count)
     final_question_asks = sum(
         1
         for message in chat_history
@@ -801,14 +1194,15 @@ def get_nurse_response(
     # ---- Hard stops (no API call): guarantee the check-in closes and a doctor
     # summary is generated even for very long or looping conversations. ----
     returning_to_final = _should_return_to_anything_else(chat_history)
-    if questions_asked >= QUESTION_BUDGET_HARD or (
+    if questions_asked >= absolute_budget or (
         returning_to_final and final_question_asks >= ANYTHING_ELSE_MAX_ASKS
     ):
         reply = (
-            "Thank you - we've covered a lot today, and I want to be mindful of your "
-            "time. I've noted everything you shared, including anything we didn't get "
-            "to explore fully, so your care team can review it before your visit. "
-            "Your check-in is now complete."
+            "Thank you - we've covered a lot together, and I have more than enough to "
+            "share with your doctor. To be mindful of your time, I'll wrap up here. "
+            "I've noted everything you told me, including anything we didn't get to "
+            "explore fully, so your care team can review it before your visit. Your "
+            "check-in is now complete."
         )
         return {
             "reply": reply,
@@ -820,7 +1214,7 @@ def get_nurse_response(
             "validation_errors": [],
             "completion_reason": (
                 "question_limit_reached"
-                if questions_asked >= QUESTION_BUDGET_HARD
+                if questions_asked >= absolute_budget
                 else "anything_else_limit"
             ),
         }
@@ -842,16 +1236,18 @@ def get_nurse_response(
             "must be false and doctor_summary must be an empty string."
         )
 
-    # Pacing steering: keep the conversation inside the question budget.
-    if QUESTION_BUDGET_WRAP <= questions_asked:
+    # Pacing steering: keep the conversation inside the (adaptive) question budget.
+    if wrap_budget <= questions_asked:
         pacing_note = (
             f"Internal pacing check: You have already asked {questions_asked} questions. "
-            "Do not open any new topics. If a reported symptom still lacks one essential "
-            "detail, ask only that; otherwise move directly to the final anything-else "
-            "question. Uncollected details will be listed for the doctor as unresolved."
+            "Do not introduce topics the patient did not select. You MAY still cover a "
+            "selected topic that has not come up yet, but keep it to one or two essential "
+            "questions. If a reported symptom still lacks one essential detail, ask only "
+            "that; otherwise move toward the final anything-else question. Uncollected "
+            "details will be listed for the doctor as unresolved."
         )
         steering = (steering + "\n\n" + pacing_note).strip()
-    elif QUESTION_BUDGET_SOFT <= questions_asked:
+    elif soft_budget <= questions_asked:
         pacing_note = (
             f"Internal pacing check: You have already asked {questions_asked} questions. "
             "Be selective from here on: prioritize safety-relevant details, skip optional "
@@ -859,6 +1255,11 @@ def get_nurse_response(
             "anything-else question."
         )
         steering = (steering + "\n\n" + pacing_note).strip()
+
+    # Caller-supplied steering (patient pace controls, one-time wrap check-in) is
+    # appended last so it takes precedence over the generic pacing notes above.
+    if extra_steering.strip():
+        steering = (steering + "\n\n" + extra_steering.strip()).strip()
 
     parsed, raw_content = call_model(steering)
     issues = _find_response_issues(parsed, chat_history)
@@ -895,6 +1296,14 @@ def get_nurse_response(
         parsed["is_complete"] = False
         parsed["doctor_summary"] = ""
 
+    # A compound question survived the retry: keep the first question only, and
+    # regenerate suggestions so they match the question the patient is left with.
+    if _reply_has_multiple_questions(parsed.get("reply", "")):
+        repaired = _repair_multiple_questions(parsed["reply"])
+        if repaired != parsed["reply"]:
+            parsed["reply"] = repaired
+            parsed["suggested_answers"] = _fallback_suggested_answers(repaired)
+
     # Never close while a newly raised concern is unaddressed, even if the retry
     # also tried to close.
     if (
@@ -904,6 +1313,21 @@ def get_nurse_response(
     ):
         parsed["is_complete"] = False
         parsed["doctor_summary"] = ""
+
+    # The patient answered the final anything-else question with a plain "no": the
+    # Closing Turn is mandatory, so close here rather than spend another turn on it.
+    # _patient_added_new_concern is conservative, so this only fires on an unambiguous
+    # decline - any hint of new content leaves the check-in open.
+    if _is_anything_else_turn(chat_history) and not _patient_added_new_concern(chat_history):
+        if not parsed.get("is_complete") or "?" in parsed.get("reply", ""):
+            parsed["reply"] = FINAL_CLOSING_REPLY
+            parsed["suggested_answers"] = []
+        parsed["is_complete"] = True
+
+    # "is_complete must NEVER be true on any turn where you ask the patient a
+    # follow-up question" - otherwise the app closes on an unanswered question.
+    if parsed.get("is_complete") and "?" in parsed.get("reply", ""):
+        parsed["is_complete"] = False
 
     if not parsed.get("is_complete"):
         parsed["doctor_summary"] = ""
@@ -1016,6 +1440,84 @@ def get_doctor_summary(
             "no text outside the JSON object."
         )
     return result
+
+
+def _transcript_lines(chat_history: List[Dict[str, str]]) -> str:
+    """Plain Nurse/Patient transcript for the helper agents."""
+    lines = [
+        f"{'Nurse' if message['role'] == 'assistant' else 'Patient'}: {message.get('content', '')}"
+        for message in chat_history
+    ]
+    return "\n".join(lines)
+
+
+def get_judge_directive(
+    client: OpenAI,
+    chat_history: List[Dict[str, str]],
+    model: str,
+    pacing_note: str = "",
+) -> str:
+    """Parallel supervisor agent. Judges whether the interviewer's next question is
+    worth asking and returns a short directive for its NEXT turn (empty string when no
+    intervention is warranted). `pacing_note` carries the exact, code-computed counts
+    and budgets so the judge can prioritize without having to count the transcript
+    itself. Pure - never touches Streamlit state, so it is safe in a worker thread."""
+    if not chat_history:
+        return ""
+    user_content = _transcript_lines(chat_history)
+    if pacing_note.strip():
+        user_content += f"\n\n{pacing_note.strip()}"
+    try:
+        raw = _create_chat_completion(
+            client,
+            model,
+            [
+                {"role": "system", "content": JUDGE_SYSTEM_PROMPT},
+                {"role": "user", "content": user_content},
+            ],
+        )
+        parsed = json.loads(raw)
+    except Exception:
+        return ""
+    if not isinstance(parsed, dict) or parsed.get("intervene") is not True:
+        return ""
+    directive = parsed.get("directive", "")
+    return directive.strip() if isinstance(directive, str) else ""
+
+
+def update_rolling_summary(
+    client: OpenAI,
+    previous_summary: str,
+    new_messages: List[Dict[str, str]],
+    model: str,
+) -> str:
+    """Lightweight running summarizer. Folds the conversation since the last summary
+    into the previous summary and returns the updated compact text. On any failure it
+    returns the previous summary unchanged, so a bad call never loses context."""
+    if not new_messages:
+        return previous_summary
+    user_content = (
+        f"Previous running summary:\n{previous_summary or '(none yet)'}\n\n"
+        f"New conversation since then:\n{_transcript_lines(new_messages)}"
+    )
+    try:
+        raw = _create_chat_completion(
+            client,
+            model,
+            [
+                {"role": "system", "content": ROLLING_SUMMARY_SYSTEM_PROMPT},
+                {"role": "user", "content": user_content},
+            ],
+        )
+        parsed = json.loads(raw)
+    except Exception:
+        return previous_summary
+    if not isinstance(parsed, dict):
+        return previous_summary
+    summary = parsed.get("summary", "")
+    if isinstance(summary, str) and summary.strip():
+        return summary.strip()
+    return previous_summary
 
 
 # =========================
@@ -1233,7 +1735,9 @@ def build_sheet_payload(
     completion_reason: str = "natural_completion",
 ) -> Dict[str, Any]:
     return {
-        "schema_version": "check-in-session-v2",
+        "schema_version": "check-in-session-v4",
+        "symptoms_selected": list(st.session_state.get("selected_symptom_labels", [])),
+        "disclaimer_acknowledged_at": st.session_state.get("disclaimer_acknowledged_at"),
         "session_id": session_id,
         "started_at": session_started_at,
         "saved_at": datetime.now().astimezone().isoformat(),
@@ -1275,9 +1779,6 @@ def initialize_state() -> None:
     if "check_in_started" not in st.session_state:
         st.session_state.check_in_started = False
 
-    if "show_provider_view" not in st.session_state:
-        st.session_state.show_provider_view = False
-
     if "raw_responses" not in st.session_state:
         st.session_state.raw_responses = []
 
@@ -1302,6 +1803,64 @@ def initialize_state() -> None:
     if "show_suggestions" not in st.session_state:
         st.session_state.show_suggestions = False
 
+    if "composer_text" not in st.session_state:
+        st.session_state.composer_text = ""
+
+    if "clear_composer" not in st.session_state:
+        st.session_state.clear_composer = False
+
+    if "closing_review" not in st.session_state:
+        st.session_state.closing_review = False
+
+    if "pace_mode" not in st.session_state:
+        st.session_state.pace_mode = "normal"
+
+    if "wrap_choice_offered" not in st.session_state:
+        st.session_state.wrap_choice_offered = False
+
+    if "stop_choice_offered" not in st.session_state:
+        st.session_state.stop_choice_offered = False
+
+    # Which agency offer ("wrap" / "stop") was made last turn, so the next turn knows
+    # how to react to the patient's answer. Cleared once handled.
+    if "pending_offer" not in st.session_state:
+        st.session_state.pending_offer = None
+
+    # What the patient tapped in response ("continue" / "wrap"), so code injects one
+    # unambiguous instruction instead of making the model branch.
+    if "offer_choice" not in st.session_state:
+        st.session_state.offer_choice = None
+
+    # A symptom the patient just added mid-chat: acknowledged now, covered later - the
+    # interviewer must not abandon the current topic to jump to it.
+    if "addon_notice" not in st.session_state:
+        st.session_state.addon_notice = None
+
+    # The worst symptom, chosen by the PATIENT (never inferred). Drives the 4/2 quotas.
+    if "worst_topic" not in st.session_state:
+        st.session_state.worst_topic = ""
+
+    # The worst SYMPTOM label the patient tapped. Quotas are counted per symptom, so
+    # two symptoms sharing a topic (e.g. breathing + fever, both "Other") each get one.
+    if "worst_label" not in st.session_state:
+        st.session_state.worst_label = ""
+
+    # True while we are waiting for the patient to tap which symptom is worst.
+    if "worst_pick_pending" not in st.session_state:
+        st.session_state.worst_pick_pending = False
+
+    if "judge_directive" not in st.session_state:
+        st.session_state.judge_directive = ""
+
+    if "rolling_summary" not in st.session_state:
+        st.session_state.rolling_summary = ""
+
+    if "summary_tail_start" not in st.session_state:
+        st.session_state.summary_tail_start = 0
+
+    if "pending_addon" not in st.session_state:
+        st.session_state.pending_addon = None
+
     if "session_started_at" not in st.session_state:
         st.session_state.session_started_at = datetime.now().astimezone().isoformat()
 
@@ -1318,6 +1877,18 @@ def initialize_state() -> None:
 
     if "completed_at" not in st.session_state:
         st.session_state.completed_at = ""
+
+    if "selected_topics" not in st.session_state:
+        st.session_state.selected_topics = []
+
+    if "selected_symptom_labels" not in st.session_state:
+        st.session_state.selected_symptom_labels = []
+
+    if "disclaimer_acknowledged" not in st.session_state:
+        st.session_state.disclaimer_acknowledged = False
+
+    if "disclaimer_acknowledged_at" not in st.session_state:
+        st.session_state.disclaimer_acknowledged_at = None
 
     if "saved_prior_history" not in st.session_state:
         st.session_state.saved_prior_history = ""
@@ -1336,7 +1907,6 @@ def reset_chat() -> None:
     st.session_state.doctor_summary = ""
     st.session_state.started = False
     st.session_state.check_in_started = False
-    st.session_state.show_provider_view = False
     st.session_state.raw_responses = []
     st.session_state.current_topic = ""
     st.session_state.completed_topics = []
@@ -1345,6 +1915,22 @@ def reset_chat() -> None:
     st.session_state.sheet_saved = False
     st.session_state.local_csv_saved = False
     st.session_state.show_suggestions = False
+    st.session_state.composer_text = ""
+    st.session_state.clear_composer = False
+    st.session_state.closing_review = False
+    st.session_state.pace_mode = "normal"
+    st.session_state.wrap_choice_offered = False
+    st.session_state.stop_choice_offered = False
+    st.session_state.pending_offer = None
+    st.session_state.offer_choice = None
+    st.session_state.addon_notice = None
+    st.session_state.worst_topic = ""
+    st.session_state.worst_label = ""
+    st.session_state.worst_pick_pending = False
+    st.session_state.judge_directive = ""
+    st.session_state.rolling_summary = ""
+    st.session_state.summary_tail_start = 0
+    st.session_state.pending_addon = None
     st.session_state.session_started_at = datetime.now().astimezone().isoformat()
     st.session_state.session_id = hashlib.sha256(
         st.session_state.session_started_at.encode("utf-8")
@@ -1352,6 +1938,10 @@ def reset_chat() -> None:
     st.session_state.session_errors = []
     st.session_state.completion_reason = ""
     st.session_state.completed_at = ""
+    st.session_state.selected_topics = []
+    st.session_state.selected_symptom_labels = []
+    st.session_state.disclaimer_acknowledged = False
+    st.session_state.disclaimer_acknowledged_at = None
     st.session_state.saved_prior_history = ""
     st.session_state.saved_system_prompt = SYSTEM_PROMPT
     st.session_state.saved_patient_name = ""
@@ -1360,18 +1950,74 @@ def reset_chat() -> None:
 
 
 def render_topic_boxes() -> None:
+    # Show the SYMPTOMS the patient actually checked (labels), not the deduped clinical
+    # topics - otherwise selections that share a topic (e.g. "Breathing problems" and
+    # "Fever or chills", both "Other") collapse and "3 checked" reads as "2 topics".
+    # Each label's status is derived from its mapped topic. This also matches the budget,
+    # which counts labels.
+    label_to_topic = dict(CHECKLIST_ITEMS)
+    display: List[tuple] = []  # (display_name, topic)
+    for label in st.session_state.get("selected_symptom_labels", []):
+        if label == CHECKLIST_NONE_LABEL:
+            continue
+        display.append((label, label_to_topic.get(label, "Other")))
+    # Topics that surfaced mid-chat with no checklist label of their own.
+    shown_topics = {topic for _, topic in display}
+    for topic in st.session_state.get("selected_topics", []):
+        if topic not in shown_topics:
+            display.append((topic, topic))
+            shown_topics.add(topic)
+    # Before a check-in (nothing selected yet), preview the full topic list.
+    if not display:
+        display = [(topic, topic) for topic in CHAT_TOPICS]
+
+    # A topic counts as covered once its question QUOTA is filled - not when the model
+    # happens to switch away from it, which left the final topic permanently "uncovered".
+    counts = _questions_per_topic(st.session_state.messages)
+    worst_label = st.session_state.get("worst_label", "")
+    sel_labels = st.session_state.get("selected_symptom_labels", [])
+
+    def _is_covered(topic: str) -> bool:
+        return bool(topic) and counts.get(topic, 0) >= _topic_quota(topic, worst_label, sel_labels)
+
     topic_boxes = ""
-    for topic in CHAT_TOPICS:
+    for name, topic in display:
         topic_classes = ["topic-box"]
-        if topic in st.session_state.completed_topics:
+        if _is_covered(topic):
             topic_classes.append("topic-complete")
-        if topic == st.session_state.current_topic:
+        elif topic == st.session_state.current_topic:
             topic_classes.append("topic-active")
-        topic_boxes += f'<div class="{" ".join(topic_classes)}">{topic}</div>'
+        topic_boxes += f'<div class="{" ".join(topic_classes)}">{html.escape(name)}</div>'
+
+    total_topics = len(display)
+    done_topics = sum(1 for _, topic in display if _is_covered(topic))
+    progress_pct = int((done_topics / total_topics) * 100) if total_topics else 0
 
     st.markdown(
         f"""
         <style>
+            .topic-progress {{
+                margin: 0.35rem 0 0.6rem 0;
+            }}
+            .topic-progress-label {{
+                font-size: 0.78rem;
+                font-weight: 700;
+                color: #334155;
+                margin-bottom: 0.3rem;
+            }}
+            .topic-progress-track {{
+                height: 7px;
+                border-radius: 999px;
+                background: rgba(148, 163, 184, 0.35);
+                overflow: hidden;
+            }}
+            .topic-progress-track > span {{
+                display: block;
+                height: 100%;
+                width: {progress_pct}%;
+                background: #16a34a;
+                border-radius: 999px;
+            }}
             .topic-grid {{
                 display: grid;
                 grid-template-columns: 1fr;
@@ -1399,6 +2045,10 @@ def render_topic_boxes() -> None:
                 box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.18);
             }}
         </style>
+        <div class="topic-progress">
+            <div class="topic-progress-label">Progress: {done_topics} of {total_topics} covered</div>
+            <div class="topic-progress-track"><span></span></div>
+        </div>
         <div class="topic-grid">{topic_boxes}</div>
         """,
         unsafe_allow_html=True,
@@ -1406,77 +2056,71 @@ def render_topic_boxes() -> None:
 
 
 def render_completion_banner() -> None:
-    st.markdown(
-        """
-        <style>
-        .block-container {
-            max-width: 760px !important;
-            padding-left: 1rem !important;
-            padding-right: 1rem !important;
-        }
-        .stButton button {
-            min-height: 3rem;
-            font-size: 16px !important;
-            line-height: 1.45 !important;
-            white-space: normal;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
+    st.title("Thank you for submitting your check-in")
+    st.success("Your responses have been received and will be shared with your doctor.")
+    st.caption(
+        "Your check-in is complete. The doctor's summary has been prepared and is "
+        "available to your care team."
     )
-    st.title("Thank you — you're all done")
-    st.success(
-        "Your answers are saved. A summary will be shared with your care team "
-        "before your visit."
-    )
-    st.info(PATIENT_DISCLAIMER)
-
-    if st.button(
-        "View provider summary (care team / research preview)",
-        key="completion_provider_view",
-        use_container_width=True,
-    ):
-        st.session_state.show_provider_view = True
-        st.rerun()
-    if st.button(
-        "Start a new check-in",
-        key="completion_new_checkin",
-        use_container_width=True,
-    ):
-        reset_chat()
-        st.rerun()
 
 
 def render_chat_history() -> None:
     for message in st.session_state.messages:
         if message["role"] == "assistant":
-            with st.chat_message("assistant", avatar="🤖"):
+            with st.chat_message("assistant"):
                 st.write(message["content"])
         elif message["role"] == "user":
-            with st.chat_message("user", avatar="👤"):
+            with st.chat_message("user"):
                 st.write(message["content"])
 
 
-def render_current_suggestions() -> Optional[str]:
-    """Render optional suggestions for only the current doctor question."""
+def _append_to_composer(suggestion: str) -> None:
+    """Add a tapped suggestion to whatever is already in the response box, so the
+    patient can stack several options (and their own typed text) before sending."""
+    current = st.session_state.composer_text.rstrip()
+    if not current:
+        st.session_state.composer_text = suggestion
+    else:
+        # Avoid doubled punctuation: join with a space after end punctuation,
+        # otherwise separate the clauses with a comma.
+        separator = " " if current[-1] in ".!?,;:" else ", "
+        st.session_state.composer_text = current + separator + suggestion
+
+
+def render_current_suggestions() -> None:
+    """Render optional suggestions for only the current doctor question. Tapping a
+    suggestion ADDS it to the response box (the patient can tap several and combine
+    them with their own words) - it never submits on its own."""
     if not st.session_state.messages:
-        return None
+        return
     current = st.session_state.messages[-1]
     if current.get("role") != "assistant":
-        return None
+        return
     suggestions = current.get("suggested_answers", [])
     if len(suggestions) != 5:
-        return None
+        return
 
-    st.caption("Optional — choose one below or type your own answer.")
+    # Suggestions stay hidden behind the "Suggestions" toggle on every question.
+    if st.button("Suggestions", key="toggle_current_suggestions"):
+        st.session_state.show_suggestions = not st.session_state.show_suggestions
+
+    if not st.session_state.show_suggestions:
+        return
+
+    st.caption(
+        "Optional — tap any that apply to add them to your response. You can pick "
+        "several, edit the text, or type your own, then press Send."
+    )
     for index, suggestion in enumerate(suggestions):
         if st.button(
             suggestion,
             key=f"suggestion_{len(st.session_state.messages)}_{index}",
             use_container_width=True,
         ):
-            return suggestion
-    return None
+            # Runs before the text box is created, so setting its keyed state is safe
+            # and the appended text shows on THIS rerun. No explicit st.rerun() - the
+            # button click already triggers one; a second would double the latency.
+            _append_to_composer(suggestion)
 
 
 def render_raw_responses() -> None:
@@ -2043,12 +2687,291 @@ def render_doctor_summary_page() -> None:
             st.rerun()
 
 
-def add_assistant_message(content: str, suggested_answers: Optional[List[str]] = None) -> None:
+def apply_nurse_result(result: Dict[str, Any], topic_boxes_placeholder=None) -> None:
+    """Shared bookkeeping after every nurse-model turn (chat reply or checklist kickoff)."""
+    st.session_state.raw_responses.append(result["raw_response"])
+    if result.get("validation_errors"):
+        st.session_state.session_errors.extend(result["validation_errors"])
+    if (
+        st.session_state.current_topic
+        and st.session_state.current_topic != result["topic"]
+        and st.session_state.current_topic not in st.session_state.completed_topics
+    ):
+        st.session_state.completed_topics.append(st.session_state.current_topic)
+    # A topic the model returns to is active again, not completed.
+    if result["topic"] and result["topic"] in st.session_state.completed_topics:
+        st.session_state.completed_topics.remove(result["topic"])
+    st.session_state.current_topic = result["topic"]
+
+    # NOTE: topics are never auto-added here. A symptom the patient merely MENTIONS while
+    # answering something else must not become a new interview topic - only symptoms the
+    # patient explicitly selects (opening checklist, "Add a symptom", or the closing
+    # review) are covered. Mentioned symptoms still reach the doctor via the summary.
+
+    if topic_boxes_placeholder is not None:
+        with topic_boxes_placeholder.container():
+            render_topic_boxes()
+
+    add_assistant_message(
+        result["reply"], result.get("suggested_answers", []), result.get("topic", "")
+    )
+
+    st.session_state.is_complete = result["is_complete"]
+    if result.get("completion_reason"):
+        st.session_state.completion_reason = result["completion_reason"]
+    elif st.session_state.is_complete and not st.session_state.completion_reason:
+        st.session_state.completion_reason = "natural_completion"
+    if st.session_state.is_complete and not st.session_state.completed_at:
+        st.session_state.completed_at = datetime.now().astimezone().isoformat()
+    st.session_state.doctor_summary = result["doctor_summary"]
+
+
+def render_welcome_screen(patient_name: str) -> None:
+    """The disclosure gate shown before any check-in opening (June 5 decision).
+    Nothing else may render or run until the patient acknowledges it."""
+    display_name = patient_name.strip()
+    st.subheader(
+        WELCOME_TITLE.format(patient_name=display_name) if display_name else "Hi there 👋"
+    )
+    st.write(WELCOME_BODY)
+    st.warning(DISCLAIMER_FULL)
+    if st.button(
+        WELCOME_BUTTON_LABEL,
+        type="primary",
+        key="welcome_acknowledge",
+        use_container_width=True,
+    ):
+        st.session_state.disclaimer_acknowledged = True
+        st.session_state.disclaimer_acknowledged_at = datetime.now(timezone.utc).isoformat()
+        st.rerun()
+
+
+def inject_patient_theme() -> None:
+    """Warm, calm visual theme for the patient-facing check-in only. Injected inside
+    the patient view, so it never reaches the doctor dashboard (which renders on a
+    separate path with its own layout)."""
+    st.markdown(
+        """
+        <style>
+        :root {
+            --pt-bg: #f4f7f9;
+            --pt-surface: #ffffff;
+            --pt-accent: #0f766e;
+            --pt-accent-hover: #0c5f58;
+            --pt-accent-soft: #e6f4f2;
+            --pt-accent-border: #bfe3dd;
+            --pt-text: #1f2933;
+            --pt-muted: #667085;
+            --pt-border: #e4e9f0;
+        }
+        /* Hide Streamlit's white top toolbar so there is no empty band above the
+           header, and let the soft background run to the very top. */
+        header[data-testid="stHeader"] { display: none !important; }
+        [data-testid="stAppViewContainer"] { background: var(--pt-bg); }
+        .block-container {
+            max-width: 760px !important;
+            padding-top: 1.6rem !important;
+            padding-left: 1.1rem !important;
+            padding-right: 1.1rem !important;
+        }
+        /* Trim the sidebar's top gap that existed to clear the (now hidden) toolbar. */
+        [data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {
+            padding-top: 1.2rem;
+        }
+
+        /* Friendly header card */
+        .pt-header {
+            display: flex; align-items: center; gap: 0.85rem;
+            background: linear-gradient(135deg, #0f766e 0%, #12a19a 100%);
+            color: #ffffff;
+            padding: 1rem 1.2rem;
+            border-radius: 18px;
+            margin-bottom: 1.15rem;
+            box-shadow: 0 8px 22px rgba(15, 118, 110, 0.20);
+        }
+        .pt-header-icon {
+            font-size: 1.7rem; line-height: 1;
+            background: rgba(255,255,255,0.20);
+            width: 46px; height: 46px; border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            flex: 0 0 auto;
+        }
+        .pt-header-title { font-size: 1.16rem; font-weight: 800; letter-spacing: -0.01em; }
+        .pt-header-sub { font-size: 0.85rem; opacity: 0.93; margin-top: 0.12rem; }
+
+        /* Chat bubbles */
+        [data-testid="stChatMessage"] {
+            border-radius: 18px;
+            padding: 0.8rem 1rem;
+            margin-bottom: 0.55rem;
+            box-shadow: 0 1px 2px rgba(15,23,42,0.05);
+            border: 1px solid var(--pt-border);
+            background: var(--pt-surface);
+        }
+        [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) {
+            background: var(--pt-accent-soft);
+            border-color: var(--pt-accent-border);
+        }
+        [data-testid="stChatMessage"] p {
+            font-size: 1.02rem; line-height: 1.55; color: var(--pt-text);
+        }
+
+        /* Composer text box */
+        .stTextArea textarea,
+        [data-testid="stTextArea"] textarea {
+            border-radius: 14px !important;
+            border: 1.5px solid var(--pt-border) !important;
+            font-size: 1rem !important;
+            padding: 0.75rem 0.9rem !important;
+            background: #ffffff !important;
+            color: var(--pt-text) !important;
+        }
+        .stTextArea textarea:focus,
+        [data-testid="stTextArea"] textarea:focus {
+            border-color: var(--pt-accent) !important;
+            box-shadow: 0 0 0 3px var(--pt-accent-soft) !important;
+        }
+
+        /* Buttons */
+        .stButton > button {
+            border-radius: 12px;
+            font-weight: 600;
+            transition: all 0.15s ease;
+        }
+        .stButton > button[kind="primary"],
+        .stButton > button[data-testid="stBaseButton-primary"] {
+            background: var(--pt-accent);
+            border: none;
+            box-shadow: 0 2px 8px rgba(15,118,110,0.22);
+        }
+        .stButton > button[kind="primary"]:hover,
+        .stButton > button[data-testid="stBaseButton-primary"]:hover {
+            background: var(--pt-accent-hover);
+        }
+        .stButton > button[kind="secondary"],
+        .stButton > button[data-testid="stBaseButton-secondary"] {
+            border-radius: 999px;
+            border: 1px solid var(--pt-border);
+            background: #ffffff;
+            color: var(--pt-text);
+        }
+        .stButton > button[kind="secondary"]:hover,
+        .stButton > button[data-testid="stBaseButton-secondary"]:hover {
+            border-color: var(--pt-accent);
+            color: var(--pt-accent);
+            background: var(--pt-accent-soft);
+        }
+
+        /* Checklist + captions + alerts */
+        [data-testid="stCheckbox"] label p { font-size: 1rem; }
+        [data-testid="stAlert"] { border-radius: 14px; }
+        [data-testid="stCaptionContainer"] { color: var(--pt-muted); }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_patient_header() -> None:
+    st.markdown(
+        """
+        <div class="pt-header">
+          <div class="pt-header-icon">🩺</div>
+          <div>
+            <div class="pt-header-title">Your pre-visit check-in</div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_disclaimer_banner() -> None:
+    """Slim persistent reminder above the chat. Quiet by design - it is a
+    reminder, not an alert."""
+    st.markdown(
+        f"""
+        <div style="
+            background: rgba(148, 163, 184, 0.16);
+            color: #475569;
+            border-radius: 6px;
+            padding: 6px 10px;
+            margin-bottom: 14px;
+            font-size: 0.78rem;
+            line-height: 1.35;
+        ">{html.escape(DISCLAIMER_BANNER)}</div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_symptom_checklist(returning: bool) -> Optional[tuple]:
+    """The checkbox-first opening screen. Returns (user_message, labels, topics)
+    when the patient clicks Continue, else None."""
+    question = CHECKLIST_QUESTION_RETURNING if returning else CHECKLIST_QUESTION_FIRST
+    st.subheader(question)
+    st.caption(
+        "Check all that apply. We'll only ask follow-up questions about the things "
+        "you select - everything else is noted for your care team automatically."
+    )
+
+    columns = st.columns(2)
+    checked_labels: List[str] = []
+    for index, (label, _topic) in enumerate(CHECKLIST_ITEMS):
+        with columns[index % 2]:
+            if st.checkbox(label, key=f"symcb_{index}"):
+                checked_labels.append(label)
+
+    other_description = ""
+    if "Something else" in checked_labels:
+        other_description = st.text_input(
+            "Tell us briefly what else is bothering you",
+            key="symcb_other_desc",
+            max_chars=200,
+        )
+
+    none_checked = st.checkbox(
+        CHECKLIST_NONE_LABEL, key="symcb_none", disabled=bool(checked_labels)
+    )
+
+    can_continue = bool(checked_labels) or none_checked
+    if not st.button(
+        "Continue",
+        type="primary",
+        disabled=not can_continue,
+        key="checklist_continue",
+        use_container_width=True,
+    ):
+        return None
+
+    if checked_labels:
+        detail = ""
+        if other_description.strip():
+            detail = f' (something else: "{other_description.strip()}")'
+        user_message = (
+            f"{CHECKLIST_PREFIX} " + ", ".join(checked_labels) + detail + "."
+        )
+        topics: List[str] = []
+        label_to_topic = dict(CHECKLIST_ITEMS)
+        for topic in CHAT_TOPICS:
+            if any(label_to_topic[l] == topic for l in checked_labels):
+                topics.append(topic)
+        return question, user_message, checked_labels, topics
+    user_message = 'I checked: "None of these - I\'m doing okay today."'
+    return question, user_message, [CHECKLIST_NONE_LABEL], []
+
+
+def add_assistant_message(
+    content: str,
+    suggested_answers: Optional[List[str]] = None,
+    topic: str = "",
+) -> None:
     st.session_state.messages.append(
         {
             "role": "assistant",
             "content": content,
             "suggested_answers": suggested_answers or [],
+            "topic": topic,
         }
     )
 
@@ -2061,6 +2984,549 @@ def add_user_message(content: str, response_mode: str = "typed") -> None:
             "response_mode": response_mode,
         }
     )
+
+
+def generate_and_apply_turn(
+    client: OpenAI,
+    prior_history: str,
+    patient_context: str,
+    model: str,
+    system_prompt: str,
+    topic_boxes_placeholder=None,
+) -> None:
+    """Produce one interview-agent reply for the latest patient message, render it,
+    and apply it. Assumes st.session_state.messages already ends with the user message
+    to respond to. Shared by the normal send flow and the mid-conversation
+    "add a symptom" action so both get identical pacing / judge / summary behavior."""
+    symptom_count = len(
+        [l for l in st.session_state.selected_symptom_labels if l != CHECKLIST_NONE_LABEL]
+    )
+    soft_budget, wrap_budget, hard_budget, absolute_budget = _effective_budget(symptom_count)
+    questions_so_far = _questions_asked(st.session_state.messages)
+    # Current same-topic run, used by the per-topic cap and the add-a-symptom notice.
+    run_topic, run_count = _current_topic_question_run(st.session_state.messages)
+
+    # ---- Deterministic quota control ----
+    # Code decides which topic is asked next and how deep to go, so the 4/2 split and the
+    # overall length are guaranteed rather than left to the model.
+    target_topic, topic_counts, quotas_met = _quota_state(
+        st.session_state.messages,
+        st.session_state.selected_topics,
+        st.session_state.worst_label,
+        st.session_state.selected_symptom_labels,
+    )
+    # ---- Deterministic close ----
+    # Checked BEFORE generating: the patient has just answered, and every selected topic
+    # has filled its quota, so there is nothing left to ask. Doing this after generating
+    # would leave the final question asked-but-unanswered. Suppressed when the patient
+    # has just asked to keep going.
+    if (
+        quotas_met
+        and st.session_state.selected_topics
+        and st.session_state.offer_choice != "continue"
+        and not st.session_state.is_complete
+    ):
+        st.session_state.closing_review = True
+        return
+
+    quota_steering = ""
+    if target_topic and not quotas_met:
+        asked = topic_counts.get(target_topic, 0)
+        quota = _topic_quota(
+            target_topic, st.session_state.worst_label, st.session_state.selected_symptom_labels
+        )
+        # Name the patient's ACTUAL symptoms in this topic. Several can share one topic
+        # (breathing + fever are both "Other"), and every one of them must be covered -
+        # this is what stopped "Breathing problems" being silently skipped.
+        topic_labels = _labels_for_topic(
+            target_topic, st.session_state.selected_symptom_labels
+        )
+        symptom_text = ", ".join(topic_labels) if topic_labels else target_topic
+        worst_note = (
+            f' "{st.session_state.worst_label}" is the symptom the patient said bothers them '
+            "most, so cover it most thoroughly."
+            if st.session_state.worst_label in topic_labels
+            else ""
+        )
+        multi_note = (
+            f" This topic covers {len(topic_labels)} of the patient's symptoms and you must "
+            "cover EVERY one of them - do not spend all the questions on just one."
+            if len(topic_labels) > 1
+            else ""
+        )
+        quota_steering = (
+            f"Topic assignment (follow exactly): ask your next question about {symptom_text}"
+            f" (clinical topic: {target_topic})." + worst_note + multi_note
+            + f" You have asked {asked} of {quota} planned questions here. Ask ONE question "
+            "about this only. Do not ask about any other topic, and do not ask the final "
+            "anything-else question yet."
+        )
+
+    pace_steering = ""
+    if st.session_state.pace_mode == "faster":
+        pace_steering = (
+            "The patient has asked to move faster or is getting tired. Keep this reply "
+            "especially brief, ask only the single most safety-relevant remaining "
+            "question, and steer toward wrapping up soon."
+        )
+    elif st.session_state.pace_mode == "slower":
+        pace_steering = (
+            "The patient has asked to slow down and share more. Give them room: warmly "
+            "acknowledge what they said and invite them to add any detail before you move "
+            "on; do not rush ahead."
+        )
+
+    # One-time agency check-ins: at the wrap threshold (are you tired? wrap up or keep
+    # going) and again at the hard threshold (we have enough - stop, or continue).
+    # Nothing closes silently; the patient always chooses. The higher threshold is
+    # checked first so a big jump lands on the right message.
+    # Covered / still-to-come selected topics, used by both the offers and the
+    # follow-up that reacts to the patient's answer.
+    covered_topics = list(st.session_state.completed_topics)
+    if (
+        st.session_state.current_topic
+        and st.session_state.current_topic not in covered_topics
+    ):
+        covered_topics.append(st.session_state.current_topic)
+    remaining_topics = [
+        t for t in st.session_state.selected_topics if t not in covered_topics
+    ]
+    covered_text = ", ".join(covered_topics) if covered_topics else "your main concerns"
+    remaining_text = ", ".join(remaining_topics)
+
+    # The patient is answering an offer we made last turn - tell the interviewer how to
+    # honour either choice, so "let's continue" actually delivers what was promised.
+    # A symptom was just added mid-chat: acknowledge it, but finish what is already in
+    # progress first. The interviewer must not abandon the current topic to jump to it.
+    addon_steering = ""
+    addon_notice = st.session_state.addon_notice
+    if addon_notice:
+        st.session_state.addon_notice = None
+        addon_steering = (
+            f'The patient has just added "{addon_notice}" to their list. It has ALREADY been '
+            "acknowledged for you, so do not thank them for it or mention it again, and do NOT "
+            "switch to it now. Simply continue with the topic you are currently on"
+            + (f" ({run_topic})" if run_topic else "")
+            + (
+                f", then cover the selected topics not yet discussed ({remaining_text})"
+                if remaining_text
+                else ""
+            )
+            + f', and only after those ask about "{addon_notice}". This turn, continue with the '
+            "current topic's next question."
+        )
+
+    offer_followup = ""
+    pending_offer = st.session_state.pending_offer
+    offer_choice = st.session_state.offer_choice
+    if pending_offer:
+        st.session_state.pending_offer = None
+        st.session_state.offer_choice = None
+        # One strong, UNCONDITIONAL instruction per (threshold, choice). The model is
+        # never asked to work out which branch applies - code already knows.
+        if pending_offer == "wrap" and offer_choice == "continue":
+            offer_followup = (
+                "The patient explicitly chose to KEEP GOING. Continue the check-in now: cover the "
+                "selected topics that have not come up yet"
+                + (f" ({remaining_text})" if remaining_text else "")
+                + ". Ask brief, essential questions, one at a time, and do not introduce topics "
+                "the patient did not select. Do not offer to wrap up again."
+            )
+        elif pending_offer == "wrap" and offer_choice == "wrap":
+            offer_followup = (
+                "The patient explicitly chose to WRAP UP. Do not open any further topics. Ask at "
+                "most ONE remaining essential question if something critical is missing; "
+                "otherwise go straight to the final anything-else question."
+            )
+        elif pending_offer == "stop" and offer_choice == "continue":
+            offer_followup = (
+                "The patient explicitly chose to KEEP GOING even though you already have more "
+                "than enough for the doctor. Let THEM lead: warmly invite them to tell you what "
+                "else is on their mind and follow what they raise. Do not open further topics on "
+                "your own initiative, and keep it brief."
+            )
+        elif pending_offer == "stop" and offer_choice == "wrap":
+            offer_followup = (
+                "The patient explicitly chose to FINISH. Do not ask any further clinical "
+                "questions - go straight to the final anything-else question."
+            )
+        elif pending_offer == "wrap":
+            # No button tapped (they typed a free-text reply) - let the model read it.
+            offer_followup = (
+                "The patient has just answered your wrap-up-or-continue question in their own "
+                "words. Follow what they said: if they want to keep going, cover the selected "
+                "topics that have not come up yet"
+                + (f" ({remaining_text})" if remaining_text else "")
+                + " with brief, essential questions; if they want to wrap up, ask at most one "
+                "essential question and then go to the final anything-else question."
+            )
+        else:
+            offer_followup = (
+                "The patient has just answered your finish-or-continue question in their own "
+                "words. Follow what they said: if they want to keep going, let THEM lead and "
+                "follow what they raise, briefly; if they want to finish, go to the final "
+                "anything-else question."
+            )
+
+    # ---- The wrap-up questions, at Slobodan's counts ----
+    # 12 = silent (internal speed-up only), 16 = "are you tired, wrap up or continue?",
+    # 22 = "we have enough for the doctor - stop, or keep going?". Triggered on the
+    # QUESTION COUNT exactly as he specified, not on quota progress.
+    topics_still_to_cover = [
+        t
+        for t in st.session_state.selected_topics
+        if topic_counts.get(t, 0)
+        < _topic_quota(t, st.session_state.worst_label, st.session_state.selected_symptom_labels)
+    ]
+    agency_steering = ""
+    if questions_so_far >= hard_budget and not st.session_state.stop_choice_offered:
+        agency_steering = (
+            "Wrap-up check-in (do this once, this turn only): The check-in has become quite "
+            "long. This turn, do NOT ask another clinical question. Instead, warmly reassure "
+            "the patient that you already have more than enough to share with their doctor, and "
+            "offer a clear choice: you can stop here now, or keep going if they want to provide "
+            "more. Make it entirely their choice, with no pressure either way. is_complete must "
+            "be false and doctor_summary must be an empty string."
+        )
+        quota_steering = ""
+        st.session_state.stop_choice_offered = True
+        st.session_state.wrap_choice_offered = True
+        st.session_state.pending_offer = "stop"
+    elif questions_so_far >= wrap_budget and not st.session_state.wrap_choice_offered:
+        done_text = ", ".join(
+            t for t in st.session_state.selected_topics if t not in topics_still_to_cover
+        )
+        agency_steering = (
+            "Wrap-up check-in (do this once, this turn only): This turn, do NOT ask another "
+            "clinical question. Instead, warmly tell the patient what you have discussed so far"
+            + (f" ({done_text})" if done_text else "")
+            + (
+                f", note that these were not discussed yet ({', '.join(topics_still_to_cover)})"
+                if topics_still_to_cover
+                else ""
+            )
+            + ", say you wonder whether they are already getting tired, and offer a clear "
+            "choice: you can wrap up quickly, or keep going over the remaining topics. Make it "
+            "entirely their choice, with no pressure. is_complete must be false and "
+            "doctor_summary must be an empty string."
+        )
+        quota_steering = ""
+        st.session_state.wrap_choice_offered = True
+        st.session_state.pending_offer = "wrap"
+
+    # Supervisor directive from the PREVIOUS turn's judge (one-turn lag, so the judge
+    # never sits in the critical path). Applied as the highest-priority steering.
+    directive_steering = ""
+    if ENABLE_JUDGE_AGENT and st.session_state.judge_directive:
+        directive_steering = (
+            "Supervisor directive (a pacing check has flagged this - follow it now): "
+            + st.session_state.judge_directive
+        )
+        st.session_state.judge_directive = ""
+
+    # Deterministic per-topic cap: the hard backstop for the follow-up limit the model
+    # forgets. If it has already asked PER_TOPIC_QUESTION_CAP questions in a row about
+    # one topic, code (not the prompt) forbids another and forces a move.
+    cap_steering = ""
+
+    # Exact, code-computed counts handed to the judge so it can prioritize (it never
+    # counts the transcript itself). Enforcement still lives entirely in code.
+    pace_line = {
+        "faster": "\n- The patient pressed Speed up (getting tired): favor wrapping up, and "
+        "be strict - flag any question that is not clearly essential.",
+        "slower": "\n- The patient pressed Slow down (wants to share more): be lenient - do "
+        "not flag a useful follow-up just because the essentials are captured.",
+    }.get(st.session_state.pace_mode, "")
+    judge_pacing_note = (
+        "Pacing status (computed by a reliable counter - trust these, do not recount):\n"
+        f"- Questions asked so far: {questions_so_far} "
+        f"(soft nudge at {soft_budget}, wrap at {wrap_budget}, hard offer at {hard_budget}, "
+        f"final stop at {absolute_budget}).\n"
+        f"- Current topic \"{run_topic or 'none'}\": {run_count} follow-up question(s) in a row "
+        f"(hard cap {PER_TOPIC_QUESTION_CAP} per topic)."
+        + pace_line
+    )
+
+    if run_topic and run_count >= PER_TOPIC_QUESTION_CAP:
+        cap_steering = (
+            f"Hard pacing limit reached: you have already asked {run_count} questions in a "
+            f"row about {run_topic}. Do NOT ask anything else about {run_topic} - you have "
+            "enough for the doctor. This turn, briefly acknowledge the patient's answer and "
+            "move to the next selected symptom that still needs attention, or, if none "
+            "remain, go to the final anything-else question. Anything still missing about "
+            f"{run_topic} will be listed for the doctor as unresolved."
+        )
+
+    extra_steering = "\n\n".join(
+        s
+        for s in (
+            cap_steering,
+            addon_steering,
+            offer_followup,
+            quota_steering,
+            directive_steering,
+            pace_steering,
+            agency_steering,
+        )
+        if s
+    )
+
+    # Snapshot the plain transcript and summary state up front; the worker threads must
+    # not touch Streamlit session state.
+    messages_snapshot = [
+        {
+            "role": m["role"],
+            "content": m.get("content", ""),
+            "suggested_answers": m.get("suggested_answers", []),
+        }
+        for m in st.session_state.messages
+    ]
+    rolling_summary = st.session_state.rolling_summary if ENABLE_ROLLING_SUMMARY else ""
+    summary_tail_start = st.session_state.summary_tail_start if ENABLE_ROLLING_SUMMARY else 0
+
+    with st.spinner("Nurse assistant is reviewing your response..."):
+        if ENABLE_JUDGE_AGENT:
+            # Interview agent and judge run concurrently. We block only on the
+            # interview (its reply is shown to the patient); the judge is best-effort
+            # and one-turn-lagged, so we take its nudge only if it is ready within a
+            # short grace and otherwise skip it - it can never hold up the turn.
+            pool = ThreadPoolExecutor(max_workers=2)
+            interview_future = pool.submit(
+                get_nurse_response,
+                client,
+                messages_snapshot,
+                prior_history,
+                patient_context,
+                model,
+                system_prompt,
+                symptom_count,
+                extra_steering,
+                rolling_summary,
+                summary_tail_start,
+            )
+            judge_future = pool.submit(
+                # Recent tail only - keeps the judge fast and light. The pacing note
+                # gives it the exact counts/budget so it can prioritize without
+                # counting the transcript itself.
+                get_judge_directive,
+                client,
+                messages_snapshot[-JUDGE_CONTEXT_TAIL:],
+                model,
+                judge_pacing_note,
+            )
+            result = interview_future.result()
+            try:
+                st.session_state.judge_directive = judge_future.result(
+                    timeout=JUDGE_GRACE_SECONDS
+                )
+            except Exception:
+                # Not ready in time (or errored) - skip the judge this turn. The
+                # code caps still enforce every hard limit.
+                st.session_state.judge_directive = ""
+            # Do not wait for a still-running judge thread; let it finish detached.
+            pool.shutdown(wait=False)
+        else:
+            result = get_nurse_response(
+                client=client,
+                chat_history=messages_snapshot,
+                prior_history=prior_history,
+                patient_context=patient_context,
+                model=model,
+                system_prompt=system_prompt,
+                symptom_count=symptom_count,
+                extra_steering=extra_steering,
+                rolling_summary=rolling_summary,
+                summary_tail_start=summary_tail_start,
+            )
+
+    # The model sometimes tries to end early with its own "anything else?" question.
+    # Only honour that when the quotas really are filled - otherwise it would skip
+    # symptoms the patient selected (this is what silently dropped "Breathing problems").
+    # When topics remain, discard the premature close and ask the assigned topic instead.
+    if _is_final_open_question(result.get("reply", "")) and not result.get("is_complete"):
+        st.session_state.raw_responses.append(result.get("raw_response", ""))
+        if quotas_met:
+            st.session_state.closing_review = True
+            return
+        forced = get_nurse_response(
+            client=client,
+            chat_history=messages_snapshot,
+            prior_history=prior_history,
+            patient_context=patient_context,
+            model=model,
+            system_prompt=system_prompt,
+            symptom_count=symptom_count,
+            extra_steering=(
+                extra_steering
+                + "\n\nYou tried to end the check-in, but the patient still has symptoms "
+                "that have not been asked about. Do NOT ask the anything-else question. "
+                + (quota_steering or "Ask the next assigned question.")
+            ),
+            rolling_summary=rolling_summary,
+            summary_tail_start=summary_tail_start,
+        )
+        if forced.get("reply") and not _is_final_open_question(forced["reply"]):
+            result = forced
+
+    # Guarantee the "we'll come to it" promise for a just-added symptom, rather than
+    # relying on the model to remember to say it. The quota order already guarantees the
+    # interviewer does not jump to it.
+    if addon_notice:
+        result["reply"] = (
+            f"Thanks for telling me about {addon_notice.lower()} - I'll ask you about that "
+            "shortly. " + result["reply"]
+        )
+
+    with st.chat_message("assistant"):
+        st.write(result["reply"])
+
+    # A topic closing is the trigger to compress: fold everything up to now into the
+    # running summary so later turns carry "summary + current topic" only.
+    topics_closed_before = len(st.session_state.completed_topics)
+    apply_nurse_result(result, topic_boxes_placeholder)
+    new_detail = st.session_state.messages[st.session_state.summary_tail_start:]
+    if (
+        ENABLE_ROLLING_SUMMARY
+        and len(st.session_state.completed_topics) > topics_closed_before
+        and len(new_detail) >= SUMMARY_MIN_NEW_MESSAGES
+    ):
+        st.session_state.rolling_summary = update_rolling_summary(
+            client, st.session_state.rolling_summary, new_detail, model
+        )
+        # Keep the just-asked question (the last message) in the verbatim tail, so the
+        # next turn's patient answer still has a visible question to belong to.
+        st.session_state.summary_tail_start = len(st.session_state.messages) - 1
+
+
+
+def render_worst_picker(
+    client: OpenAI,
+    prior_history: str,
+    patient_context: str,
+    model: str,
+    system_prompt: str,
+    topic_boxes_placeholder=None,
+) -> None:
+    """Ask the PATIENT which selected symptom is worst. Their tap sets the 4-question
+    quota; the model never infers it. Shown once, before any clinical question."""
+    st.markdown("#### Which one is bothering you the most?")
+    st.caption(
+        "Tap the symptom that is troubling you most - we'll spend the most time on that "
+        "one, and still cover the others."
+    )
+    label_to_topic = dict(CHECKLIST_ITEMS)
+    for label in st.session_state.selected_symptom_labels:
+        if label == CHECKLIST_NONE_LABEL:
+            continue
+        if st.button(label, key=f"worst_{label}", use_container_width=True):
+            st.session_state.worst_topic = label_to_topic.get(label, "Other")
+            st.session_state.worst_label = label
+            st.session_state.worst_pick_pending = False
+            message = f"The {label.lower()} is bothering me the most."
+            add_user_message(message, response_mode="worst_pick")
+            with st.chat_message("user"):
+                st.write(message)
+            generate_and_apply_turn(
+                client, prior_history, patient_context, model,
+                system_prompt, topic_boxes_placeholder,
+            )
+            st.rerun()
+
+
+def render_closing_review(
+    client: OpenAI,
+    prior_history: str,
+    patient_context: str,
+    model: str,
+    system_prompt: str,
+    topic_boxes_placeholder=None,
+) -> None:
+    """The wrap-up screen: re-show the opening checklist with the patient's picks
+    already ticked, so they can see what was covered and add anything else before
+    finishing - instead of a wall of recap text."""
+    st.markdown("#### Before we finish — is there anything else?")
+    st.caption(
+        "Here's your check-in list, with the symptoms you told me about already ticked. "
+        "Tick anything else you'd like to talk about, or write it in the box below - "
+        "including anything I haven't asked about, or a question for your doctor. "
+        "If not, press Finish."
+    )
+
+    chosen = set(st.session_state.selected_symptom_labels)
+    review_items = [item for item in CHECKLIST_ITEMS if item[0] != "Something else"]
+    columns = st.columns(2)
+    new_picks = []
+    for index, (label, topic) in enumerate(review_items):
+        already = label in chosen
+        with columns[index % 2]:
+            checked = st.checkbox(
+                label,
+                value=already,
+                key=f"closerev_{label}",
+                disabled=already,
+                help="Already discussed" if already else None,
+            )
+            if checked and not already:
+                new_picks.append((label, topic))
+
+    # The open-ended half of "is there anything else?" - catches everything the
+    # checklist cannot: off-list symptoms, "oh by the way", a question for the doctor.
+    other_text = st.text_area(
+        "Anything else?",
+        key="closerev_other",
+        placeholder="Optional - anything I haven't asked about, or a question for your doctor",
+        height=80,
+        label_visibility="collapsed",
+    )
+    has_other = bool(other_text.strip())
+
+    actions = st.columns(2)
+    with actions[0]:
+        if (new_picks or has_other) and st.button(
+            "Add these & keep going", use_container_width=True, key="closerev_add"
+        ):
+            for label, topic in new_picks:
+                if label not in st.session_state.selected_symptom_labels:
+                    st.session_state.selected_symptom_labels.append(label)
+                if topic not in st.session_state.selected_topics:
+                    st.session_state.selected_topics.append(topic)
+            parts = []
+            if new_picks:
+                parts.append(
+                    "I'd also like to talk about: "
+                    + ", ".join(label for label, _ in new_picks)
+                    + "."
+                )
+            if has_other:
+                parts.append(other_text.strip())
+            message = " ".join(parts)
+            add_user_message(message, response_mode="closing_addon")
+            st.session_state.closing_review = False
+            with st.chat_message("user"):
+                st.write(message)
+            generate_and_apply_turn(
+                client, prior_history, patient_context, model, system_prompt, topic_boxes_placeholder
+            )
+            st.rerun()
+    with actions[1]:
+        if st.button(
+            "Finish check-in", type="primary", use_container_width=True, key="closerev_finish"
+        ):
+            # Anything typed but not discussed must still reach the doctor.
+            if has_other:
+                add_user_message(other_text.strip(), response_mode="closing_other")
+            add_user_message(
+                "Patient finished the check-in from the closing review.",
+                response_mode="finish_button",
+            )
+            add_assistant_message(FINAL_CLOSING_REPLY)
+            st.session_state.completion_reason = "closing_review_finish"
+            st.session_state.completed_at = datetime.now().astimezone().isoformat()
+            st.session_state.current_topic = ""
+            st.session_state.is_complete = True
+            st.session_state.doctor_summary = ""
+            st.session_state.closing_review = False
+            st.rerun()
 
 
 # =========================
@@ -2077,73 +3543,170 @@ def main() -> None:
     initialize_state()
 
     with st.sidebar:
-        st.markdown("**What we'll cover**")
+        # =================================================================
+        # Patient controls - kept at the TOP so the patient never has to
+        # scroll past developer settings to reach them.
+        # =================================================================
         topic_boxes_placeholder = st.empty()
-        with topic_boxes_placeholder.container():
-            render_topic_boxes()
+        if st.session_state.started and not st.session_state.is_complete:
+            # Progress panel only once the patient has actually selected symptoms -
+            # not while they are still filling in the checklist.
+            if st.session_state.selected_topics:
+                st.markdown("**Your check-in**")
+                with topic_boxes_placeholder.container():
+                    render_topic_boxes()
 
-        model = DEFAULT_MODEL
+            # Live checklist: add a symptom remembered mid-conversation. Offer every
+            # checklist LABEL the patient has not already picked - deduping by topic
+            # would hide distinct symptoms that share a topic (e.g. "Weight loss" vs
+            # "Trouble eating", both Nutrition; "Fever" vs "Breathing", both Other).
+            if st.session_state.selected_topics:
+                st.caption("Remembered another symptom? Add it and we'll make sure to cover it.")
+                with st.expander("➕ Add a symptom"):
+                    chosen_labels = set(st.session_state.selected_symptom_labels)
+                    shown_any = False
+                    for label, topic in CHECKLIST_ITEMS:
+                        if label == "Something else" or label in chosen_labels:
+                            continue
+                        shown_any = True
+                        if st.button(
+                            f"➕ {label}", key=f"addon_{label}", use_container_width=True
+                        ):
+                            st.session_state.pending_addon = (label, topic)
+                            st.rerun()
+                    if not shown_any:
+                        st.caption("Everything is already on your list.")
 
-        if st.session_state.check_in_started and not st.session_state.is_complete:
+            st.markdown("**Pace**")
+            pace_columns = st.columns(2)
+            with pace_columns[0]:
+                if st.button(
+                    "🐢 Slow down",
+                    key="pace_slower",
+                    use_container_width=True,
+                    help="Give me more room to explain - the assistant won't rush you.",
+                ):
+                    st.session_state.pace_mode = (
+                        "normal" if st.session_state.pace_mode == "slower" else "slower"
+                    )
+                    st.rerun()
+            with pace_columns[1]:
+                if st.button(
+                    "🐇 Speed up",
+                    key="pace_faster",
+                    use_container_width=True,
+                    help="I'm getting tired - keep it brief and wrap up sooner.",
+                ):
+                    st.session_state.pace_mode = (
+                        "normal" if st.session_state.pace_mode == "faster" else "faster"
+                    )
+                    st.rerun()
+            pace_label = {
+                "normal": "Normal pace",
+                "faster": "Going faster · tap again for normal",
+                "slower": "Taking it slower · tap again for normal",
+            }[st.session_state.pace_mode]
+            st.caption(f"Pace: {pace_label}")
+
             st.markdown(
                 """
                 <style>
                 div.st-key-finish_checkin_sidebar button {
-                    background-color: white !important;
-                    border: 2px solid #475569 !important;
-                    color: #1e293b !important;
+                    background-color: #dc2626 !important;
+                    border-color: #dc2626 !important;
+                    color: white !important;
                     font-weight: 700 !important;
-                    min-height: 3.25rem !important;
-                    white-space: normal !important;
                 }
                 div.st-key-finish_checkin_sidebar button:hover {
-                    background-color: #f1f5f9 !important;
-                    border-color: #334155 !important;
+                    background-color: #b91c1c !important;
+                    border-color: #b91c1c !important;
                 }
                 </style>
                 """,
                 unsafe_allow_html=True,
             )
             if st.button(
-                "I'm done for now — send my answers to my care team",
+                "Wrap up check-in",
                 key="finish_checkin_sidebar",
+                type="primary",
                 use_container_width=True,
                 help=(
-                    "End the check-in now. Responses so far will still be sent "
-                    "to the clinician summary."
+                    "Review your check-in list and confirm before finishing - your "
+                    "responses are always saved."
                 ),
             ):
-                add_user_message(
-                    "Patient selected Finish check-in.",
-                    response_mode="finish_button",
-                )
-                add_assistant_message(
-                    "You chose to finish the check-in now. Your responses so far "
-                    "will be shared with your doctor."
-                )
-                st.session_state.completion_reason = "patient_finish_button"
-                st.session_state.completed_at = datetime.now().astimezone().isoformat()
-                st.session_state.current_topic = ""
-                st.session_state.is_complete = True
-                st.session_state.doctor_summary = ""
+                # Show the checklist review screen (opening checklist, pre-ticked)
+                # instead of an instant close. Suppress the automatic threshold offers.
+                st.session_state.closing_review = True
+                st.session_state.wrap_choice_offered = True
+                st.session_state.stop_choice_offered = True
                 st.session_state.show_suggestions = False
                 st.rerun()
 
-        st.divider()
-        with st.expander("🔬 Research team settings", expanded=False):
+        # =================================================================
+        # Setup - patient/visit info stays plainly visible; only the long,
+        # technical prompt and prior-history text go into a collapsible box.
+        # =================================================================
+        # Divider only when patient controls were rendered above it; during setup
+        # there is nothing above, so a leading divider just adds an empty gap.
+        if st.session_state.check_in_started and not st.session_state.is_complete:
+            st.divider()
+        model = DEFAULT_MODEL
+
+        status = (
+            "Complete"
+            if st.session_state.is_complete
+            else ("In progress" if st.session_state.check_in_started else "Not started")
+        )
+        st.caption(f"Status: {status}")
+
+        # Pacing debug readout - lets you watch the enforcement work during testing.
+        if st.session_state.started and not st.session_state.is_complete:
+            sym = len(
+                [l for l in st.session_state.selected_symptom_labels if l != CHECKLIST_NONE_LABEL]
+            )
+            soft_b, wrap_b, hard_b, abs_b = _effective_budget(sym)
+            asked = _questions_asked(st.session_state.messages)
+            worst_lab = st.session_state.worst_label
+            sel_labs = st.session_state.selected_symptom_labels
+            target, counts, met = _quota_state(
+                st.session_state.messages, st.session_state.selected_topics, worst_lab, sel_labs
+            )
+            planned = sum(
+                _topic_quota(t, worst_lab, sel_labs) for t in st.session_state.selected_topics
+            )
+            quota_bits = " · ".join(
+                f"{t} {counts.get(t, 0)}/{_topic_quota(t, worst_lab, sel_labs)}"
+                for t in st.session_state.selected_topics
+            )
+            st.caption(
+                f"Quota · {asked}/{planned} questions · next: {target or 'DONE → close'}\n\n"
+                f"{quota_bits or '—'}  (* = worst)\n\n"
+                f"Backstops · soft {soft_b}/wrap {wrap_b}/hard {hard_b}/stop {abs_b}"
+            )
+
+        patient_name = st.text_input(
+            "Patient name *",
+            placeholder="Required",
+        )
+
+        doctor_name = st.text_input(
+            "Doctor name",
+            placeholder="Optional",
+        )
+
+        therapy_week = st.text_input(
+            "Week of therapy",
+            placeholder="Example: Week 3",
+        )
+
+        with st.expander("⚙️ Chatbot prompt & prior history"):
             system_prompt = st.text_area(
                 "Editable chatbot instructions",
                 value=SYSTEM_PROMPT,
                 height=260,
             )
-            doctor_name = st.text_input(
-                "Doctor name",
-                placeholder="Optional",
-            )
-            therapy_week = st.text_input(
-                "Week of therapy",
-                placeholder="Example: Week 3",
-            )
+
             prior_history = st.text_area(
                 "Prior patient history",
                 placeholder=(
@@ -2152,10 +3715,30 @@ def main() -> None:
                 ),
                 height=160,
             )
-            if st.session_state.is_complete and st.session_state.summary_generated:
-                if st.button("Regenerate doctor summary", use_container_width=True):
-                    st.session_state.summary_generated = False
-                    st.rerun()
+
+        patient_context = build_patient_context(
+            patient_name=patient_name,
+            doctor_name=doctor_name,
+            therapy_week=therapy_week,
+        )
+
+        if st.button("Start new check-in", use_container_width=True):
+            if not patient_name.strip():
+                st.error("Please enter the patient's name before starting the check-in.")
+                st.stop()
+            reset_chat()
+            st.session_state.saved_prior_history = prior_history
+            st.session_state.saved_system_prompt = system_prompt
+            st.session_state.saved_patient_name = patient_name
+            st.session_state.saved_doctor_name = doctor_name
+            st.session_state.saved_therapy_week = therapy_week
+            st.session_state.check_in_started = True
+            st.rerun()
+
+        if st.session_state.is_complete and st.session_state.summary_generated:
+            if st.button("Regenerate doctor summary", use_container_width=True):
+                st.session_state.summary_generated = False
+                st.rerun()
 
     if st.session_state.check_in_started:
         patient_name = st.session_state.saved_patient_name
@@ -2232,173 +3815,180 @@ def main() -> None:
             st.session_state.summary_generated = True
         st.rerun()
 
-    # ---- Routing: patient completion screen, with an explicit provider preview ----
+    # ---- Routing: doctor summary page after submission, otherwise patient chat ----
     if st.session_state.is_complete:
         if st.session_state.summary_generated:
-            if st.session_state.show_provider_view:
-                render_doctor_summary_page()
-            else:
-                render_completion_banner()
+            render_doctor_summary_page()
         else:
-            st.info("Preparing a summary for your care team...")
+            st.info("Preparing your doctor summary...")
         return
 
     # ---- Patient view ----
-    st.markdown(
-        """
-        <style>
-        .block-container {
-            max-width: 760px !important;
-            padding-left: 1rem !important;
-            padding-right: 1rem !important;
-        }
-        .patient-card {
-            border: 1px solid #cbd5e1;
-            border-radius: 1rem;
-            padding: 1.25rem;
-            background: #ffffff;
-        }
-        [data-testid="stChatMessage"] p,
-        [data-testid="stChatMessage"] li,
-        .stButton button,
-        .stTextInput input,
-        .stChatInput textarea {
-            font-size: 16px !important;
-            line-height: 1.55 !important;
-        }
-        .stButton button {
-            min-height: 3rem;
-            white-space: normal;
-        }
-        .patient-safety-strip {
-            border-left: 4px solid #2563eb;
-            background: #eff6ff;
-            color: #172554;
-            border-radius: 0.45rem;
-            padding: 0.65rem 0.8rem;
-            margin: 0.25rem 0 1rem;
-            font-size: 16px;
-            line-height: 1.45;
-            font-weight: 600;
-        }
-        @media (max-width: 480px) {
-            .block-container { padding-left: 0.75rem !important; padding-right: 0.75rem !important; }
-            .patient-card { padding: 1rem; }
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
+    inject_patient_theme()
+    render_patient_header()
 
     if not st.session_state.check_in_started:
-        st.markdown('<div class="patient-card">', unsafe_allow_html=True)
-        st.title("Let's check in before your visit")
-        st.write(
-            "This will take just a few minutes. Your answers will be summed up for "
-            "your doctor to review before your visit. You can stop at any time."
-        )
-        st.warning(PATIENT_DISCLAIMER)
-        patient_name = st.text_input(
-            "Your name *",
-            placeholder="Enter your name",
-            key="welcome_patient_name",
-        )
-        if st.button(
-            "Start my check-in",
-            key="welcome_start_checkin",
-            type="primary",
-            use_container_width=True,
-        ):
-            if not patient_name.strip():
-                st.error("Please enter your name to start.")
-            else:
-                reset_chat()
-                st.session_state.saved_prior_history = prior_history
-                st.session_state.saved_system_prompt = system_prompt
-                st.session_state.saved_patient_name = patient_name
-                st.session_state.saved_doctor_name = doctor_name
-                st.session_state.saved_therapy_week = therapy_week
-                st.session_state.check_in_started = True
-                st.rerun()
-        st.markdown("</div>", unsafe_allow_html=True)
+        st.info("Enter the patient name in the sidebar, add prior patient history if available, then click **Start new check-in** to begin.")
         return
 
-    st.title("Your check-in")
-    st.markdown(
-        f'<div class="patient-safety-strip">{html.escape(PATIENT_DISCLAIMER)}</div>',
-        unsafe_allow_html=True,
-    )
+    # The disclosure gate: no checklist, no chat input, and no model call may
+    # happen until the patient acknowledges it.
+    if not st.session_state.disclaimer_acknowledged:
+        render_welcome_screen(patient_name)
+        return
+
+    render_disclaimer_banner()
 
     if not st.session_state.started:
-        opening_message = "Are there any symptoms you would like to report to your medical team?"
-        add_assistant_message(
-            opening_message,
-            [
-                "No, I do not have any symptoms to report.",
-                "I have pain I would like to discuss.",
-                "I am having trouble eating or drinking.",
-                "I have several symptoms to report.",
-                "I am not sure where to start.",
-            ],
+        # Checkbox-first opening (June 5 clinical-team decision) - the only mode.
+        checklist_result = render_symptom_checklist(
+            returning=bool(prior_history.strip())
         )
+        if checklist_result is None:
+            return
+        question, user_message, labels, topics = checklist_result
+        st.session_state.selected_symptom_labels = labels
+        st.session_state.selected_topics = topics
+        add_assistant_message(question)
+        add_user_message(user_message, response_mode="checklist")
         st.session_state.started = True
+        if len(topics) > 1:
+            # More than one symptom: the PATIENT designates the worst before any
+            # questions, so code can apply the 4/2 quotas without ever inferring it.
+            st.session_state.worst_pick_pending = True
+            st.rerun()
+        if topics:
+            st.session_state.worst_topic = topics[0]
+            first = [l for l in labels if l != CHECKLIST_NONE_LABEL]
+            st.session_state.worst_label = first[0] if first else ""
+        generate_and_apply_turn(
+            client, prior_history, patient_context, model, system_prompt, topic_boxes_placeholder
+        )
+        st.rerun()
 
     render_chat_history()
-    selected_answer = render_current_suggestions()
 
-    patient_input = st.chat_input("Type your response...")
-    submitted_answer = selected_answer or patient_input
+    # The patient designates which symptom is worst (never inferred by the model).
+    if st.session_state.worst_pick_pending and not st.session_state.is_complete:
+        render_worst_picker(
+            client, prior_history, patient_context, model, system_prompt, topic_boxes_placeholder
+        )
+        return
+
+    # Wrap-up / natural close -> show the checklist review (opening checklist, pre-ticked
+    # with the patient's picks) instead of the normal chat input.
+    if st.session_state.closing_review and not st.session_state.is_complete:
+        render_closing_review(
+            client, prior_history, patient_context, model, system_prompt, topic_boxes_placeholder
+        )
+        return
+
+    # The patient is answering a pacing offer. Explicit buttons let the app know their
+    # choice for certain, so it can inject one unambiguous instruction instead of asking
+    # the model to work out which branch applies. Typing a reply still works.
+    if st.session_state.pending_offer and not st.session_state.is_complete:
+        offering_wrap = st.session_state.pending_offer == "wrap"
+        st.caption("Tap your choice — or just type your answer below.")
+        choice_columns = st.columns(2)
+        choices = [
+            ("continue", "Keep going", "offer_continue", "Let's keep going."),
+            (
+                "wrap",
+                "Wrap up now" if offering_wrap else "Finish now",
+                "offer_wrap",
+                "Let's wrap up now." if offering_wrap else "Let's finish now.",
+            ),
+        ]
+        for column, (choice_value, label, key, message) in zip(choice_columns, choices):
+            with column:
+                if st.button(label, key=key, use_container_width=True):
+                    add_user_message(message, response_mode="offer_choice")
+                    if choice_value == "wrap":
+                        # Wrapping up skips the remaining topics entirely - no further
+                        # questions. Deterministic: straight to the closing review, where
+                        # the patient still sees what was not covered.
+                        st.session_state.pending_offer = None
+                        st.session_state.offer_choice = None
+                        st.session_state.closing_review = True
+                        st.rerun()
+                    st.session_state.offer_choice = choice_value
+                    with st.chat_message("user"):
+                        st.write(message)
+                    generate_and_apply_turn(
+                        client, prior_history, patient_context, model,
+                        system_prompt, topic_boxes_placeholder,
+                    )
+                    st.rerun()
+
+    render_current_suggestions()
+
+    # Mid-conversation "add a symptom": the patient checked a new topic in the live
+    # side panel. Add it to the checklist and voice it as if the patient raised it, so
+    # the interviewer acknowledges and covers it - "check it and we'll cover it."
+    if st.session_state.get("pending_addon"):
+        addon_label, addon_topic = st.session_state.pending_addon
+        st.session_state.pending_addon = None
+        if addon_topic and addon_topic not in st.session_state.selected_topics:
+            st.session_state.selected_topics.append(addon_topic)
+        # Count it as another selected symptom so the adaptive budget grows (+2), the
+        # same as if it had been checked on the opening checklist.
+        if addon_label not in st.session_state.selected_symptom_labels:
+            st.session_state.selected_symptom_labels.append(addon_label)
+        addon_message = f"I just remembered - I'd also like to talk about {addon_label.lower()}."
+        add_user_message(addon_message, response_mode="checklist_addon")
+        # Acknowledge now, cover later - do not abandon the current topic.
+        st.session_state.addon_notice = addon_label
+        with st.chat_message("user"):
+            st.write(addon_message)
+        generate_and_apply_turn(
+            client, prior_history, patient_context, model, system_prompt, topic_boxes_placeholder
+        )
+        st.rerun()
+
+    # Clear the composer after a completed send. This must happen BEFORE the text
+    # box widget is created, because a widget-keyed session value cannot be changed
+    # once the widget exists in the same run.
+    if st.session_state.get("clear_composer"):
+        st.session_state.composer_text = ""
+        st.session_state.clear_composer = False
+
+    composer_value = st.text_area(
+        "Your response",
+        key="composer_text",
+        height=90,
+        label_visibility="collapsed",
+        placeholder="Type your response here, or tap “Suggestions” above to start from an option…",
+    )
+    send_clicked = st.button(
+        "Send",
+        key="composer_send",
+        type="primary",
+        use_container_width=True,
+    )
+
+    submitted_answer = composer_value.strip() if (send_clicked and composer_value.strip()) else None
 
     if submitted_answer:
-        response_mode = "selected" if selected_answer else "typed"
+        # "selected" only when the patient sent a suggestion verbatim; a suggestion
+        # they edited or added to counts as "typed" (the transcript still stores the
+        # offered suggestions, so chip-assisted edits remain recoverable).
+        last_message = st.session_state.messages[-1] if st.session_state.messages else {}
+        offered_suggestions = (
+            last_message.get("suggested_answers", [])
+            if last_message.get("role") == "assistant"
+            else []
+        )
+        response_mode = "selected" if submitted_answer in offered_suggestions else "typed"
         add_user_message(submitted_answer, response_mode=response_mode)
         st.session_state.show_suggestions = False
+        st.session_state.clear_composer = True
 
-        with st.chat_message("user", avatar="👤"):
+        with st.chat_message("user"):
             st.write(submitted_answer)
 
-        with st.chat_message("assistant", avatar="🤖"):
-            with st.spinner("The automated assistant is reviewing your response..."):
-                result = get_nurse_response(
-                    client=client,
-                    chat_history=st.session_state.messages,
-                    prior_history=prior_history,
-                    patient_context=patient_context,
-                    model=model,
-                    system_prompt=system_prompt,
-                )
-
-            assistant_reply = result["reply"]
-            st.write(assistant_reply)
-
-        st.session_state.raw_responses.append(result["raw_response"])
-        if result.get("validation_errors"):
-            st.session_state.session_errors.extend(result["validation_errors"])
-        if (
-            st.session_state.current_topic
-            and st.session_state.current_topic != result["topic"]
-            and st.session_state.current_topic not in st.session_state.completed_topics
-        ):
-            st.session_state.completed_topics.append(st.session_state.current_topic)
-        # A topic the model returns to is active again, not completed.
-        if result["topic"] and result["topic"] in st.session_state.completed_topics:
-            st.session_state.completed_topics.remove(result["topic"])
-        st.session_state.current_topic = result["topic"]
-
-        with topic_boxes_placeholder.container():
-            render_topic_boxes()
-
-        add_assistant_message(assistant_reply, result.get("suggested_answers", []))
-
-        st.session_state.is_complete = result["is_complete"]
-        if result.get("completion_reason"):
-            st.session_state.completion_reason = result["completion_reason"]
-        elif st.session_state.is_complete and not st.session_state.completion_reason:
-            st.session_state.completion_reason = "natural_completion"
-        if st.session_state.is_complete and not st.session_state.completed_at:
-            st.session_state.completed_at = datetime.now().astimezone().isoformat()
-        st.session_state.doctor_summary = result["doctor_summary"]
-
+        generate_and_apply_turn(
+            client, prior_history, patient_context, model, system_prompt, topic_boxes_placeholder
+        )
         st.rerun()
 
 
