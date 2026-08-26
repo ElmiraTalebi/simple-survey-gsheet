@@ -2845,6 +2845,7 @@ def inject_patient_theme() -> None:
     st.markdown(
         """
         <style>
+        [data-testid="stSidebarCollapseButton"] { display: none !important; }
         :root {
             --pt-bg: #f4f7f9;
             --pt-surface: #ffffff;
@@ -3630,6 +3631,7 @@ def main() -> None:
         page_title="Nurse Assistant Check-In",
         page_icon="🩺",
         layout="wide",
+        initial_sidebar_state="expanded",
     )
 
     initialize_state()
