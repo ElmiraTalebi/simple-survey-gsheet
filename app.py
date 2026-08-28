@@ -2845,6 +2845,7 @@ def inject_patient_theme() -> None:
     st.markdown(
         """
         <style>
+        [data-testid="stSidebarCollapseButton"] { display: none !important; }
         :root {
             --pt-bg: #f4f7f9;
             --pt-surface: #ffffff;
@@ -3635,9 +3636,7 @@ def main() -> None:
 
     initialize_state()
 
-    left_panel, main_panel = st.columns([1, 3], gap="large")
-
-    with left_panel:
+    with st.sidebar:
         # =================================================================
         # Patient controls - kept at the TOP so the patient never has to
         # scroll past developer settings to reach them.
@@ -3816,258 +3815,257 @@ def main() -> None:
                 st.session_state.summary_generated = False
                 st.rerun()
 
-    with main_panel:
-        if st.session_state.check_in_started:
-            patient_name = st.session_state.saved_patient_name
-            doctor_name = st.session_state.saved_doctor_name
-            therapy_week = st.session_state.saved_therapy_week
-            prior_history = st.session_state.saved_prior_history
-            system_prompt = st.session_state.saved_system_prompt
-            patient_context = build_patient_context(patient_name, doctor_name, therapy_week)
-    
-        try:
-            api_key = st.secrets["OPENAI_API_KEY"]
-        except Exception:
-            # KeyError when the key is absent; FileNotFoundError when secrets.toml
-            # does not exist at all (e.g., fresh local checkout).
-            st.error("OPENAI_API_KEY is missing from Streamlit secrets.")
-            st.stop()
-    
-        client = OpenAI(api_key=api_key)
-    
-        # Generate the doctor summary exactly once after the chat completes.
-        if st.session_state.is_complete and not st.session_state.summary_generated:
-            with st.spinner("Preparing doctor summary..."):
-                structured: Dict[str, Any] = {}
-                try:
-                    structured = get_doctor_summary(
-                        client=client,
-                        chat_history=st.session_state.messages,
+    if st.session_state.check_in_started:
+        patient_name = st.session_state.saved_patient_name
+        doctor_name = st.session_state.saved_doctor_name
+        therapy_week = st.session_state.saved_therapy_week
+        prior_history = st.session_state.saved_prior_history
+        system_prompt = st.session_state.saved_system_prompt
+        patient_context = build_patient_context(patient_name, doctor_name, therapy_week)
+
+    try:
+        api_key = st.secrets["OPENAI_API_KEY"]
+    except Exception:
+        # KeyError when the key is absent; FileNotFoundError when secrets.toml
+        # does not exist at all (e.g., fresh local checkout).
+        st.error("OPENAI_API_KEY is missing from Streamlit secrets.")
+        st.stop()
+
+    client = OpenAI(api_key=api_key)
+
+    # Generate the doctor summary exactly once after the chat completes.
+    if st.session_state.is_complete and not st.session_state.summary_generated:
+        with st.spinner("Preparing doctor summary..."):
+            structured: Dict[str, Any] = {}
+            try:
+                structured = get_doctor_summary(
+                    client=client,
+                    chat_history=st.session_state.messages,
+                    prior_history=prior_history,
+                    patient_context=patient_context,
+                    model=model,
+                )
+                st.session_state.doctor_summary_structured = structured
+            except Exception as exc:  # surface the error but don't crash the app
+                st.warning(f"Could not generate doctor summary: {exc}")
+                st.session_state.doctor_summary_structured = {}
+            # Saving is intentionally OUTSIDE the generation try-block: a storage
+            # failure must never blank out an already-generated summary.
+            try:
+                if structured and (
+                    not st.session_state.sheet_saved or not st.session_state.local_csv_saved
+                ):
+                    sheet_payload = build_sheet_payload(
+                        patient_name=patient_name,
+                        doctor_name=doctor_name,
+                        therapy_week=therapy_week,
                         prior_history=prior_history,
-                        patient_context=patient_context,
+                        messages=st.session_state.messages,
+                        doctor_summary=st.session_state.doctor_summary,
+                        structured_summary=structured,
+                        system_prompt=st.session_state.saved_system_prompt,
                         model=model,
+                        session_id=st.session_state.session_id,
+                        session_started_at=st.session_state.session_started_at,
+                        session_errors=st.session_state.session_errors,
+                        completion_reason=st.session_state.completion_reason or "natural_completion",
                     )
-                    st.session_state.doctor_summary_structured = structured
-                except Exception as exc:  # surface the error but don't crash the app
-                    st.warning(f"Could not generate doctor summary: {exc}")
-                    st.session_state.doctor_summary_structured = {}
-                # Saving is intentionally OUTSIDE the generation try-block: a storage
-                # failure must never blank out an already-generated summary.
-                try:
-                    if structured and (
-                        not st.session_state.sheet_saved or not st.session_state.local_csv_saved
-                    ):
-                        sheet_payload = build_sheet_payload(
-                            patient_name=patient_name,
-                            doctor_name=doctor_name,
-                            therapy_week=therapy_week,
-                            prior_history=prior_history,
-                            messages=st.session_state.messages,
-                            doctor_summary=st.session_state.doctor_summary,
-                            structured_summary=structured,
+                    saved_name = patient_name.strip() or "Unknown patient"
+                    if not st.session_state.sheet_saved:
+                        st.session_state.sheet_saved = save_to_sheet(
+                            name=saved_name,
+                            all_data=sheet_payload,
+                            report=st.session_state.doctor_summary,
                             system_prompt=st.session_state.saved_system_prompt,
-                            model=model,
-                            session_id=st.session_state.session_id,
-                            session_started_at=st.session_state.session_started_at,
-                            session_errors=st.session_state.session_errors,
-                            completion_reason=st.session_state.completion_reason or "natural_completion",
                         )
-                        saved_name = patient_name.strip() or "Unknown patient"
-                        if not st.session_state.sheet_saved:
-                            st.session_state.sheet_saved = save_to_sheet(
-                                name=saved_name,
-                                all_data=sheet_payload,
-                                report=st.session_state.doctor_summary,
-                                system_prompt=st.session_state.saved_system_prompt,
-                            )
-                        if not st.session_state.local_csv_saved:
-                            st.session_state.local_csv_saved = save_to_local_csv(
-                                name=saved_name,
-                                all_data=sheet_payload,
-                                report=st.session_state.doctor_summary,
-                                system_prompt=st.session_state.saved_system_prompt,
-                            )
-                except Exception as exc:
-                    st.warning(f"Could not save the check-in record: {exc}")
-                st.session_state.summary_generated = True
-            st.rerun()
-    
-        # ---- Routing: doctor summary page after submission, otherwise patient chat ----
-        if st.session_state.is_complete:
-            if st.session_state.summary_generated:
-                render_doctor_summary_page()
-            else:
-                st.info("Preparing your doctor summary...")
-            return
-    
-        # ---- Patient view ----
-        inject_patient_theme()
-        render_patient_header()
-    
-        if not st.session_state.check_in_started:
-            st.info("Enter the patient name in the sidebar, add prior patient history if available, then click **Start new check-in** to begin.")
-            return
-    
-        # The disclosure gate: no checklist, no chat input, and no model call may
-        # happen until the patient acknowledges it.
-        if not st.session_state.disclaimer_acknowledged:
-            render_welcome_screen(patient_name)
-            return
-    
-        render_disclaimer_banner()
-    
-        if not st.session_state.started:
-            # Checkbox-first opening (June 5 clinical-team decision) - the only mode.
-            checklist_result = render_symptom_checklist(
-                returning=bool(prior_history.strip())
-            )
-            if checklist_result is None:
-                return
-            question, user_message, labels, topics = checklist_result
-            st.session_state.selected_symptom_labels = labels
-            st.session_state.selected_topics = topics
-            add_assistant_message(question)
-            add_user_message(user_message, response_mode="checklist")
-            st.session_state.started = True
-            if len(topics) > 1:
-                # More than one symptom: the PATIENT designates the worst before any
-                # questions, so code can apply the 4/2 quotas without ever inferring it.
-                st.session_state.worst_pick_pending = True
-                st.rerun()
-            if topics:
-                st.session_state.worst_topic = topics[0]
-                first = [l for l in labels if l != CHECKLIST_NONE_LABEL]
-                st.session_state.worst_label = first[0] if first else ""
-            generate_and_apply_turn(
-                client, prior_history, patient_context, model, system_prompt, topic_boxes_placeholder
-            )
-            st.rerun()
-    
-        render_chat_history()
-    
-        # The patient designates which symptom is worst (never inferred by the model).
-        if st.session_state.worst_pick_pending and not st.session_state.is_complete:
-            render_worst_picker(
-                client, prior_history, patient_context, model, system_prompt, topic_boxes_placeholder
-            )
-            return
-    
-        # Wrap-up / natural close -> show the checklist review (opening checklist, pre-ticked
-        # with the patient's picks) instead of the normal chat input.
-        if st.session_state.closing_review and not st.session_state.is_complete:
-            render_closing_review(
-                client, prior_history, patient_context, model, system_prompt, topic_boxes_placeholder
-            )
-            return
-    
-        # The patient is answering a pacing offer. Explicit buttons let the app know their
-        # choice for certain, so it can inject one unambiguous instruction instead of asking
-        # the model to work out which branch applies. Typing a reply still works.
-        if st.session_state.pending_offer and not st.session_state.is_complete:
-            offering_wrap = st.session_state.pending_offer == "wrap"
-            st.caption("Tap your choice — or just type your answer below.")
-            choice_columns = st.columns(2)
-            choices = [
-                ("continue", "Keep going", "offer_continue", "Let's keep going."),
-                (
-                    "wrap",
-                    "Wrap up now" if offering_wrap else "Finish now",
-                    "offer_wrap",
-                    "Let's wrap up now." if offering_wrap else "Let's finish now.",
-                ),
-            ]
-            for column, (choice_value, label, key, message) in zip(choice_columns, choices):
-                with column:
-                    if st.button(label, key=key, use_container_width=True):
-                        add_user_message(message, response_mode="offer_choice")
-                        if choice_value == "wrap":
-                            # Wrapping up skips the remaining topics entirely - no further
-                            # questions. Deterministic: straight to the closing review, where
-                            # the patient still sees what was not covered.
-                            st.session_state.pending_offer = None
-                            st.session_state.offer_choice = None
-                            st.session_state.closing_review = True
-                            st.rerun()
-                        st.session_state.offer_choice = choice_value
-                        with st.chat_message("user"):
-                            st.write(message)
-                        generate_and_apply_turn(
-                            client, prior_history, patient_context, model,
-                            system_prompt, topic_boxes_placeholder,
+                    if not st.session_state.local_csv_saved:
+                        st.session_state.local_csv_saved = save_to_local_csv(
+                            name=saved_name,
+                            all_data=sheet_payload,
+                            report=st.session_state.doctor_summary,
+                            system_prompt=st.session_state.saved_system_prompt,
                         )
+            except Exception as exc:
+                st.warning(f"Could not save the check-in record: {exc}")
+            st.session_state.summary_generated = True
+        st.rerun()
+
+    # ---- Routing: doctor summary page after submission, otherwise patient chat ----
+    if st.session_state.is_complete:
+        if st.session_state.summary_generated:
+            render_doctor_summary_page()
+        else:
+            st.info("Preparing your doctor summary...")
+        return
+
+    # ---- Patient view ----
+    inject_patient_theme()
+    render_patient_header()
+
+    if not st.session_state.check_in_started:
+        st.info("Enter the patient name in the sidebar, add prior patient history if available, then click **Start new check-in** to begin.")
+        return
+
+    # The disclosure gate: no checklist, no chat input, and no model call may
+    # happen until the patient acknowledges it.
+    if not st.session_state.disclaimer_acknowledged:
+        render_welcome_screen(patient_name)
+        return
+
+    render_disclaimer_banner()
+
+    if not st.session_state.started:
+        # Checkbox-first opening (June 5 clinical-team decision) - the only mode.
+        checklist_result = render_symptom_checklist(
+            returning=bool(prior_history.strip())
+        )
+        if checklist_result is None:
+            return
+        question, user_message, labels, topics = checklist_result
+        st.session_state.selected_symptom_labels = labels
+        st.session_state.selected_topics = topics
+        add_assistant_message(question)
+        add_user_message(user_message, response_mode="checklist")
+        st.session_state.started = True
+        if len(topics) > 1:
+            # More than one symptom: the PATIENT designates the worst before any
+            # questions, so code can apply the 4/2 quotas without ever inferring it.
+            st.session_state.worst_pick_pending = True
+            st.rerun()
+        if topics:
+            st.session_state.worst_topic = topics[0]
+            first = [l for l in labels if l != CHECKLIST_NONE_LABEL]
+            st.session_state.worst_label = first[0] if first else ""
+        generate_and_apply_turn(
+            client, prior_history, patient_context, model, system_prompt, topic_boxes_placeholder
+        )
+        st.rerun()
+
+    render_chat_history()
+
+    # The patient designates which symptom is worst (never inferred by the model).
+    if st.session_state.worst_pick_pending and not st.session_state.is_complete:
+        render_worst_picker(
+            client, prior_history, patient_context, model, system_prompt, topic_boxes_placeholder
+        )
+        return
+
+    # Wrap-up / natural close -> show the checklist review (opening checklist, pre-ticked
+    # with the patient's picks) instead of the normal chat input.
+    if st.session_state.closing_review and not st.session_state.is_complete:
+        render_closing_review(
+            client, prior_history, patient_context, model, system_prompt, topic_boxes_placeholder
+        )
+        return
+
+    # The patient is answering a pacing offer. Explicit buttons let the app know their
+    # choice for certain, so it can inject one unambiguous instruction instead of asking
+    # the model to work out which branch applies. Typing a reply still works.
+    if st.session_state.pending_offer and not st.session_state.is_complete:
+        offering_wrap = st.session_state.pending_offer == "wrap"
+        st.caption("Tap your choice — or just type your answer below.")
+        choice_columns = st.columns(2)
+        choices = [
+            ("continue", "Keep going", "offer_continue", "Let's keep going."),
+            (
+                "wrap",
+                "Wrap up now" if offering_wrap else "Finish now",
+                "offer_wrap",
+                "Let's wrap up now." if offering_wrap else "Let's finish now.",
+            ),
+        ]
+        for column, (choice_value, label, key, message) in zip(choice_columns, choices):
+            with column:
+                if st.button(label, key=key, use_container_width=True):
+                    add_user_message(message, response_mode="offer_choice")
+                    if choice_value == "wrap":
+                        # Wrapping up skips the remaining topics entirely - no further
+                        # questions. Deterministic: straight to the closing review, where
+                        # the patient still sees what was not covered.
+                        st.session_state.pending_offer = None
+                        st.session_state.offer_choice = None
+                        st.session_state.closing_review = True
                         st.rerun()
-    
-        render_current_suggestions()
-    
-        # Mid-conversation "add a symptom": the patient checked a new topic in the live
-        # side panel. Add it to the checklist and voice it as if the patient raised it, so
-        # the interviewer acknowledges and covers it - "check it and we'll cover it."
-        if st.session_state.get("pending_addon"):
-            addon_label, addon_topic = st.session_state.pending_addon
-            st.session_state.pending_addon = None
-            if addon_topic and addon_topic not in st.session_state.selected_topics:
-                st.session_state.selected_topics.append(addon_topic)
-            # Count it as another selected symptom so the adaptive budget grows (+2), the
-            # same as if it had been checked on the opening checklist.
-            if addon_label not in st.session_state.selected_symptom_labels:
-                st.session_state.selected_symptom_labels.append(addon_label)
-            addon_message = f"I just remembered - I'd also like to talk about {addon_label.lower()}."
-            add_user_message(addon_message, response_mode="checklist_addon")
-            # Acknowledge now, cover later - do not abandon the current topic.
-            st.session_state.addon_notice = addon_label
-            with st.chat_message("user"):
-                st.write(addon_message)
-            generate_and_apply_turn(
-                client, prior_history, patient_context, model, system_prompt, topic_boxes_placeholder
-            )
-            st.rerun()
-    
-        # Clear the composer after a completed send. This must happen BEFORE the text
-        # box widget is created, because a widget-keyed session value cannot be changed
-        # once the widget exists in the same run.
-        if st.session_state.get("clear_composer"):
-            st.session_state.composer_text = ""
-            st.session_state.clear_composer = False
-    
-        composer_value = st.text_area(
-            "Your response",
-            key="composer_text",
-            height=90,
-            label_visibility="collapsed",
-            placeholder="Type your response here, or tap “Suggestions” above to start from an option…",
+                    st.session_state.offer_choice = choice_value
+                    with st.chat_message("user"):
+                        st.write(message)
+                    generate_and_apply_turn(
+                        client, prior_history, patient_context, model,
+                        system_prompt, topic_boxes_placeholder,
+                    )
+                    st.rerun()
+
+    render_current_suggestions()
+
+    # Mid-conversation "add a symptom": the patient checked a new topic in the live
+    # side panel. Add it to the checklist and voice it as if the patient raised it, so
+    # the interviewer acknowledges and covers it - "check it and we'll cover it."
+    if st.session_state.get("pending_addon"):
+        addon_label, addon_topic = st.session_state.pending_addon
+        st.session_state.pending_addon = None
+        if addon_topic and addon_topic not in st.session_state.selected_topics:
+            st.session_state.selected_topics.append(addon_topic)
+        # Count it as another selected symptom so the adaptive budget grows (+2), the
+        # same as if it had been checked on the opening checklist.
+        if addon_label not in st.session_state.selected_symptom_labels:
+            st.session_state.selected_symptom_labels.append(addon_label)
+        addon_message = f"I just remembered - I'd also like to talk about {addon_label.lower()}."
+        add_user_message(addon_message, response_mode="checklist_addon")
+        # Acknowledge now, cover later - do not abandon the current topic.
+        st.session_state.addon_notice = addon_label
+        with st.chat_message("user"):
+            st.write(addon_message)
+        generate_and_apply_turn(
+            client, prior_history, patient_context, model, system_prompt, topic_boxes_placeholder
         )
-        send_clicked = st.button(
-            "Send",
-            key="composer_send",
-            type="primary",
-            use_container_width=True,
+        st.rerun()
+
+    # Clear the composer after a completed send. This must happen BEFORE the text
+    # box widget is created, because a widget-keyed session value cannot be changed
+    # once the widget exists in the same run.
+    if st.session_state.get("clear_composer"):
+        st.session_state.composer_text = ""
+        st.session_state.clear_composer = False
+
+    composer_value = st.text_area(
+        "Your response",
+        key="composer_text",
+        height=90,
+        label_visibility="collapsed",
+        placeholder="Type your response here, or tap “Suggestions” above to start from an option…",
+    )
+    send_clicked = st.button(
+        "Send",
+        key="composer_send",
+        type="primary",
+        use_container_width=True,
+    )
+
+    submitted_answer = composer_value.strip() if (send_clicked and composer_value.strip()) else None
+
+    if submitted_answer:
+        # "selected" only when the patient sent a suggestion verbatim; a suggestion
+        # they edited or added to counts as "typed" (the transcript still stores the
+        # offered suggestions, so chip-assisted edits remain recoverable).
+        last_message = st.session_state.messages[-1] if st.session_state.messages else {}
+        offered_suggestions = (
+            last_message.get("suggested_answers", [])
+            if last_message.get("role") == "assistant"
+            else []
         )
-    
-        submitted_answer = composer_value.strip() if (send_clicked and composer_value.strip()) else None
-    
-        if submitted_answer:
-            # "selected" only when the patient sent a suggestion verbatim; a suggestion
-            # they edited or added to counts as "typed" (the transcript still stores the
-            # offered suggestions, so chip-assisted edits remain recoverable).
-            last_message = st.session_state.messages[-1] if st.session_state.messages else {}
-            offered_suggestions = (
-                last_message.get("suggested_answers", [])
-                if last_message.get("role") == "assistant"
-                else []
-            )
-            response_mode = "selected" if submitted_answer in offered_suggestions else "typed"
-            add_user_message(submitted_answer, response_mode=response_mode)
-            st.session_state.show_suggestions = False
-            st.session_state.clear_composer = True
-    
-            with st.chat_message("user"):
-                st.write(submitted_answer)
-    
-            generate_and_apply_turn(
-                client, prior_history, patient_context, model, system_prompt, topic_boxes_placeholder
-            )
-            st.rerun()
-    
-    
+        response_mode = "selected" if submitted_answer in offered_suggestions else "typed"
+        add_user_message(submitted_answer, response_mode=response_mode)
+        st.session_state.show_suggestions = False
+        st.session_state.clear_composer = True
+
+        with st.chat_message("user"):
+            st.write(submitted_answer)
+
+        generate_and_apply_turn(
+            client, prior_history, patient_context, model, system_prompt, topic_boxes_placeholder
+        )
+        st.rerun()
+
+
 if __name__ == "__main__":
     main()
