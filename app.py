@@ -10,6 +10,7 @@ Run:  streamlit run streamlit_app.py --server.address 0.0.0.0 --server.port 8501
 import hmac
 import json
 import os
+import re
 from copy import deepcopy
 from typing import Any, Dict
 
@@ -64,6 +65,13 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
+
+def show_html(block: str) -> None:
+    """Show an HTML block built by app_eli. Markdown treats indented lines as code and
+    blank lines as the end of HTML, so the block is put on one line first - as the
+    original Streamlit version did with the dashboard."""
+    st.markdown(re.sub(r"\s*\n\s*", " ", block), unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------------- state & actions
@@ -130,7 +138,7 @@ def render_sidebar(view: Dict[str, Any], state) -> None:
         if panel:
             if panel.get("topic_boxes_html"):
                 st.markdown("**Your check-in**")
-                st.markdown(panel["topic_boxes_html"], unsafe_allow_html=True)
+                show_html(panel["topic_boxes_html"])
             if panel.get("addon_labels") is not None:
                 st.caption("Remembered another symptom? Add it and we'll make sure to cover it.")
                 with st.expander("➕ Add a symptom"):
@@ -371,7 +379,10 @@ def render_dashboard(view, state) -> None:
         st.button("Regenerate summary", on_click=queue, args=("regenerate_summary", {}))
     if not d.get("html"):
         return
-    st.markdown(d["html"], unsafe_allow_html=True)
+    # The dashboard is laid out for the full page width.
+    st.markdown("<style>.block-container {max-width: none !important; padding-left: 1rem !important;"
+                " padding-right: 1rem !important;}</style>", unsafe_allow_html=True)
+    show_html(d["html"])
     with st.expander("Prior history"):
         st.text(d["prior_history"])
     with st.expander("Full conversation"):
