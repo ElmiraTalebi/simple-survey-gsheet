@@ -1,5 +1,7 @@
-streamlit
+fastapi
+uvicorn
+openai
 gspread
 google-auth
-pandas
-openai
+streamlit
+
