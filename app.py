@@ -61,6 +61,22 @@ st.markdown(
         border-radius:10px;padding:0.6rem 0.8rem;margin:0.2rem 0 0.8rem 0;font-weight:600;}
       .banner {background:#eef2ff;border-radius:8px;padding:0.45rem 0.7rem;font-size:0.85rem;
         color:#1e3a8a;margin-bottom:0.8rem;}
+      /* Chat bubbles, the same as static/index.html: nurse assistant on the left, patient on
+         the right (Oct 8 feedback - with every message on the left and only the icon
+         differing, testers lost track of which question they were answering). */
+      .msg {display:flex;gap:0.6rem;margin-bottom:0.65rem;align-items:flex-start;}
+      .msg .avatar {flex:0 0 34px;height:34px;border-radius:50%;display:flex;align-items:center;
+        justify-content:center;background:#e6f4f2;font-size:1.05rem;}
+      .msg .bubble {border-radius:18px;padding:0.7rem 1rem;max-width:85%;background:#ffffff;
+        border:1px solid #e4e9f0;box-shadow:0 1px 2px rgba(15,23,42,0.05);font-size:1.02rem;
+        line-height:1.55;color:#1f2933;}
+      .msg .bubble ul {margin:0.25rem 0;}
+      .msg.user {flex-direction:row-reverse;}
+      .msg.user .avatar {background:#e2e8f0;}
+      .msg.user .bubble {background:#e6f4f2;border-color:#bfe3dd;}
+      /* Suggested answers as compact chips (Oct 8: the full-width buttons filled the screen). */
+      .st-key-suggestions .stButton button {min-height:0;padding:0.2rem 0.7rem;border-radius:999px;}
+      .st-key-suggestions .stButton button p {font-size:0.88rem;}
     </style>
     """,
     unsafe_allow_html=True,
@@ -236,19 +252,22 @@ def render_checklist(view, state) -> None:
               on_click=continue_checklist)
 
 
+def _bubble(user: bool, body_html: str) -> str:
+    """One chat bubble in the web page's markup (see the .msg styles above)."""
+    who, avatar = ("user", "🙂") if user else ("assistant", "🩺")
+    return f'<div class="msg {who}"><div class="avatar">{avatar}</div><div class="bubble">{body_html}</div></div>'
+
+
 def render_messages(view) -> None:
     for message in view["messages"]:
-        user = message["role"] == "user"
-        with st.chat_message("user" if user else "assistant", avatar="🙂" if user else "🩺"):
-            st.markdown(message["html"], unsafe_allow_html=True)
+        show_html(_bubble(message["role"] == "user", message["html"]))
         if message["red_flag"]:
             notice = view["self_harm_notice"] if message["self_harm"] else view["red_flag_notice"]
             st.markdown(f'<div class="red-flag-notice" role="alert">⚠️ {app_eli.html.escape(notice)}</div>',
                         unsafe_allow_html=True)
     pending = st.session_state.get("pending")
     if pending and pending["echo"]:
-        with st.chat_message("user", avatar="🙂"):
-            st.markdown(app_eli.html.escape(pending["echo"]))
+        show_html(_bubble(True, app_eli.html.escape(pending["echo"])))
 
 
 def _append_suggestion(key: str, suggestion: str) -> None:
@@ -337,9 +356,12 @@ def render_chat(view, state) -> None:
         if view.get("show_suggestions"):
             st.caption("Optional — tap any that apply to add them to your response. You can pick several, "
                        "edit the text, or type your own, then press Send.")
-            for i, suggestion in enumerate(suggestions):
-                st.button(suggestion, key=f"sugg_{len(state.messages)}_{i}", width="stretch", disabled=busy,
-                          on_click=_append_suggestion, args=(composer_key, suggestion))
+            # Two columns of small chips rather than a stack of full-width buttons.
+            with st.container(key="suggestions"):
+                cols = st.columns(2)
+                for i, suggestion in enumerate(suggestions):
+                    cols[i % 2].button(suggestion, key=f"sugg_{len(state.messages)}_{i}", width="stretch",
+                                       disabled=busy, on_click=_append_suggestion, args=(composer_key, suggestion))
 
     st.text_area("Your response", key=composer_key, height=100, label_visibility="collapsed",
                  placeholder="Type your response here, or tap a suggestion above to start from it…")
