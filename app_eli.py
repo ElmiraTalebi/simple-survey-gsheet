@@ -44,16 +44,18 @@ CHECKLIST_QUESTION_RETURNING = (
     "Which of these are new or worse since your last check-in? Check all that apply."
 )
 CHECKLIST_NONE_LABEL = "None of these — I'm doing okay today"
+# Clinician feedback (Oct 8): too many boxes. Nausea and vomiting usually go together, so
+# vomiting is asked as a follow-up to nausea; diarrhea and constipation share one box.
+NAUSEA_LABEL = "Nausea (with or without vomiting)"
+BOWEL_LABEL = "Bowel concerns (diarrhea or constipation)"
 CHECKLIST_ITEMS = [
     ("Pain", "Pain"),
     ("Mouth sores", "Oral Symptoms"),
     ("Difficulty swallowing", "Swallowing"),
     ("Trouble eating or drinking", "Nutrition"),
     ("Weight loss", "Nutrition"),
-    ("Nausea", "GI Symptoms"),
-    ("Vomiting", "GI Symptoms"),
-    ("Constipation", "GI Symptoms"),
-    ("Diarrhea", "GI Symptoms"),
+    (NAUSEA_LABEL, "GI Symptoms"),
+    (BOWEL_LABEL, "GI Symptoms"),
     ("Fatigue or poor sleep", "Fatigue & Sleep"),
     ("Trouble with daily activities", "Activity & Independence"),
     ("Feeling down, anxious, or depressed", "Mood & Support"),
@@ -91,8 +93,8 @@ RED_FLAG_LABELS = {
     "self_harm": "Feeling down, anxious, or depressed",
     "breathing": "Breathing problems",
     "fever": "Fever or chills",
-    "vomit_blood": "Vomiting",
-    "diarrhea": "Diarrhea",
+    "vomit_blood": NAUSEA_LABEL,
+    "diarrhea": BOWEL_LABEL,
 }
 RED_FLAG_DESCRIPTIONS = {
     "self_harm": "thoughts of harming themselves",
@@ -207,9 +209,10 @@ OTHER_SYMPTOM_QUOTA = 3
 FAST_WORST_SYMPTOM_QUOTA = 3
 FAST_OTHER_SYMPTOM_QUOTA = 2
 # Clinician feedback (Sep 17): patients did not know the suggested answers existed until
-# they pressed "Suggestions", so they are now shown with every question. Set to False to
-# go back to hiding them behind the button (e.g. to compare both in the interviews).
-SHOW_SUGGESTIONS_BY_DEFAULT = True
+# they pressed "Suggestions", so they were shown with every question. Oct 8: with them
+# open, testers tapped a "close enough" option instead of writing their own answer, and
+# the free-text answers were more detailed - so they are hidden again behind the button.
+SHOW_SUGGESTIONS_BY_DEFAULT = False
 # Shown when the patient finishes from the closing screen.
 FINAL_CLOSING_REPLY = (
     "Thank you for sharing all of that with me. Your check-in is complete, and "
@@ -401,10 +404,8 @@ Assess:
 
 5. GI Symptoms
 Assess:
-- Nausea
-- Vomiting
-- Constipation: frequency, medications, discomfort
-- Diarrhea: frequency (bowel movements per day), medications, discomfort
+- Nausea (with or without vomiting): timing, whether they are also vomiting and how often, whether they can keep fluids down, medications
+- Bowel concerns (diarrhea or constipation): which of the two it is, frequency (bowel movements per day), medications, discomfort
 
 6. Fatigue & Sleep
 Assess:
@@ -532,7 +533,7 @@ Important:
 - "red_flag_kind": when red_flag is true, the kind of red flag: self_harm (thoughts of self-harm or suicide), breathing (new or significant shortness of breath), fever, vomit_blood (blood in vomit), chest_pain, headache (severe headache), neuro (new neurologic symptoms), bleeding (uncontrolled bleeding), diarrhea (more than 10 a day), or other. Empty string when red_flag is false.
 - "red_flag_symptom": see Red Flags. Empty string when red_flag is false.
 - "answered_last_question" and "new_issue": see Non-Answers and New Issues.
-- For "symptom", name the one checklist symptom your question is about, copied exactly as the patient selected it (for example "Diarrhea" or "Trouble eating or drinking"). Use an empty string if the reply asks no question or the question is not about one of their checklist symptoms.
+- For "symptom", name the one checklist symptom your question is about, copied exactly as the patient selected it (for example "Bowel concerns (diarrhea or constipation)" or "Trouble eating or drinking"). Use an empty string if the reply asks no question or the question is not about one of their checklist symptoms.
 
 """
 
@@ -865,7 +866,22 @@ _HAS_SYMPTOM_QUESTION = (
     r"feeling|felt|get|got)\b"
 )
 # Label words too generic to identify a symptom ("Trouble eating" -> "eating").
-_SYMPTOM_FILLER_WORDS = {"trouble", "with", "difficulty", "problems", "feeling", "poor", "something", "else"}
+_SYMPTOM_FILLER_WORDS = {
+    "trouble", "with", "without", "difficulty", "problems", "concerns", "feeling", "poor",
+    "something", "else",
+}
+
+
+def _label_words(label: str, with_detail: bool = True) -> List[str]:
+    """The words of a checklist label that identify a symptom. with_detail=False drops
+    the examples in parentheses ("Nausea (with or without vomiting)" -> ["nausea"]): by
+    ticking that box the patient confirmed nausea, not vomiting, so asking whether they
+    are vomiting is a follow-up, not a repeat."""
+    text = label if with_detail else re.sub(r"\([^)]*\)", " ", label)
+    return [
+        word for word in re.findall(r"[a-z]+", text.lower())
+        if len(word) > 3 and word not in _SYMPTOM_FILLER_WORDS
+    ]
 
 
 def _match_symptom(reported: str, selected_symptoms: List[str]) -> str:
@@ -879,12 +895,17 @@ def _symptom_mentioned(label: str, text: str) -> bool:
     stools, diarrhea since Monday"). Used to pick the last-visit line that belongs to
     one checkbox rather than to its whole topic."""
     lower = (text or "").lower()
-    for word in re.findall(r"[a-z]+", label.lower()):
-        if len(word) <= 3 or word in _SYMPTOM_FILLER_WORDS:
-            continue
-        if _stem(word) in lower:
-            return True
-    return False
+    return any(_stem(word) in lower for word in _label_words(label))
+
+
+def _red_flag_in_summary(label: str, flagged_text: str) -> bool:
+    """True when the summarizer's urgent flags already cover this red-flag item: its
+    name appears, or - for a merged checkbox - one of the symptoms in its parentheses
+    does ("blood in vomit" covers "Nausea (with or without vomiting)")."""
+    if _spoken_label(label).lower() in flagged_text:
+        return True
+    detail = re.search(r"\(([^)]*)\)", label)
+    return bool(detail) and _symptom_mentioned(detail.group(1), flagged_text)
 
 
 def _asks_whether_patient_has(reply: str, confirmed_symptoms: List[str]) -> str:
@@ -895,9 +916,7 @@ def _asks_whether_patient_has(reply: str, confirmed_symptoms: List[str]) -> str:
             continue
         lower = sentence.lower()
         for label in confirmed_symptoms:
-            for word in re.findall(r"[a-z]+", label.lower()):
-                if len(word) <= 3 or word in _SYMPTOM_FILLER_WORDS:
-                    continue
+            for word in _label_words(label, with_detail=False):
                 match = re.search(_HAS_SYMPTOM_QUESTION + r"\s+(?:\w+\s+){0,3}" + re.escape(word), lower)
                 # "How often do you have diarrhea?" asks for a detail, not whether they have it.
                 if match and not re.search(r"\b(?:how|when|where|what|which|why|who)\b", lower[: match.start()]):
@@ -1311,9 +1330,17 @@ def _add_symptom_to_queue(state: "SessionState", label: str) -> None:
         state.selected_topics.append(topic)
 
 
+def _spoken_label(label: str) -> str:
+    """A checklist label as it is said inside a sentence: without the examples in
+    parentheses and without the capital ("Bowel concerns (diarrhea or constipation)" ->
+    "bowel concerns"). Items the patient named themselves are kept as they wrote them."""
+    core = re.sub(r"\s*\([^)]*\)", "", label or "").strip() or (label or "")
+    return core[:1].lower() + core[1:]
+
+
 def _sentence_name(label: str) -> str:
     """A queue item's name for use inside a sentence ("Knee pain" -> "knee pain")."""
-    return label[:1].lower() + label[1:] if label else label
+    return _spoken_label(label)
 
 
 def _added_to_list_note(label: str, now: bool = False) -> str:
@@ -1559,7 +1586,7 @@ def get_nurse_response(
             acknowledgement = ""
         parsed["reply"] = (
             acknowledgement
-            + f" You mentioned {already_confirmed.lower()} on your checklist - can you tell me "
+            + f" You mentioned {_spoken_label(already_confirmed)} on your checklist - can you tell me "
             "more about that?"
         ).strip()
         parsed["suggested_answers"] = list(NO_QUESTION_FALLBACK_ANSWERS)
@@ -1751,7 +1778,7 @@ def get_judge_directive(
 
 
 def _patient_summary_fallback(selected_labels: List[str]) -> str:
-    labels = [label.lower() for label in selected_labels if label != CHECKLIST_NONE_LABEL]
+    labels = [_spoken_label(label) for label in selected_labels if label != CHECKLIST_NONE_LABEL]
     if not labels:
         return (
             "You told me you are doing okay today. This will be shared with your care team "
@@ -2623,7 +2650,7 @@ def build_doctor_summary_page(state: SessionState) -> Dict[str, Any]:
         for flag in summary.get("Urgent_flags", [])
     ).lower()
     for red_flag_label in state.get("red_flag_items", []):
-        if red_flag_label.lower() not in flagged_text:
+        if not _red_flag_in_summary(red_flag_label, flagged_text):
             urgent_items.append(
                 f'<span class="urgent-item"><strong>{_inline_text(red_flag_label)}</strong>'
                 '<span class="urgent-reason">Red flag reported during the check-in</span></span>'
@@ -4000,7 +4027,7 @@ def action_worst_pick(state: SessionState, payload: Dict[str, Any]) -> str:
     # the front - otherwise it waits behind symptoms that come earlier in the order.
     state.selected_symptom_labels.remove(label)
     state.selected_symptom_labels.insert(0, label)
-    message = f"The {label.lower()} is bothering me the most."
+    message = f"The {_spoken_label(label)} is bothering me the most."
     add_user_message(state, message, response_mode="worst_pick")
     _generate_turn(state)
     return ""
@@ -4181,7 +4208,7 @@ def _process_pending_addon(state: SessionState) -> None:
         )
         state.addon_toast = addon_label
         return
-    addon_message = f"I just remembered - I'd also like to talk about {addon_label.lower()}."
+    addon_message = f"I just remembered - I'd also like to talk about {_spoken_label(addon_label)}."
     add_user_message(state, addon_message, response_mode="checklist_addon")
     # Acknowledge now, cover later - do not abandon the current topic.
     state.addon_notice = addon_label
